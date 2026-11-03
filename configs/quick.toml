@@ -1,0 +1,12 @@
+# Smoke test: two levels (4 Laplace modes daily -> all 40 nodes daily), short chains.
+out = "results/quick.h5"
+levels = [[4, 24], [40, 24]]
+warmup0 = 200
+mass_windows = [25, 50, 100]
+bias_start = 50
+bias_every = 10
+n0 = 100
+mlda_warmup = 20
+nsamples = 30
+J = [3]
+alpha0 = false

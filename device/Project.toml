@@ -1,0 +1,23 @@
+name = "ESMDevice"
+uuid = "5b1e6c2e-9d1a-4c6b-8f3e-2a7d0c4e9b11"
+version = "0.1.0"
+
+[deps]
+ESMSampling = "6c1f7a52-3e0b-4a7e-9d51-2f0b8c7e4a11"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[sources]
+ESMSampling = {path = ".."}
+
+[compat]
+LinearAlgebra = "1.12.0"
+Printf = "1.11.0"
+Random = "1.11.0"
+Reactant = "0.2.304"
+Statistics = "1.11.5"
+Test = "1.11.0"

@@ -1,0 +1,11 @@
+# Four-level hierarchy: Laplace modes 4 -> 12 -> 40 (all nodes) at daily steps, then 6-hourly steps.
+out = "results/demo.h5"
+levels = [[4, 24], [12, 24], [40, 24], [40, 6]]
+warmup0 = 600
+mass_windows = [50, 100, 200]
+bias_start = 50
+bias_every = 10
+n0 = 400
+J = [3, 2, 2]
+mlda_warmup = 30
+nsamples = 60

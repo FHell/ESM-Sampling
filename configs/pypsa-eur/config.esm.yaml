@@ -1,0 +1,24 @@
+# ESM-Sampling: electricity-only network of the 10-country region at higher resolution.
+run:
+  name: esm256
+  disable_progressbar: true
+countries: [DE, FR, BE, NL, LU, CH, AT, CZ, PL, DK]
+snapshots:
+  start: "2013-01-01"
+  end: "2014-01-01"
+  inclusive: left
+sector:
+  enabled: false
+clustering:
+  cluster_network:
+    n_clusters: 256
+co2_budget:
+  relative: false
+  upper:
+    2050: 0.05
+atlite:
+  nprocesses: 4
+solving:
+  solver:
+    name: highs
+    options: highs-default

@@ -1,0 +1,32 @@
+# First test at full spatio-temporal resolution (docs/full_resolution_run.md):
+# the 256-node PyPSA-Eur network of the 10-country region at hourly resolution,
+# ERA5 weather (scripts/prepare_era5.py), flow basis with sparse Haar angles,
+# SoC storage, renewables as negative load, heuristic start and the model
+# completion (brownfield floors and fleets, line and link losses, soft thermal
+# limits, fleet unit commitment). Sample counts are those of a smoke test.
+data = "data/processed/model256_era5.h5"
+out = "results/full256_era5.h5"
+basis = "flow"
+flow_theta = "haar"
+kernel = "local"
+measure = "physical"
+storage = "soc"
+renewables = "load"
+# countries daily -> nodes daily -> nodes 6 h -> nodes hourly (8760 / h integer, h_{l-1} % h_l == 0)
+levels = [[10, 24], [256, 24], [256, 6], [256, 1]]
+J = [2, 2, 2]
+init = "heuristic"
+use_bias = false
+alpha0 = false
+descent_iters = 0
+warmup0 = 5
+n0 = 5
+p_fine = 0.7
+mlda_warmup = 1
+nsamples = 3
+# model completion
+brownfield = true
+losses = true
+thermal = "soft"
+link_losses = true
+uc = ["gas", "coal", "lignite", "nuclear"]

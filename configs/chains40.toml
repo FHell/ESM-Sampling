@@ -1,0 +1,17 @@
+# Convergence screening (docs/validation_plan.md Part A): 4 finest-level chains from
+# dispersed starts (capacities ×0.5, ×2, heuristic; own weather draws), 40 nodes daily,
+# local kernel with fine weather moves, α = 0.
+out = "results/chains40.h5"
+basis = "haar"
+kernel = "local"
+storage = "soc"
+renewables = "load"
+measure = "physical"
+levels = [[10, 24], [40, 24]]
+init = "heuristic"
+use_bias = false
+alpha0 = false
+fine_weather = 0.05
+nchains = 4
+mlda_warmup = 20
+nsamples = 80

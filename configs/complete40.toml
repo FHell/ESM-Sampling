@@ -1,0 +1,27 @@
+# The completed model (docs/model_completion.md) on 40 nodes: flow design with the
+# adaptive fine kernel, SoC storage, renewables as load, physical measure, line losses
+# and soft limits, lossy DC links, fleet unit commitment, fine-level weather moves and
+# no MLDA steps (p_fine = 1). A short test configuration.
+out = "results/complete40.h5"
+basis = "flow"
+kernel = "local"
+fine_kernel = "adaptive"
+storage = "soc"
+renewables = "load"
+measure = "physical"
+levels = [[10, 24], [40, 24], [40, 6]]
+init = "heuristic"
+losses = true
+thermal = "soft"
+link_losses = true
+uc = ["gas", "nuclear"]
+fine_weather = 0.05
+p_fine = 1.0
+use_bias = true
+alpha0 = false
+descent_iters = 0
+warmup0 = 10
+n0 = 10
+J = [2, 2]
+mlda_warmup = 10
+nsamples = 20

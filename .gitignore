@@ -1,0 +1,11 @@
+.venv/
+data/raw/
+data/processed/
+results/
+__pycache__/
+# large or external content (not versioned here)
+external/cache/
+external/pypsa-eur/
+work/
+*.log
+.uv-cache/
