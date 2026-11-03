@@ -55,9 +55,8 @@ end
 
 const CFG = joinpath(@__DIR__, "..", "configs", "haar_poc.toml")
 if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
-    @testset "local moves on the PyPSA-Eur model (storage form $form)" for form in ("lp", "soc")
+    @testset "local moves on the PyPSA-Eur model" begin
         cfg = ML.load_config(CFG); cfg.verbose = false
-        cfg.storage = form
         P, sL, info = ML.setup(cfg; rng=MersenneTwister(cfg.seed))
         rng = MersenneTwister(13)
         for ℓ in (0, 1)
@@ -95,7 +94,7 @@ if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
                     f = rand(rng, eachindex(P.E.vspecs))
                     ML.prep_atom!(ws, P, LM, f, rand(rng, 1:P.lv[ℓ+1].m[f]), τ)
                 elseif fam == :spair
-                    (form == "soc" && ℓ == 1) || continue
+                    ℓ == 1 || continue
                     ML.prep_spair!(rng, wa, ws, P, LM, LC, τm, τ) || continue
                 elseif fam == :xlocc
                     ML.prep_xloc!(rng, ws, P, LM, LC, τ, jac) || continue
@@ -106,19 +105,15 @@ if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
                 isempty(ws.ent) && continue
                 t = 0.05 * randn(rng)
                 op0 = s.parts.op
-                if form == "soc"                      # linked two-step move (τ−1, τ)
-                    ML.finalize!(wa, P, LM, LC, τm)
-                    ML.link_soc!(wa, ws, LM)
-                    bm = ML.BlockMove([wa, ws], 2, [τm, τ], P, LM, LC, Float64[], Float64[])
-                    # the cached walk evaluation (record at t = 0, then evaluate) is the plain one, bitwise
-                    Δc = (ML.mv_eval!(bm, 0.0; mode=1); ML.mv_eval!(bm, t; mode=2)); secc = copy(ML.mv_sec(bm))
-                    Δ = ML.mv_eval!(bm, t)
-                    @test Δc == Δ && secc == ML.mv_sec(bm)
-                    ML.commit_block!(bm, s.v, t)
-                else
-                    Δ = ML.eval_move!(ws, P, LM, LC, τ, t)
-                    ML.commit!(ws, P, LM, LC, s.v, τ, t)
-                end
+                # linked two-step move (τ−1, τ)
+                ML.finalize!(wa, P, LM, LC, τm)
+                ML.link_soc!(wa, ws, LM)
+                bm = ML.BlockMove([wa, ws], 2, [τm, τ], P, LM, LC, Float64[], Float64[])
+                # the cached walk evaluation (record at t = 0, then evaluate) is the plain one, bitwise
+                Δc = (ML.mv_eval!(bm, 0.0; mode=1); ML.mv_eval!(bm, t; mode=2)); secc = copy(ML.mv_sec(bm))
+                Δ = ML.mv_eval!(bm, t)
+                @test Δc == Δ && secc == ML.mv_sec(bm)
+                ML.commit_block!(bm, s.v, t)
                 ML.evaluate!(P, s)
                 @test isapprox(s.parts.op - op0, Δ; atol=1e-12 * abs(op0) + 1e-9 * abs(Δ))
             end
@@ -126,11 +121,13 @@ if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
             LC2 = ML.LocalCost(P, LM, s)
             @test maximum(abs.(LC.S .- LC2.S)) < 1e-6
             @test maximum(abs.(LC.F .- LC2.F)) < 1e-6
-            if form == "lp"                       # the sampler test uses the single-step form
+            begin                                 # single-step sampler (a generator move, no storage term)
                 # exact line sampler: distribution of t for a fixed move against quadrature
                 τ = 7
                 ML.clear!(ws)
-                u = first(x for x in LM.units[3] if LM.complete[x[1]] || ℓ == 0)
+                usable(x) = LM.complete[x[1]] || ℓ == 0
+                nu = first(n for n in 1:P.E.sys.N if any(usable, LM.units[n]))
+                u = first(x for x in LM.units[nu] if usable(x))
                 if ℓ == 1
                     ML.prep_node!(ws, P, LM, u[1], u[2], 1.0, τ)
                 else
@@ -148,7 +145,7 @@ if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
                 ks = maximum(abs(Femp(x) - Fq(x)) for x in quantile(ts, 0.01:0.01:0.99))
                 @test ks < 0.015
             end
-            if form == "soc" && ℓ == 1               # the same for the linked two-step sampler (cached walk evaluations)
+            if ℓ == 1                                # the same for the linked two-step sampler (cached walk evaluations)
                 τ = 7; τm = 6
                 ML.clear!(ws); ML.clear!(wa)
                 nd = first(n for n in 1:P.E.sys.N if !isempty(LM.nodestor[n]) && any(x -> LM.complete[x[1]], LM.units[n]))

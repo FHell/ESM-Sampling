@@ -1,6 +1,6 @@
 # Fields, level layouts and the level transfer (splitting) operators.
 #
-# A level is a pair (M_ℓ global Laplace modes, step length h_ℓ hours). The
+# A level is a pair (M_ℓ global basis vectors, step length h_ℓ hours). The
 # state of a field at level ℓ is a matrix of mode coefficients × time steps,
 # stored contiguously in a flat vector. Going from level ℓ to ℓ+1 adds
 #   * time details of the existing modes (if h_ℓ₊₁ < h_ℓ), and

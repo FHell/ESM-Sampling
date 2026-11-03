@@ -1,16 +1,11 @@
-# Proof of concept for the v2 notes: nested partition (countries → nodes, graph Haar, ε = 0),
-# regularized Ω, coordinate Gibbs base kernel, fixed-level Gibbs sweeps mixed into MLDA, α = 0.
+# 40-node base configuration of the CPU and device tests (test/, device/test/): graph
+# Haar basis, levels countries daily → nodes daily → nodes 6-hourly, α = 0. The tests
+# override the model options they need.
 out = "results/haar_poc.h5"
 basis = "haar"
 levels = [[10, 24], [40, 24], [40, 6]]
-kernel = "gibbs"
 use_bias = false
-alpha0 = false
 descent_iters = 1500
 warmup0 = 30
-mass_windows = [10]
-n0 = 20
-J = [2, 2]
-p_fine = 0.5
 mlda_warmup = 10
 nsamples = 30

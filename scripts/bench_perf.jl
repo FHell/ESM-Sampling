@@ -5,8 +5,8 @@
 #   nice -n 19 julia -t 4 --project=. scripts/bench_perf.jl regress [data] [N] [outfile]
 # `fam`: µs per sampled move of each family (local_sweep! with one family, atoms off,
 # minus the final evaluate!), plus the move statistics (entries, lines) per family.
-# `sweep`: s/sweep of the default local sweep, the flow sweep, the storage multiscale
-# sweep and the block sweep. `regress`: fixed-seed sweeps, writes s.v (bitwise checks).
+# `sweep`: s/sweep of the default local sweep, the flow sweep and the storage multiscale
+# sweep. `regress`: fixed-seed sweeps, writes s.v (bitwise checks).
 using ESMSampling, Random, Statistics, Printf, Serialization
 const M = ESMSampling
 
@@ -74,12 +74,10 @@ function bench_sweep(P, s, LM, FF, nsw)
     s, _ = M.local_sweep!(rng, P, LM, s; wsets=wsets)                       # compile + relax
     s, _ = M.flow_sweep!(rng, P, LM, FF, s; wsets=wsets, pools=pools)
     s, _ = M.storage_ms_sweep!(rng, P, LM, s; pools=pools)
-    s, _ = M.block_sweep!(rng, P, LM, s; pools=pools)
     GC.gc()
     for (name, f) in (("local_sweep! (default families)", x -> M.local_sweep!(rng, P, LM, x; wsets=wsets)[1]),
                       ("local_sweep! (flow families)", x -> M.local_sweep!(rng, P, LM, x; wsets=wsets, extra=4.0 * mult, families=fams, frames=FF)[1]),
-                      ("storage_ms_sweep!", x -> M.storage_ms_sweep!(rng, P, LM, x; pools=pools)[1]),
-                      ("block_sweep!", x -> M.block_sweep!(rng, P, LM, x; pools=pools)[1]))
+                      ("storage_ms_sweep!", x -> M.storage_ms_sweep!(rng, P, LM, x; pools=pools)[1]))
         ts = Float64[]
         local bytes = 0
         for _ in 1:nsw

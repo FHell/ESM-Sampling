@@ -255,7 +255,6 @@ uses only (k, x) and the precomputed shapes.
 function storage_ms_sweep!(rng, P::Problem, LM::LocalModel, s::State; lengths=[2, 4, 8, 16, 32, 64, 128],
                            nmoves::Int=8, p_agg::Float64=0.5, p_shape::Float64=0.5, LC=nothing, pools=nothing, learn=nothing)
     E = P.E
-    @assert issoc(E) "storage multiscale moves need storage = \"soc\""
     FB = E.flow
     T = LM.T
     h = P.lv[LM.ℓ+1].h
@@ -332,7 +331,7 @@ Returns (families, extra multiplier that keeps the plain rates unchanged).
 function flow_families(E::EnergyModel)
     base = plain_families(E)
     flow = [(:tpot, 0.1), (:tmode, 0.05), (:tcut, 0.15), (:tline, 0.05), (:tmode0, 0.05), (:tline0, 0.05)]
-    issoc(E) && push!(flow, (:tsoc, 0.1))
+    push!(flow, (:tsoc, 0.1))
     wb, wf = sum(last.(base)), sum(last.(flow))
     return vcat(base, flow), (wb + wf) / wb
 end
@@ -342,7 +341,7 @@ end
 
 One sweep of the flow design at a complete level with (k, x) fixed: the local
 sweep with the plain and the flow families (frames refreshed if (k, x)
-changed), then with probability `p_storage` the storage multiscale sweep (SoC form).
+changed), then with probability `p_storage` the storage multiscale sweep.
 """
 function flow_sweep!(rng, P::Problem, LM::LocalModel, FF::FlowFrames, s::State; wsets=nothing, pools=nothing, extra=4.0,
                      p_storage::Float64=0.5)
@@ -350,7 +349,7 @@ function flow_sweep!(rng, P::Problem, LM::LocalModel, FF::FlowFrames, s::State; 
     fams, mult = flow_families(P.E)
     s, st1 = local_sweep!(rng, P, LM, s; wsets=wsets, extra=extra * mult, families=fams, frames=FF)
     st2 = zeros(2, 2)
-    (issoc(P.E) && rand(rng) < p_storage) && ((s, st2) = storage_ms_sweep!(rng, P, LM, s; pools=pools))
+    rand(rng) < p_storage && ((s, st2) = storage_ms_sweep!(rng, P, LM, s; pools=pools))
     return s, st1, st2
 end
 

@@ -1,16 +1,15 @@
-# Convergence screening (docs/validation_plan.md Part A): 4 finest-level chains from
-# dispersed starts (capacities ×0.5, ×2, heuristic; own weather draws), 40 nodes daily,
-# local kernel with fine weather moves, α = 0.
+# MECHANICS TEST ONLY, not a physically meaningful run: it combines α = 0, the physical
+# measure and capacity scaling moves, and capacities can run away in that combination.
+# Use it to exercise the driver and the diagnostics, not to interpret capacities or prices.
+#
+# Convergence screening: 4 finest-level chains from dispersed starts (capacities ×0.5,
+# ×2, heuristic; own weather draws), 40 nodes daily, local kernel with fine weather moves.
 out = "results/chains40.h5"
 basis = "haar"
-kernel = "local"
-storage = "soc"
-renewables = "load"
 measure = "physical"
 levels = [[10, 24], [40, 24]]
 init = "heuristic"
 use_bias = false
-alpha0 = false
 fine_weather = 0.05
 nchains = 4
 mlda_warmup = 20

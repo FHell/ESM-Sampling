@@ -1,8 +1,0 @@
-# 27 countries, 76 PyPSA-Eur nodes; levels: countries daily → nodes daily
-data = "data/processed/model76.h5"
-out = "results/haar76.h5"
-basis = "haar"
-levels = [[27, 24], [76, 24]]
-kernel = "gibbs"
-use_bias = false
-alpha0 = false

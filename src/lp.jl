@@ -190,24 +190,16 @@ function solve_lp(E::EnergyModel, lk::Layout, lv::Layout, W; silent=true, time_l
         ppv, pmv, ev = value.(pp), value.(pm), value.(e)
         for i in eachindex(s.bus), t in 1:T
             K = s.kf > 0 ? kval[s.kf][i] : s.kfix[i]
-            if s.fp == 0                 # SoC form: one coordinate per instant; confined if the state of
-                ok = K > 1e-6 && s.hours[i] > 1e-6   # charge is at a bound or the unit idles/saturates on either side
-                vvals[s.fe][i, t] = ok ? clamp(ev[i, t] / (s.hours[i] * K), 0.0, 1.0) : 0.5
-                if ok
-                    tm = mod(t - 2, T) + 1
-                    idle(τ) = ppv[i, τ] < 1e-6 * K && pmv[i, τ] < 1e-6 * K
-                    sat(τ) = ppv[i, τ] > K * (1 - 1e-6) || pmv[i, τ] > K * (1 - 1e-6)
-                    free = rel(ev[i, t], 0, s.hours[i] * K) && !idle(t) && !idle(tm) && !sat(t) && !sat(tm)
-                    nfree += free; ntot += 1
-                end
-            elseif K > 1e-6 && s.hours[i] > 1e-6
-                vvals[s.fp][i, t] = clamp(ppv[i, t] / K, 0.0, 1.0)
-                vvals[s.fm][i, t] = clamp(pmv[i, t] / K, 0.0, 1.0)
-                vvals[s.fe][i, t] = clamp(ev[i, t] / (s.hours[i] * K), 0.0, 1.0)
-                nfree += rel(ppv[i, t], 0, K) + rel(pmv[i, t], 0, K) + rel(ev[i, t], 0, s.hours[i] * K)
-                ntot += 3
-            else
-                vvals[s.fp][i, t], vvals[s.fm][i, t], vvals[s.fe][i, t] = 0.5, 0.1, 0.5
+            # one coordinate per instant (state of charge); confined if the state of
+            # charge is at a bound or the unit idles/saturates on either side
+            ok = K > 1e-6 && s.hours[i] > 1e-6
+            vvals[s.fe][i, t] = ok ? clamp(ev[i, t] / (s.hours[i] * K), 0.0, 1.0) : 0.5
+            if ok
+                tm = mod(t - 2, T) + 1
+                idle(τ) = ppv[i, τ] < 1e-6 * K && pmv[i, τ] < 1e-6 * K
+                sat(τ) = ppv[i, τ] > K * (1 - 1e-6) || pmv[i, τ] > K * (1 - 1e-6)
+                free = rel(ev[i, t], 0, s.hours[i] * K) && !idle(t) && !idle(tm) && !sat(t) && !sat(tm)
+                nfree += free; ntot += 1
             end
         end
     end
@@ -235,18 +227,12 @@ function solve_lp(E::EnergyModel, lk::Layout, lv::Layout, W; silent=true, time_l
     return return_model ? (sol, model, balc) : sol
 end
 
-"A strictly interior reference point of Ω (node values per v field)."
+"A strictly interior reference point of the operation (node values per v field)."
 function interior_center(E::EnergyModel, lv::Layout)
     out = Matrix{Float64}[]
     for (f, s) in enumerate(E.vspecs)
         S, nt = nsupport(s.B), ntime(lv, s)
-        val = if f == E.fθ || f == E.flink
-            0.0
-        elseif startswith(String(s.name), "sm_")
-            0.1
-        else
-            0.5
-        end
+        val = f == E.fθ || f == E.flink ? 0.0 : 0.5
         push!(out, fill(val, S, nt))
     end
     return out
