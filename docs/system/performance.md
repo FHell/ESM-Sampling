@@ -174,8 +174,13 @@ instead of 8), which `:gen0`/`:pair0` remove.
 
 **Compile times.** Reactant's compile of the four-chain operation program at 40 × 6 h: 160 s,
 of which tracing 130 s, MLIR passes 23 s and XLA 7.5 s; the capacity pass 100 s (tracing 90 s).
-Tracing dominates because the term loops are unrolled: the program grows with the number of
-terms of a family. The six-family sweep compiles in 3–4 min on either backend; one family alone
+Most of the tracing time is Julia's own compilation of the tracing code, which a process does
+once: traced a second time in the same process (CPU backend, `@code_hlo`), the capacity pass
+takes 7.5 s instead of 118 s and the operation program 35 s instead of 124 s; a new closure over
+the same methods (an edited driver argument) 7 s. Iterating on the moves in one persistent
+session therefore costs seconds per recompile for the capacity pass. The remaining 35 s of the
+operation program grow with the number of terms of a family, because the term loops are
+unrolled at trace time. The six-family sweep compiles in 3–4 min on either backend; one family alone
 in 4–40 s; the peak-set capacity program in about 75 s. Every fresh Julia process adds 1.5–2
 min of start-up and package loading.
 
