@@ -196,7 +196,10 @@ end
 Device run of `cfg.nchains` chains (see the module comment): `mlda_warmup` + `nsamples`
 checkpoints, each after `device_sweeps` operation sweeps and one capacity pass.
 """
-function run_device(cfg::ML.Config; merged::Bool=true, families=FAMILIES_FAST)
+# merged = true compiles sweeps + capacity pass as one program (`sweep_program`, bitwise equal to
+# the two calls, test/test_program.jl), but compiles ≈ 5× longer (295 s against 50 + 11 s at 40
+# nodes daily) for one dispatch saved per checkpoint; the alternation is the default.
+function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST)
     t0 = time()
     D = device_setup(cfg; families=families)
     (; P, K, kinds, chains, M, ix, S, LM, usebias, packb, R, sw, kp, fp, kargs, draws, nsd) = D
