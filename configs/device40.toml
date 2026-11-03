@@ -6,14 +6,12 @@
 # families on the device plus kscale/kpeak capacity moves, α = 0; 10 operation sweeps per checkpoint.
 out = "results/device40.h5"
 basis = "haar"
-kernel = "local"
 storage = "soc"
 renewables = "load"
 measure = "physical"
 levels = [[10, 24], [40, 24]]
 init = "heuristic"
 use_bias = false
-alpha0 = false
 nchains = 4
 mlda_warmup = 5
 nsamples = 20

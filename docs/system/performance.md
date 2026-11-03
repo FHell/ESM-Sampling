@@ -163,6 +163,9 @@ move:
 | | sum | 1.00 | |
 | compensated | `spair` | 2.55 | 3.74 |
 
+The whole device loop with `FAMILIES_FAST` (`run_device`, same configuration): 9.8 s per call
+of 10 operation sweeps (22.6 s with `FAMILIES`), capacity pass 0.11 s, host checkpoint 0.21 s.
+
 In every family the most expensive kernels are the potential at all points of the dense form
 and the secondary quantities at the extended primaries. Both are FP64-arithmetic bound on this
 card (about 15 GFLOP/s achieved), so the cost of a site is about points × terms. Without fleet
