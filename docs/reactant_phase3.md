@@ -70,7 +70,8 @@ Reasons:
 **One program per checkpoint** (`driver.jl`):
 * `sweep_program` runs `ns` operation sweeps (traced count, Reactant RNG), then the capacity pass
   (host-drawn proposals), in one compiled call.
-* `run_device(cfg; merged=true)` uses it.
+* `run_device(cfg; merged=true)` uses it. The default stays `merged = false`, two programs, for
+  the compile cost (§2).
 * `device_setup(cfg; families=:all)` schedules the plain, compensated, cell and (not yet) block
   families (`device_families`).
 
@@ -107,6 +108,12 @@ Then both sides commit the device's t, and node values, r and cost are compared.
 * *ΔC by itself*, for spair, tsocL and tpotL, agrees with CPU `eval_move!` to ≤ 7e-9 relative.
   That is round-off at |r| ≈ 10⁴ MW.
 
+**Plain families after the main session's fix of the CPU walk** (`test_mock.jl`, arrays): all
+36 000 draws agree with CPU `sample_line!` on the device's own points (max 5.1e-13). The 203
+ray-splitting differences and the 28 precision losses of phase 2 are gone. The phase-3 cases
+above were run with the fixed walk too (no overshoot); their remaining (a) differences are draws
+where the CPU's probe-based ray steps still split a segment, and (c) agrees there.
+
 **Reactant, CPU backend** (one family per program, 2 rounds of ≤ 60 sites), against the
 Julia-array run with the same uniforms:
 
@@ -122,7 +129,11 @@ The full A–C run with Reactant (all compensated families in one program) reach
 finishing the tpotL compile, so I stopped it to protect the machine.
 
 **One program per checkpoint** (`test/test_program.jl`, configs/device40.toml, CPU backend):
-RESULTS_PROGRAM
+the merged program equals the two compiled calls bitwise (θ, ω, uc, e, u, r), but it compiles in
+295 s against 50 s + 11 s for the two programs. The capacity pass costs 0.04 s per call, and the
+operation sweeps are 98 % of device time (main session's GPU profile), so merging saves one
+dispatch per checkpoint. `run_device` therefore keeps the alternation by default
+(`merged = false`); the merged program is an option.
 
 ## 3. Issues met
 

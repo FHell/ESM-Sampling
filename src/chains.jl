@@ -82,7 +82,8 @@ end
 The CPU driver (`run`): level-0 warmup for the bias (α = 1), then `nchains`
 finest-level chains for `mlda_warmup + nsamples` sweeps each. During the warmup the
 online bias is refitted from the pooled scores of all chains and, with `co2_cap > 0`,
-the CO₂ price is tuned to the cap; both are frozen for production. Production
+the CO₂ price is tuned to the cap; both, and the learned quantities of the adaptive
+fine kernel, are frozen for production. Production
 records the monitored quantities, the post-correction samples and the sampled
 prices. Output: diagnostics and traces (`chains_report`) plus prices, the learned
 quantities and the calibration (`write_run_outputs`).
@@ -132,6 +133,11 @@ function run_chains(cfg::Config)
                 LC = LocalCost(P, LM, chains[c])
                 accumulate_prices!(pacc, P, LM, LC)
                 foreach(a -> accumulate_region_prices!(a, P, LM, LC, chains[c]), values(raccs))
+            end
+        end
+        if it == nwarm                              # adaptation of the fine kernels ends with the warmup
+            for S in samplers, AM in values(S.loc.adapt)
+                AM.freeze = min(AM.freeze, AM.nobs)
             end
         end
         if cfg.co2_cap > 0 && it <= nwarm           # canonical price tuned to the cap (Robbins–Monro on the chain mean)
@@ -216,14 +222,18 @@ function chains_report(cfg::Config, P::Problem, names, traces, kinds, PB, nwarm,
     w0 >= nwarm + nprod - 4 && (w0 = nwarm)        # no usable window: report the configured one
     summ = [good[q] ? convergence_summary([c[w0+1:end] for c in qtr[q]]; rhat_max=cfg.rhat_max,
                                           ess_min=cfg.ess_min, mcse_max=cfg.mcse_max) : nothing for q in 1:nq]
-    passed = all(x -> x === nothing || x.pass, summ)
-    worst = argmax([x === nothing ? -Inf : x.rhat for x in summ])
-    logmsg(cfg, @sprintf("convergence: warmup detected %s (window from %d), max R̂ %.3f (%s), min bulk ESS %.0f, min tail ESS %.0f → %s",
-                         wdet > 0 ? "at sweep $wdet" : "never", w0, summ[worst].rhat, names[worst],
-                         minimum(x.ess_bulk for x in summ if x !== nothing), minimum(x.ess_tail for x in summ if x !== nothing),
-                         passed ? "converged" : "not converged"))
     pc = (PB !== nothing && !isempty(PB.bused)) ? post_correct(P, PB; monotone=bias_monotone_args(P, cfg)) : nothing
     pc === nothing || logmsg(cfg, @sprintf("bias post-correction: weight ESS %.1f of %d samples", pc.ess, length(pc.w)))
+    # the post-corrected estimates are only as good as their weights (docs/system/validation.md §2):
+    # a weight ESS below 30 % of the samples counts as not converged
+    post_ok = pc === nothing || pc.ess >= 0.3 * length(pc.w)
+    passed = all(x -> x === nothing || x.pass, summ) && post_ok
+    worst = argmax([x === nothing ? -Inf : x.rhat for x in summ])
+    logmsg(cfg, @sprintf("convergence: warmup detected %s (window from %d), max R̂ %.3f (%s), min bulk ESS %.0f, min tail ESS %.0f%s → %s",
+                         wdet > 0 ? "at sweep $wdet" : "never", w0, summ[worst].rhat, names[worst],
+                         minimum(x.ess_bulk for x in summ if x !== nothing), minimum(x.ess_tail for x in summ if x !== nothing),
+                         post_ok ? "" : @sprintf(", post-correction weight ESS %.1f < 30 %% of %d", pc.ess, length(pc.w)),
+                         passed ? "converged" : "not converged"))
     mkpath(dirname(cfg.out))
     h5open(cfg.out, "w") do f
         f["quantity_names"] = names
@@ -242,6 +252,7 @@ function chains_report(cfg::Config, P::Problem, names, traces, kinds, PB, nwarm,
         f["convergence/warmup_detected"] = wdet
         f["convergence/window_start"] = w0
         f["convergence/converged"] = Int(passed)
+        f["convergence/post_weight_ess_ok"] = Int(post_ok)
         f["convergence/thresholds"] = [cfg.rhat_max, cfg.ess_min, cfg.mcse_max, cfg.rhat_screen]
         if pc !== nothing
             f["post/weights"] = pc.w; f["post/ess"] = pc.ess; f["post/Q_weighted"] = pc.Qw

@@ -62,11 +62,14 @@ and $r$.
 | device family | CPU family | rule |
 |---|---|---|
 | `:gen` | finest dispatch atoms, `unit` (commitment follows) | none |
+| `:gen0` | the same for units without fleet commitment: no UC terms, all steps in one round | none |
 | `:uc` | commitment atoms | none |
 | `:pair` | `pair` | balanced |
+| `:pair0` | `pair` of two units without fleet commitment (no UC terms, all steps in one round) | balanced |
 | `:soc` | finest SoC atoms | none |
 | `:link` | link atoms | none |
 | `:theta` | `potential` | none |
+| `:theta3`, `:theta5` | `potential` at nodes of degree ≤ 3 and 4–5, padded to their own degree (`:theta` then keeps degree ≥ 6) | none |
 | `:spair` | `spair` | unit |
 | `:tsoc`, `:tsocL` | `tsoc`, `tsocL` | share-preserving, linear |
 | `:tpot`, `:tpotL` | `tpot`, `tpotL` | share-preserving, linear |
@@ -112,6 +115,15 @@ target invariant, so the sweep does. All rounds of `ns` sweeps run in one compil
 (`run_sweeps`: device loops `@trace for` over sweeps and rounds, the sweep count traced) with
 Reactant's RNG; for comparisons the uniforms can be passed in as arrays.
 
+**Family sets.** `FAMILIES` (`:gen`, `:uc`, `:pair`, `:soc`, `:link`, `:theta`) is the
+reference set the tests use. Device runs use `FAMILIES_FAST`, the same moves split by term
+structure: `:gen0`/`:pair0` for units without fleet commitment (no UC terms, which are
+identically zero for them, and no coupling of $\tau-1$ and $\tau$, so one round takes all
+steps; `:gen`/`:pair` then keep the committable units and pairs), and the angle moves
+bucketed by node degree (`THETA_BUCKETS`), each padded to its own largest degree. The cost of
+a site is roughly points × terms, so padding to the global maximum degree costs about the
+square of the ratio.
+
 > **Status: deviation.** Parallel lines are not supported by the angle family (none exist in
 > the 40- and 256-node networks).
 
@@ -132,19 +144,30 @@ then recomputed on the device.
 ## 6. Host loop
 
 `run_device(cfg)` (script `device/scripts/run_device.jl`, configuration e.g.
-`configs/device40.toml`; `run_device(cfg; merged=true, families=FAMILIES)`):
+`configs/device40.toml`; `run_device(cfg; merged=false, families=…)`):
 
 1. `setup` on the CPU, and at $\alpha = 1$ the level-0 warmup that learns the bias;
 2. `nchains` chain starts as in the CPU driver, all with the weather of the set-up state;
-3. `pack`, `to_device`, `plan` (schedule and index tables), upload, and one compile on the
-   backend `device_backend`: `sweep_program`, the operation sweeps (traced count) followed by the
-   capacity pass, as one program per checkpoint (`merged = false`: two programs, as the
-   profiler uses);
+3. `pack`, `to_device`, `plan` (schedule and index tables), upload, and two compiles on the
+   backend `device_backend`: the operation sweeps (traced count) and the capacity pass.
+   `merged = true` compiles them as one program per checkpoint (`sweep_program`, bitwise equal).
+   It takes about 5× longer to compile for one dispatch saved per checkpoint, so it is not the
+   default;
 4. `mlda_warmup + nsamples` checkpoints: sweeps and capacity pass, download, conversion to
    `State`s, online bias refits during the warmup (pooled over chains, frozen afterwards, the
    bias aggregates re-packed after a refit), monitored quantities, post-correction records;
 5. `chains_report`: the same diagnostics and HDF5 output as the CPU driver (without the
    additional outputs of `write_run_outputs`).
+
+The loop times every part per call (operation sweeps, capacity pass, host draws, download,
+host work) and writes them to `device_profile/*` in the output file, with the compile times.
+`device_setup(cfg)` builds everything up to the compile and is shared with the profilers:
+`device/scripts/profile_device.jl` (Reactant's profiler on both programs: compile time split
+into tracing, MLIR passes and XLA; run time; kernel and framework-op statistics; xplane traces
+for xprof/Perfetto in `results/profiles/`) and `device/scripts/profile_families.jl` (every
+operation family alone: rounds, sites, time per sweep and per move, its five most expensive
+kernels with occupancy). The profiler needs programs compiled with `sync = true` and
+`donated_args = :none`.
 
 ## 7. Status
 
@@ -156,7 +179,7 @@ then recomputed on the device.
 | cell templates (all partition levels) | verified on arrays; scheduled with `families = :all` |
 | storage blocks, one unit (plateau, shapes) | verified on arrays; `:sblkL4` compiled; not yet scheduled |
 | stacked term evaluation (program size independent of the term count) | missing; needed to compile `:tpot(L)`, coarse cells, long blocks |
-| one program per checkpoint (operation sweeps + capacity pass) | done (`sweep_program`) |
+| one program per checkpoint (operation sweeps + capacity pass) | done (`sweep_program`, `merged = true`); not the default (compile time) |
 | capacity pass (`kren`, `kscale`, `kpeak` absorb) with the bias, host loop | done |
 | templates for Haar angle atoms and localized proxy and learned modes (`tcut`, `acut`) | missing |
 | local re-routing templates in place of `xpair`, `xloc(c)`, `tline` | missing |

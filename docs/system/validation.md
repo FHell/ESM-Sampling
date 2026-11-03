@@ -40,13 +40,10 @@ equilibrium**, the measure of sampler efficiency against network size, is that f
 **Adaptation and the bias.** Diminishing adaptation guarantees the limit, not a fixed target
 during adaptation, so at $\alpha = 1$ the online bias and the adaptive modes must be frozen
 before the measurement window starts. The post-correction weights enter the weighted
-estimates; their ESS is reported next to the chain ESS, and a weight ESS below about 30 % of
-the samples counts as not converged.
-
-> **Status: deviation.** The drivers freeze the bias at the end of the warmup, but
-> the adaptive modes (`AdaptiveModes`, `freeze` defaults to never) keep updating on their
-> geometric schedule during production, and the convergence verdict does not yet include the
-> weight-ESS condition.
+estimates; their ESS is reported next to the chain ESS, and a weight ESS below 30 % of the
+samples counts as not converged (`convergence/post_weight_ess_ok`). The CPU driver freezes the
+bias, the canonical CO₂ price and the adaptive modes at the end of the warmup; the device
+driver has no adaptive modes and freezes the bias.
 
 **A necessary check for the operation.** The excess operating cost over its running minimum,
 against the equipartition prediction $n_{\rm conf}/\beta_v$ (one $1/\beta_v$ per coordinate

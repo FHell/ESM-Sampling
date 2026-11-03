@@ -46,6 +46,7 @@ h5py). `quantity_names` names the rows.
 | `chains/<c>/Q`, `chains/<c>/start` | trace and start kind of chain `c` |
 | `convergence/rhat`, `ess_bulk`, `ess_tail`, `mcse_rel`, `mean`, `sd`, `pass` | per quantity |
 | `convergence/warmup_detected`, `window_start`, `converged`, `thresholds` | run-level verdict and the thresholds used |
+| `convergence/post_weight_ess_ok` | 1 if the post-correction weight ESS is at least 30 % of the samples (or there is no post-correction) |
 | `post/weights`, `post/ess`, `post/Q_weighted` | bias post-correction ($\alpha = 1$) |
 
 **CPU driver only** (`write_run_outputs`, appended to the same file):

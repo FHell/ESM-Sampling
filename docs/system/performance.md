@@ -140,7 +140,39 @@ hinge knot of every incident line (about 150 primary points per site). The moves
 not grow with the number of chains: the laptop GPU is saturated by its FP64 arithmetic.
 Reactant's CPU backend runs the 40-node sweep at $5.4\cdot10^4$ line moves/s.
 
-**Compile times.** The six-family sweep compiles in 3–4 min on either backend; one family alone
+**Profile of a device run** (2026-11-04, `device/scripts/profile_device.jl` and
+`profile_families.jl`, `configs/device40_6h_gpu.toml`: 40 nodes × 6 h, $T$ = 1460, 4 chains,
+α = 0, no UC, no losses, GPU). Per call of 10 operation sweeps: operation sweeps 22.6 s,
+capacity pass 0.04 s, host draws 0.001 s, download 0.05 s, host checkpoint 0.28 s, so the
+operation sweeps are 98 % of the run. Per family, seconds per sweep (4 chains) and µs per line
+move:
+
+| family set | family | s/sweep | µs/move |
+|---|---|---|---|
+| `FAMILIES` | `gen` | 0.425 | 1.04 |
+| | `pair` | 0.695 | 3.72 |
+| | `soc` | 0.573 | 0.84 |
+| | `link` | 0.012 | 0.25 |
+| | `theta` | 0.552 | 2.42 |
+| | sum | 2.26 | |
+| `FAMILIES_FAST` | `gen0` | 0.048 | 0.12 |
+| | `pair0` | 0.070 | 0.37 |
+| | `soc` | 0.581 | 0.85 |
+| | `link` | 0.012 | 0.26 |
+| | `theta3`, `theta5`, `theta` | 0.065, 0.155, 0.066 | 0.85, 1.33, 1.87 |
+| | sum | 1.00 | |
+| compensated | `spair` | 2.55 | 3.74 |
+
+In every family the most expensive kernels are the potential at all points of the dense form
+and the secondary quantities at the extended primaries. Both are FP64-arithmetic bound on this
+card (about 15 GFLOP/s achieved), so the cost of a site is about points × terms. Without fleet
+commitment the generator sites of `FAMILIES` carried two identically zero UC terms (32 points
+instead of 8), which `:gen0`/`:pair0` remove.
+
+**Compile times.** Reactant's compile of the four-chain operation program at 40 × 6 h: 160 s,
+of which tracing 130 s, MLIR passes 23 s and XLA 7.5 s; the capacity pass 100 s (tracing 90 s).
+Tracing dominates because the term loops are unrolled: the program grows with the number of
+terms of a family. The six-family sweep compiles in 3–4 min on either backend; one family alone
 in 4–40 s; the peak-set capacity program in about 75 s. Every fresh Julia process adds 1.5–2
 min of start-up and package loading.
 

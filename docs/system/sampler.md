@@ -290,8 +290,9 @@ recomputes the transport directions (leading eigenvectors of the angle covarianc
 localized Haar pieces, the temporal shapes and the response coefficients $\beta$. Every
 kernel in the sequence is invariant for the target, the fixed families always stay in the
 mixture, and the change between updates vanishes as the estimates converge. The online bias
-uses the same geometric schedule. Slice widths of the level-0 kernel adapt during the
-level-0 warmup only.
+uses the same geometric schedule. Both stop at the end of the finest-level warmup
+(`mlda_warmup`): the production sweeps use one fixed kernel and one fixed target. Slice widths
+of the level-0 kernel adapt during the level-0 warmup only.
 
 ## 9. Multi-chain runs and convergence
 
