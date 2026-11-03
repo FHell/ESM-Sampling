@@ -134,6 +134,7 @@ The family list and its rates depend on the kernel (§2):
 | adaptive | flow, plus `amode` 0.03, `acut` 0.1, `amode0` 0.03 and the learned-compensation variants `tmodeL` 0.03, `tcutL` 0.1, `tlineL` 0.05, `tpotL` 0.05, `amodeL` 0.02, `acutL` 0.08, `tsocL` 0.05 |
 
 The number of random moves is scaled so that the plain families keep their absolute rates.
+A new family is added by the checklist in [moves/adding_a_move.md](moves/adding_a_move.md).
 The flow and adaptive kernels add the **storage multiscale sweep** (`storage_ms_sweep!`,
 probability 1/2 per sweep: plateau and shape moves over dyadic blocks) and, in the adaptive
 kernel, the **learned temporal shapes** (`adaptive_block_sweep!`). Blocks of one length are
@@ -148,7 +149,7 @@ values, residuals, line flows, cell sums), and its commit updates coefficients a
 together. For the plain model, the terms touched by a move are recorded at $t = 0$ and
 reused for every evaluation of the walk (`eval_cached!`); moves with the model-completion
 terms (losses, soft limits, lossy links, vintages, commitment, weather entries) use the plain
-evaluation.
+evaluation. Measured costs per move are in [performance.md](performance.md).
 
 ## 5. Invariance and compensation
 

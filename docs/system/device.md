@@ -43,12 +43,22 @@ terms, line terms with hinge knots, SoC terms, balance slots). A compensation si
 requirement change by one rule: none, unit, linear (learned coefficients) or share-preserving
 (kinked arguments $x_0 + at + a_k\varphi_k(t)$ plus the Jacobian step).
 
-`sample_dense` is exact without truncation: it sorts the primary points of every site, finds
-the sign changes of every secondary quantity per segment (every secondary quantity of these
-families has at most two sign changes along a line, which is proven per term type and checked
-on every site by `root_count`), evaluates the potential at all points, and inverts the
-segment masses. An improper ray gives $t = 0$, as on the CPU. The share-preserving families apply the
-Jacobian step (`jac_accept`); the commit is a scatter-add into the state and $r$.
+`sample_dense` is exact without truncation:
+* it sorts the primary points of every site, including the kinks and the clamp points on both
+  pieces of every kinked argument;
+* it keeps the K smallest sign changes of every secondary quantity per segment (`nroots`). K = 2
+  for the plain families, where at most two are proven per term type; K = 4 for the compensated,
+  cell and block families;
+* it evaluates the potential at all points and inverts the segment masses. The masses are
+  anchored at each segment's lower end, and offsets of decreasing segments at the right end.
+
+**Guard.** A site whose line has more sign changes than K in some secondary quantity stays at
+$t = 0$. The count is a property of the whole line, so this keeps the target invariant. The
+tests report how often it happens.
+
+An improper ray gives $t = 0$, as on the CPU. The share-preserving families apply the Jacobian
+step (`jac_accept`, with the site's third uniform). The commit is a scatter-add into the state
+and $r$.
 
 | device family | CPU family | rule |
 |---|---|---|
@@ -61,11 +71,35 @@ Jacobian step (`jac_accept`); the commit is a scatter-add into the state and $r$
 | `:spair` | `spair` | unit |
 | `:tsoc`, `:tsocL` | `tsoc`, `tsocL` | share-preserving, linear |
 | `:tpot`, `:tpotL` | `tpot`, `tpotL` | share-preserving, linear |
-| `:cell`, `:cellpair` | `cell`, `cellpair` | additive, balanced (being added) |
+| `:cell{q}`, `:cellu{q}` | `cell` at partition level q (`u`: committable carriers) | additive |
+| `:cellpair{q}`, `:cellpairu{q}` | `cellpair` at level q | balanced |
+| `:sblk{L}`, `:sblkL{L}` ($L$ = 2, 4, 8, 16, 32) | storage plateau and shapes (`prep_storage_ms!`), one unit | share-preserving, linear |
 
-The share-preserving families refuse models with line losses or lossy links, whose compensation needs
-requirement tracking on the CPU; with those terms the device uses the linear rule. The linear
-rule's coefficients are static tables (an equal split unless given).
+**Choices made on the host.** Choices that do not depend on the state are drawn when the
+schedule is built: the unit pair of `:spair`, the carriers of the cell moves, and the block
+offset and profile.
+
+**Cell families.** They are bucketed by level and padded to the level's largest cell. Level q
+gets rounds ∝ (cells)^(cell_power−1), which reproduces the CPU's level probabilities.
+
+**Block profiles.** The profile table holds the plateau and optional shapes with zero ends
+(`set_profiles!`).
+
+**Requirement tracking.** The share-preserving families refuse models with line losses or lossy
+links, whose compensation needs requirement tracking on the CPU (an event walk). With those
+terms the device uses the linear rule.
+
+**Linear rule.** Its coefficients are host tables (`StaticParams.β1`, `β2`, equal split by
+default), with the proxy class `ChainParams.cls` from `proxy_class`.
+
+> **Status: deviation.** The term loops are unrolled at trace time, so the compiled program grows
+> with a family's term count: `:sblkL4` takes 464 s and 11 GB to compile on the CPU backend, and
+> `:tpotL` does not compile in 20 minutes at 12.7 GB. Large families therefore need term-stacked
+> evaluation (a term axis in the arrays) or the slope-jump form before they can run compiled.
+
+> **Status: deviation.** Cell–class aggregates of the block moves (one class in one cell) are not
+> ported; the large coarse cells and long blocks are costly in the dense form (about 1 700
+> points per site for a 40-node cell), so the slope-jump form is needed there.
 
 ## 4. Schedule
 
@@ -99,13 +133,15 @@ then recomputed on the device.
 ## 6. Host loop
 
 `run_device(cfg)` (script `device/scripts/run_device.jl`, configuration e.g.
-`configs/device40.toml`):
+`configs/device40.toml`; `run_device(cfg; merged=true, families=FAMILIES)`):
 
 1. `setup` on the CPU, and at $\alpha = 1$ the level-0 warmup that learns the bias;
 2. `nchains` chain starts as in the multi-chain mode, all with the weather of the set-up state;
-3. `pack`, `to_device`, `plan` (schedule and index tables), upload, and two compiles (the
-   operation sweeps and the capacity pass), on the backend `device_backend`;
-4. `mlda_warmup + nsamples` checkpoints: sweeps, capacity pass, download, conversion to
+3. `pack`, `to_device`, `plan` (schedule and index tables), upload, and one compile on the
+   backend `device_backend`: `sweep_program`, the operation sweeps (traced count) followed by the
+   capacity pass, as one program per checkpoint (`merged = false`: two programs, as the
+   profiler uses);
+4. `mlda_warmup + nsamples` checkpoints: sweeps and capacity pass, download, conversion to
    `State`s, online bias refits during the warmup (pooled over chains, frozen afterwards, the
    bias aggregates re-packed after a refit), monitored quantities, post-correction records;
 5. `chains_report`: the same diagnostics and HDF5 output as the CPU multi-chain mode.
@@ -116,12 +152,15 @@ then recomputed on the device.
 |---|---|
 | device model, exact cost, round trip | done |
 | term batch, exact dense sampler, plain families, rounds, compiled multi-sweep program | done |
-| compensated families `:spair`, `:tsoc(L)`, `:tpot(L)` | implemented and verified; not yet scheduled by the driver |
-| cell templates `:cell`, `:cellpair` | being added |
+| compensated families `:spair`, `:tsoc(L)`, `:tpot(L)` | verified on arrays; `:spair`, `:tsoc(L)` also compiled (CPU backend); scheduled with `families = :all` |
+| cell templates (all partition levels) | verified on arrays; scheduled with `families = :all` |
+| storage blocks, one unit (plateau, shapes) | verified on arrays; `:sblkL4` compiled; not yet scheduled |
+| stacked term evaluation (program size independent of the term count) | missing; needed to compile `:tpot(L)`, coarse cells, long blocks |
+| one program per checkpoint (operation sweeps + capacity pass) | done (`sweep_program`) |
 | capacity pass (`kren`, `kscale`, `kpeak` absorb) with the bias, host loop | done |
 | templates for Haar angle atoms and localized proxy and learned modes (`tcut`, `acut`) | missing |
 | local re-routing templates in place of `xpair`, `xloc(c)`, `tline` | missing |
-| block profiles (storage plateau and shapes, learned shapes) | missing |
+| block aggregates (cell–class groups), learned shapes | missing |
 | dense transport modes (`tmode`, `amode`) | missing; low rate, may be dropped |
 | slope-jump sampler for large moves | missing |
 | adaptation on the host with table uploads (modes, shapes, response coefficients); learned `kpeak` | missing |
@@ -136,7 +175,8 @@ miscompiled to `a*b` (use `max(x,-x)`); FMA contraction makes exact zeros of pad
 inexact. The residual cache is not rebuilt inside the device loop (its drift is about
 $10^{-10}$ MW per 10–100 sweeps).
 
-**Throughput** (development GPU, an RTX 3050 Ti laptop part with slow FP64): about
+**Throughput** (development GPU, an RTX 3050 Ti laptop part with slow FP64; details and
+estimates in [performance.md](performance.md) §7): about
 $4.8\cdot10^5$ line moves per second at 40 nodes × 6 h with 4 chains against
 $1.8\cdot10^5$ for the CPU plain kernel on 8 threads; $4.0\cdot10^5$ at 256 nodes daily with
 one chain against $8.6\cdot10^4$. Four chains at 256 nodes exceed its 4 GB.

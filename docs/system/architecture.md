@@ -16,9 +16,9 @@ device port in [device.md](device.md).
 | `test/`, `device/test/` | tests ([testing.md](testing.md)) |
 | `configs/` | TOML run configurations ([config.md](config.md)) |
 | `scripts/` | driver script, data preparation, benchmarks, plotting |
-| `data/raw/`, `data/processed/` | downloaded sources and model input files ([data.md](data.md)); not in git |
+| `data/raw/`, `data/processed/` | downloaded sources and model input files ([data.md](data.md), provenance in [data_sources.md](data_sources.md)); not in git |
 | `results/` | run outputs and the caches (`results/cache/`); not in git |
-| `external/pypsa-eur/` | the PyPSA-Eur workflow used to build the 256-node network |
+| `external/pypsa-eur/` | the PyPSA-Eur workflow used to build the 256-node network ([data_sources.md](data_sources.md)) |
 | `external/reactant-bench/` | Reactant prototypes and benchmarks |
 | `work/perf/` | a working copy used for CPU performance work |
 | `toy/` | legacy toy models (§9) |
@@ -177,14 +177,16 @@ links ([device.md](device.md) §4).
 ## 7. Outputs
 
 Each driver writes one HDF5 file (`out`); the layout is in [data.md](data.md) §3.
-`scripts/plot_results.py` plots the single-chain output.
+`scripts/plot_results.py` plots the single-chain output. Costs per move and per sweep, scaling
+and device throughput are in [performance.md](performance.md).
 
 ## 8. Tests
 
 See [testing.md](testing.md) for the strategy. CPU: `test/runtests.jl` (bases and transfers,
 FFBS, the Haar basis, and the included files `test_local.jl`, `test_flow.jl`, `test_bias.jl`,
 `test_model.jl`, `test_convergence.jl`), plus `test/test_exact.jl` (end-to-end exactness, run
-separately). Device: the files in `device/test/`, each run on its own.
+separately). Device: the files in `device/test/`, each run on its own. A new move family
+follows the checklist in [moves/adding_a_move.md](moves/adding_a_move.md).
 
 ## 9. Legacy code (not part of the system)
 

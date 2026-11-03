@@ -116,7 +116,7 @@ is dropped); max(x, −x) is lowered correctly. Every absolute value of the devi
 """
 @inline absd(x) = max(x, -x)
 "a / b, or 0 where b = 0 (padded breakpoints are put at t = 0, a point that is always present)."
-@inline sdiv(a, b) = ifelse(b == 0.0, 0.0, a / ifelse(b == 0.0, 1.0, b))
+@inline sdiv(a, b) = ifelse(b == 0.0, zero(a), a / ifelse(b == 0.0, one(b), b))   # zero(a): type-stable for traced a and scalar b
 
 # ---------------------------------------------------------------------------
 # term values
@@ -161,7 +161,7 @@ end
 Potential βΔC(t) (C, B, K) of every site at the points t (C, B, K), the secondary quantities Z
 (vector of (C, B, K)) and the balance-slot changes dr (vector of (C, B, K)).
 """
-function eval_terms(tb::TermBatch, k::Consts, t)
+function eval_terms(tb::TermBatch, k::Consts, t; sec::Bool=true)
     Δt, cv = k.Δt, k.cv
     z = t .* 0.0
     c = z
@@ -191,7 +191,7 @@ function eval_terms(tb::TermBatch, k::Consts, t)
             c0 = uc_val.(Δt, cv, clamp01.(q.y0[i]), q.u0[i], q.u10[i], q.κ[i], q.w[i], q.gmin[i], q.su[i], q.nl[i])
             c = c .+ q.on[i] .* (c1 .- c0)
             uc, uc1 = clamp01.(u), clamp01.(u1)
-            push!(Z, q.on[i] .* (yc .- uc), q.on[i] .* (q.gmin[i] .* uc .- yc), q.on[i] .* (uc1 .- uc))
+            sec && push!(Z, q.on[i] .* (yc .- uc), q.on[i] .* (q.gmin[i] .* uc .- yc), q.on[i] .* (uc1 .- uc))
         end
     end
     if tb.link !== nothing
@@ -228,13 +228,13 @@ function eval_terms(tb::TermBatch, k::Consts, t)
             d1 = soc_d.(Δt, ye, ye1, s.h[i], s.qt[i])
             d0 = soc_d.(Δt, s.e0[i], s.e10[i], s.h[i], s.qt[i])
             inj[s.slot[i]] = inj[s.slot[i]] .+ (soc_j.(d1, s.k[i], s.ηin[i], s.ηout[i]) .- soc_j.(d0, s.k[i], s.ηin[i], s.ηout[i]))
-            push!(Z, d1, ifelse.(s.ηin[i] .> 0.0, d1 .- s.ηin[i], 1.0), .-d1 .* s.ηout[i] .- 1.0)
+            sec && push!(Z, d1, ifelse.(s.ηin[i] .> 0.0, d1 .- s.ηin[i], 1.0), .-d1 .* s.ηout[i] .- 1.0)
         end
     end
     for j in 1:nr
         r1 = tb.r0[j] .+ inj[j]
         c = c .+ (bal_val.(Δt, k.cshed, k.cdump, r1) .- bal_val.(Δt, k.cshed, k.cdump, tb.r0[j]))
-        push!(Z, r1)
+        sec && push!(Z, r1)
     end
     return k.β .* c, Z, inj
 end
@@ -430,8 +430,11 @@ function rootsK(z, pe, NR::Int)
     ok = ifelse.(isl, (den .!= 0.0) .& (zb .!= 0.0) .& (x .< pb),
                  ifelse.(isr, (den .!= 0.0) .& (za .!= 0.0) .& (x .> pa), za .* zb .< 0.0))
     ok = ok .& (absd.(x) .< RAYMAX)
-    cnt = sum(ifelse.(ok, 1.0, 0.0); dims=3)
-    xs = ifelse.(ok, x, Inf)
+    # NR > 2: materialized once, XLA would otherwise recompute z (all terms of the slot) inside each
+    # of the NR + 1 reductions below (spair: −6 % per sweep on the RTX 3050 Ti; for NR = 2 the
+    # extra write costs more than it saves). ok ⇔ xs finite (|x| < RAYMAX), so the count reads xs.
+    xs = NR > 2 ? pin(ifelse.(ok, x, Inf)) : ifelse.(ok, x, Inf)
+    cnt = sum(ifelse.(isfinite.(xs), 1.0, 0.0); dims=3)
     out = Any[]
     prev = cnt .* 0.0 .- Inf
     for _ in 1:NR
@@ -446,7 +449,7 @@ end
 function sample_points(tb::TermBatch, k::Consts, pts, u1, u2)
     pe = extend(pts)
     n = size(pe, 3)
-    c, _, _ = eval_terms(tb, k, pe)
+    c, _, _ = eval_terms(tb, k, pe; sec=false)
     ca, cb = c[:, :, 1:n-1], c[:, :, 2:n]
     pa, pb = pe[:, :, 1:n-1], pe[:, :, 2:n]
     L = pb .- pa
@@ -498,7 +501,7 @@ end
 end
 
 "Balance-slot changes at the drawn t (C, B, 1) (for the commit)."
-slot_changes(tb::TermBatch, k::Consts, t) = eval_terms(tb, k, t)[3]
+slot_changes(tb::TermBatch, k::Consts, t) = eval_terms(tb, k, t; sec=false)[3]
 
 "Diagnostics: the largest number of sign changes of any secondary quantity per site (must be ≤ 2)."
 function root_count(tb::TermBatch, k::Consts)

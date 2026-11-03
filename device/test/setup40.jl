@@ -5,12 +5,12 @@ const ML = ESMSampling
 const D = ESMDevice
 
 function setup40(; C=3, data=joinpath(@__DIR__, "..", "..", "data", "processed", "model.h5"), seed=3, pert=0.02,
-                 losses=true, link_losses=true)
+                 losses=true, link_losses=true, uc=["gas", "nuclear"])
     cfg = ML.load_config(joinpath(@__DIR__, "..", "..", "configs", "haar_poc.toml")); cfg.verbose = false
     cfg.data = data
     cfg.out = joinpath(@__DIR__, "..", "..", "results", "haar_poc.h5")
     cfg.storage = "soc"; cfg.renewables = "load"; cfg.measure = "physical"; cfg.init = "heuristic"
-    cfg.losses = losses; cfg.thermal = "soft"; cfg.link_losses = link_losses; cfg.uc = ["gas", "nuclear"]; cfg.brownfield = true
+    cfg.losses = losses; cfg.thermal = "soft"; cfg.link_losses = link_losses; cfg.uc = uc; cfg.brownfield = true
     P, sL, info = ML.setup(cfg; rng=MersenneTwister(cfg.seed))
     rng = MersenneTwister(seed)
     ss = ML.State[]

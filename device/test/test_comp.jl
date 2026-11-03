@@ -4,7 +4,8 @@
 #            from the chain's net load)
 #   model B: the same without line losses and lossy links (soft limits, vintages, UC still on)
 #            families :tsoc, :tpot (T2: static kinks + the Jacobian independence step)
-#   model A, families :cell, :cellpair (cell templates on every partition level)
+#   model A, families :cell, :cellpair (cell templates on every partition level, level-bucketed)
+#   model A, :sblkL2, :sblkL4 (storage blocks, LINEAR); model B, :sblk2, :sblk4 (T2); plateau and shapes
 # For each: the first rounds of every family (a prefix of NSITE sites), the same explicit sites on
 # the CPU (prep_node!, prorata!, prep_tpot!(…; n), compensate_learned! via `learn`), the same (u1,
 # u2, u3) per site (MockRNG for sample_line!, u3 for the Jacobian step); both sides commit the
@@ -21,6 +22,9 @@ const DEV_RE = get(ENV, "DEVICE_REACTANT", "1") == "1"
 weyl(n, off) = [mod(0.5 + (off + k) * 0.6180339887498949, 1.0) for k in 1:n]
 
 function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
+    for L in D.BLOCK_LENGTHS                     # block profiles: the plateau and two shapes with zero ends
+        D.set_profiles!(L, hcat([vcat(0.0, rand(MersenneTwister(L + j), L - 1) .- 0.3, 0.0) for j in 1:2]...))
+    end
     P, M, ix, S, ss = setup40(; C=C, losses=tracking_model, link_losses=tracking_model)
     E = P.E
     β = P.βv
@@ -38,6 +42,7 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
     cls = zeros(C, M.T * M.N)
     for c in 1:C; cls[c, :] .= vec(permutedims(Float64.(FFs[c].surplus))); end
     ci = cells ? D.cell_info(P, LM, ix) : nothing
+    fams == :cells && (fams = D.cell_families(ci))
     pl = D.plan(M, S, β; families=fams, cpumap=true, cls=cls, bmax=Dict(f => NSITE for f in fams), cells=ci)
     qof = Dict(ix.gidx[q] => q for q in eachindex(ix.gidx))
     for n in eachindex(AM.runits), (j, (f, i)) in enumerate(AM.runits[n])
@@ -53,7 +58,7 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
         B, R = size(tabs[f].on)
         x = reshape(weyl(C * B * 3 * R, off[]), C, B, 3, R); off[] += length(x); x
     end for f in pl.fams))
-    learnof(f, c) = f in (:tsocL, :tpotL) ? (AM=AM, FF=FFs[c]) : nothing
+    learnof(f, c) = (f in (:tsocL, :tpotL) || startswith(string(f), "sblkL")) ? (AM=AM, FF=FFs[c]) : nothing
     cpumove(c, LC, f, site) = (jac = NTuple{5,Float64}[];
                               bm = cpu_move(P, LM, LC, ix, f, site; jac=jac, learn=learnof(f, c)); (bm, jac))
     ok_conf = all(D.check_conflicts(f, D.host_table(f, pl.tp, pl.sched[f]))[1] for f in pl.fams)
@@ -118,7 +123,13 @@ end
 if get(ENV, "CASE", "ABC") in ("B", "ABC")
     comp_case("B (no losses; T2)"; tracking_model=false, fams=(:tsoc, :tpot))
 end
+if get(ENV, "CASE", "ABC") in ("D", "ABC")
+    comp_case("D (all terms; storage blocks, LINEAR)"; tracking_model=true, fams=(:sblkL2, :sblkL4))
+end
+if get(ENV, "CASE", "ABC") in ("E", "ABC")
+    comp_case("E (no losses; storage blocks, T2)"; tracking_model=false, fams=(:sblk2, :sblk4))
+end
 if get(ENV, "CASE", "ABC") in ("C", "ABC")
     # cell templates: every partition level, one round per level (cell_power = 1) and time class
-    comp_case("C (all terms; cell templates)"; tracking_model=true, fams=(:cell, :cellpair), cells=true, nround=12)
+    comp_case("C (all terms; cell templates)"; tracking_model=true, fams=:cells, cells=true)
 end

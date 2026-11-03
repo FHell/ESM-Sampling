@@ -2,8 +2,8 @@
 
 This document gives the layout of the model input files (`data/processed/*.h5`), the
 available input files, and the layout of the HDF5 outputs of each driver. The pipeline that
-builds the inputs is in [model.md](model.md) §5, the run configuration in
-[config.md](config.md).
+builds the inputs is in [model.md](model.md) §5, the provenance of the sources in
+[data_sources.md](data_sources.md), the run configuration in [config.md](config.md).
 
 ## 1. Input files
 

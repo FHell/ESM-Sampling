@@ -1,0 +1,52 @@
+# Per-family profile of the operation sweeps (Reactant's profiler), docs/system/device.md.
+#
+# Usage (from the repository root):
+#   nice -n 19 julia --project=device -t 4 device/scripts/profile_families.jl <config> [outdir]
+#   FAMILIES=fast (default: FAMILIES_FAST), plain (FAMILIES) or all (with the compensated and cell families); NSWEEPS (default 2) sweeps per call;
+#   FAMS=gen,soc restricts the profile to these families.
+#
+# For every family alone: rounds per sweep, sites per round, real line moves per chain and
+# sweep, compile time, run time per sweep and per line move, the five most expensive kernels.
+using ESMSampling, ESMDevice, Reactant, Printf
+const Prof = Reactant.Profiler
+const D = ESMDevice
+
+cfg = ESMSampling.load_config(ARGS[1])
+outdir = abspath(length(ARGS) > 1 ? ARGS[2] : joinpath("results", "profiles", splitext(basename(ARGS[1]))[1] * "_families"))
+mkpath(outdir)
+nsw = parse(Int, get(ENV, "NSWEEPS", "2"))
+fset = get(ENV, "FAMILIES", "fast")
+X = D.device_setup(cfg; families=fset == "all" ? :all : fset == "plain" ? D.FAMILIES : D.FAMILIES_FAST)
+(; pl, st, cp, sp, kk, tabs, drng) = X
+mv = D.moves_per_sweep(pl)
+ns = Reactant.ConcreteRNumber(nsw)
+
+io = open(joinpath(outdir, "report.txt"), "w")
+say(s) = (println(s); println(io, s); flush(io))
+say(@sprintf("per-family profile: %s, backend %s, %d chains, T = %d, N = %d, %d sweeps per call",
+             ARGS[1], cfg.device_backend, X.K, X.M.T, X.M.N, nsw))
+say(@sprintf("%-10s %7s %8s %9s %9s %10s %10s", "family", "rounds", "sites", "moves", "compile", "s/sweep", "µs/move"))
+tot = 0.0
+sel = Symbol.(filter(!isempty, split(get(ENV, "FAMS", ""), ",")))     # FAMS=gen,soc: only these
+for f in pl.fams
+    (isempty(sel) || f in sel) || continue
+    fv = Val((f,))
+    swf(st, cp, sp, k, tabs, ns, rng) = D.run_sweeps(st, cp, sp, k, tabs, ns, rng, fv)
+    tc = @elapsed fc = @compile sync=true donated_args=:none swf(st, cp, sp, kk, tabs, ns, drng)
+    r = Prof.profile_thunk_with_xprof(fc, st, cp, sp, kk, tabs, ns, drng; nrepeat=1, warmup=1,
+                                      profile_dir=joinpath(outdir, string(f)))
+    ts = r.profiling_result.runtime_ns / 1e9 / nsw
+    global tot += ts
+    nmv = X.K * mv[f]
+    say(@sprintf("%-10s %7d %8d %9d %8.0fs %10.4f %10.3f", f, size(pl.dev[f].on, 2), size(pl.dev[f].on, 1), mv[f],
+                 tc, ts, 1e6 * ts / max(nmv, 1)))
+    ks = Prof.get_kernel_stats(r.xplane_file)
+    rep = sort(ks.reports; by=x -> -x.total_duration_ns)
+    for x in rep[1:min(5, length(rep))]
+        say(@sprintf("    %-40s %6d × %9.3f ms = %8.3f ms per sweep, occupancy %3.0f %%, grid %s × block %s", x.name, x.occurrences,
+                     x.total_duration_ns / 1e6 / max(x.occurrences, 1), x.total_duration_ns / 1e6 / nsw, x.occupancy_pct,
+                     join(Int.(x.grid_dim), "×"), join(Int.(x.block_dim), "×")))
+    end
+end
+say(@sprintf("sum of families: %.4f s per sweep (%d chains)", tot, X.K))
+close(io)

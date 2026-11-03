@@ -337,6 +337,7 @@ include("terms.jl")
 include("rounds.jl")
 include("comp.jl")         # phase 3: compensated moves (spair, tsocL/tsoc, tpotL/tpot)
 include("cells.jl")        # phase 3: cell templates (cell, cellpair)
+include("blocks.jl")       # phase 3: storage block moves (plateau, shapes)
 export TermBatch, sample_dense, eval_terms, FlatState, plan, run_rounds, check_conflicts, unflat!
 
 include("kmove.jl")

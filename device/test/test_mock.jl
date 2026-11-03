@@ -25,10 +25,11 @@ Reactant.set_default_backend(get(ENV, "DEVICE_BACKEND", "cpu"))
 const NSITE = parse(Int, get(ENV, "NSITE", "1500"))       # sites per round (a prefix of the schedule round)
 const DEV_RE = get(ENV, "DEVICE_REACTANT", "1") == "1"
 C = 2
-P, M, ix, S, ss = setup40(; C=C)
+P, M, ix, S, ss = setup40(; C=C, uc=get(ENV, "UC", "") == "none" ? String[] : ["gas", "nuclear"])   # UC=none: no fleet commitment
 E = P.E
 β = P.βv
-pl = D.plan(M, S, β; bmax=Dict(:theta => 4096), cpumap=true)
+FAMSET = get(ENV, "FAMSET", "plain") == "fast" ? D.FAMILIES_FAST : D.FAMILIES     # FAMSET=fast: :gen0/:pair0 split
+pl = D.plan(M, S, β; bmax=Dict(:theta => 4096), cpumap=true, families=FAMSET)
 LM = ML.LocalModel(P, ss[1].ℓ)
 LCs = [ML.LocalCost(P, LM, s) for s in ss]
 st0 = cpu_r_state(pl, LCs)                                  # the CPU residual on the device side too

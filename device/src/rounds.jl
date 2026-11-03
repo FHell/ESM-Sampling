@@ -24,6 +24,26 @@ using Random
 
 const FAMILIES = (:gen, :uc, :pair, :soc, :link, :theta)
 
+"""
+Structure-specialised plain families of device runs. `:gen0`/`:pair0` move units without fleet
+unit commitment: no UC terms (the UC terms of such a unit are identically zero) and no coupling of
+τ − 1 and τ, so one round takes all steps. With `:gen0` (`:pair0`) in the list, `:gen` (`:pair`)
+moves only the committable units (pairs with at least one). Same moves and targets as `FAMILIES`.
+"""
+const FAMILIES_FAST = (:gen0, :gen, :uc, :pair0, :pair, :soc, :link, :theta3, :theta5, :theta)
+
+# Angle families by node degree: :theta3 (degree ≤ 3) and :theta5 (4–5) are padded to their own
+# maximum degree; with them in the list, :theta keeps the nodes of degree ≥ 6. The cost of a θ site
+# grows about quadratically with the padded degree (points × terms).
+const THETA_BUCKETS = (theta3=(0, 3), theta5=(4, 5))
+istheta(f::Symbol) = f == :theta || haskey(THETA_BUCKETS, f)
+"Degree range of the nodes of θ family f under the family list `families`."
+function theta_range(f::Symbol, families)
+    haskey(THETA_BUCKETS, f) && return THETA_BUCKETS[f]
+    hi = maximum((THETA_BUCKETS[g][2] for g in families if haskey(THETA_BUCKETS, g)); init=0)
+    return (hi + 1, typemax(Int))
+end
+
 # ---------------------------------------------------------------------------
 # static per-unit parameters and per-chain parameters
 # ---------------------------------------------------------------------------
@@ -179,7 +199,13 @@ function schedule(tp::Topo, M::DeviceModel; families=FAMILIES, bmax=Dict{Symbol,
     Sm = maximum(length.(tp.nodestor); init=0)
     for fam in families
         rounds = Vector{Vector{Tuple}}()
-        if fam == :gen
+        hasuc(q) = M.guc[q] > 0
+        if fam == :gen0 || (fam == :gen && :gen0 in families)       # split by UC (FAMILIES_FAST)
+            ng = [filter(q -> hasuc(q) == (fam == :gen), tp.nodegens[n]) for n in 1:tp.N]
+            for j in 1:maximum(length.(ng); init=0), c in (fam == :gen0 ? (1:T,) : cls)
+                push!(rounds, [(ng[n][j], τ) for τ in c for n in 1:tp.N if length(ng[n]) >= j])
+            end
+        elseif fam == :gen
             for j in 1:G, c in cls
                 push!(rounds, [(tp.nodegens[n][j], τ) for τ in c for n in 1:tp.N if length(tp.nodegens[n]) >= j])
             end
@@ -188,10 +214,13 @@ function schedule(tp::Topo, M::DeviceModel; families=FAMILIES, bmax=Dict{Symbol,
             isempty(ucu) || for c in cls
                 push!(rounds, [(q, τ) for τ in c for q in ucu])
             end
-        elseif fam == :pair
+        elseif fam == :pair || fam == :pair0
             prs = [[(g[a], g[b]) for a in eachindex(g) for b in a+1:length(g)] for g in tp.nodegens]
+            if fam == :pair0 || :pair0 in families                     # split by UC (FAMILIES_FAST)
+                prs = [filter(pq -> (hasuc(pq[1]) || hasuc(pq[2])) == (fam == :pair), p) for p in prs]
+            end
             np = maximum(length.(prs); init=0)
-            for p in 1:np, c in cls
+            for p in 1:np, c in (fam == :pair0 ? (1:T,) : cls)
                 push!(rounds, [(prs[n][p]..., τ) for τ in c for n in 1:tp.N if length(prs[n]) >= p])
             end
         elseif fam == :soc
@@ -203,10 +232,12 @@ function schedule(tp::Topo, M::DeviceModel; families=FAMILIES, bmax=Dict{Symbol,
             for c in 1:maximum(lc; init=0)
                 push!(rounds, [(l, τ) for τ in 1:T for l in findall(==(c), lc)])
             end
-        elseif fam == :theta
+        elseif istheta(fam)
             nc = colour_d2(tp)
+            dlo, dhi = theta_range(fam, families)
+            indeg(n) = dlo <= length(tp.nodelines[n]) <= dhi
             for c in 1:maximum(nc; init=0)
-                push!(rounds, [(n, τ) for τ in 1:T for n in findall(==(c), nc) if !isempty(tp.nodelines[n])])
+                push!(rounds, [(n, τ) for τ in 1:T for n in findall(==(c), nc) if !isempty(tp.nodelines[n]) && indeg(n)])
             end
         else
             rounds = family_rounds(Val(fam), tp, M, cls, rng)      # phase-3 families (comp.jl)
@@ -226,7 +257,13 @@ colτ(T, τ, x) = mod1(τ, T) + (x - 1) * T
 "Index columns of one site of family `fam` (named; vectors for the per-line fields of :theta)."
 function site_cols(fam::Symbol, tp::Topo, site, D::Int)
     T = tp.T
-    if fam == :gen || fam == :uc
+    if fam == :gen0
+        q, τ = site
+        return (q=q, cw=colτ(T, τ, q), cr=colτ(T, τ, tp.gnode[q]))
+    elseif fam == :pair0
+        q1, q2, τ = site
+        return (q1=q1, q2=q2, cwa=colτ(T, τ, q1), cwb=colτ(T, τ, q2), cr=colτ(T, τ, tp.gnode[q1]))
+    elseif fam == :gen || fam == :uc
         q, τ = site
         nt = (q=q, cw=colτ(T, τ, q), cwm=colτ(T, τ - 1, q), cw1=colτ(T, τ + 1, q))
         return fam == :gen ? merge(nt, (cr=colτ(T, τ, tp.gnode[q]),)) : nt
@@ -241,7 +278,7 @@ function site_cols(fam::Symbol, tp::Topo, site, D::Int)
     elseif fam == :link
         l, τ = site
         return (l=l, cu=colτ(T, τ, l), cra=colτ(T, τ, tp.lbus0[l]), crb=colτ(T, τ, tp.lbus1[l]))
-    elseif fam == :theta
+    elseif istheta(fam)
         n, τ = site
         ls = tp.nodelines[n]
         far = [tp.ebus0[e] == n ? tp.ebus1[e] : tp.ebus0[e] for e in ls]
@@ -251,6 +288,10 @@ function site_cols(fam::Symbol, tp::Topo, site, D::Int)
     end
     return site_cols(Val(fam), tp, site, D)                    # phase-3 families (comp.jl)
 end
+
+"Padded line count of family f: the largest degree of its θ sites (all θ tables use the global maximum otherwise)."
+family_degree(f::Symbol, tp::Topo, rounds) =
+    istheta(f) ? maximum((length(tp.nodelines[site[1]]) for r in rounds for site in r); init=1) : maximum(length.(tp.nodelines); init=1)
 
 """
 Host index table of a family: NamedTuple of (B, R) Int arrays (θ per-line fields (B, D, R)),
@@ -278,7 +319,7 @@ end
 "Device table: padding → index 1 (zero changes there); for :theta the per-line mask `lon`."
 function device_table(fam::Symbol, ht)
     nt = NamedTuple{keys(ht)}(Tuple(k == :on ? copy(v) : max.(v, 1) for (k, v) in pairs(ht)))
-    fam == :theta && (nt = merge(nt, (lon=Float64.(ht.ln .> 0),)))
+    istheta(fam) && (nt = merge(nt, (lon=Float64.(ht.ln .> 0),)))
     return merge(nt, device_extra(Val(fam), ht))
 end
 device_extra(::Val, ht) = NamedTuple()
@@ -289,9 +330,12 @@ const FOOT = Dict(
     :uc => [(:cw, :uc, true), (:cw, :ω, false), (:cwm, :ω, false), (:cwm, :uc, false), (:cw1, :uc, false)],
     :pair => [(:cwa, :ω, true), (:cwa, :uc, true), (:cwma, :ω, false), (:cwma, :uc, false), (:cw1a, :uc, false),
               (:cwb, :ω, true), (:cwb, :uc, true), (:cwmb, :ω, false), (:cwmb, :uc, false), (:cw1b, :uc, false), (:cr, :r, true)],
+    :gen0 => [(:cw, :ω, true), (:cr, :r, true)],
+    :pair0 => [(:cwa, :ω, true), (:cwb, :ω, true), (:cr, :r, true)],
     :soc => [(:ce, :e, true), (:cem, :e, false), (:ce1, :e, false), (:crm, :r, true), (:cr, :r, true)],
     :link => [(:cu, :u, true), (:cra, :r, true), (:crb, :r, true)],
     :theta => [(:cθ, :θ, true), (:cθf, :θ, false), (:cr, :r, true), (:crf, :r, true)])
+for f in keys(THETA_BUCKETS); FOOT[f] = FOOT[:theta]; end
 
 """
     check_conflicts(fam, ht) -> (ok, nconflicts)
@@ -402,6 +446,39 @@ function commit(::Val{:gen}, st::FlatState, tab, r, t, dr, aux)
     cw, cr = tab.cw[:, r], tab.cr[:, r]
     return FlatState(st.θ, scadd(st.ω, cw, flat(t .* a)), scadd(st.uc, cw, flat(t .* au)), st.e, st.u,
                      scadd(st.r, cr, flat(msk(dr[1], a))))
+end
+
+"Generator terms of unit q at the given columns (no UC terms)."
+gen_terms(st, cp, sp, q, cw, a) =
+    (g3(st.ω, cw), a, g3(cp.κg, q), g3(cp.wg, q), s3(sp.gmc, q), s3(sp.clo, q), s3(sp.chi, q), g3(cp.plo, q),
+     s3(sp.hv, q), g3(cp.yk, q))
+
+function build(::Val{:gen0}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r)
+    q, cw, cr = tab.q[:, r], tab.cw[:, r], tab.cr[:, r]
+    a = m3(tab.on[:, r])
+    gen = GenTerms((Any[x] for x in gen_terms(st, cp, sp, q, cw, a))..., [1])
+    return TermBatch(gen, nothing, nothing, nothing, nothing, [g3(st.r, cr)]), a
+end
+
+commit(::Val{:gen0}, st::FlatState, tab, r, t, dr, a) =
+    FlatState(st.θ, scadd(st.ω, tab.cw[:, r], flat(t .* a)), st.uc, st.e, st.u, scadd(st.r, tab.cr[:, r], flat(msk(dr[1], a))))
+
+function build(::Val{:pair0}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r, k::Consts)
+    q1, q2, cr = tab.q1[:, r], tab.q2[:, r], tab.cr[:, r]
+    on = m3(tab.on[:, r])
+    κ1, κ2 = g3(cp.κg, q1), g3(cp.κg, q2)
+    ok = (on .> 0.0) .& (absd.(κ1) .>= k.κmin) .& (absd.(κ2) .>= k.κmin)        # κ_min selection rule (per chain)
+    a1 = ifelse.(ok, 1.0 ./ ifelse.(ok, κ1, 1.0), 0.0)
+    a2 = ifelse.(ok, -1.0 ./ ifelse.(ok, κ2, 1.0), 0.0)
+    G = (gen_terms(st, cp, sp, q1, tab.cwa[:, r], a1), gen_terms(st, cp, sp, q2, tab.cwb[:, r], a2))
+    gen = GenTerms((Any[x[j] for x in G] for j in 1:10)..., [1, 1])
+    return TermBatch(gen, nothing, nothing, nothing, nothing, [g3(st.r, cr)]), (a1, a2)
+end
+
+function commit(::Val{:pair0}, st::FlatState, tab, r, t, dr, aux)
+    a1, a2 = aux
+    ω = scadd(scadd(st.ω, tab.cwa[:, r], flat(t .* a1)), tab.cwb[:, r], flat(t .* a2))
+    return FlatState(st.θ, ω, st.uc, st.e, st.u, scadd(st.r, tab.cr[:, r], flat(msk(dr[1], absd.(a1)))))
 end
 
 function build(::Val{:uc}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r)
@@ -516,6 +593,12 @@ build(f::Val, st, cp, sp, tab, r, k) = build(f, st, cp, sp, tab, r)
 "Roots kept per secondary quantity: 2 for the plain families (proven), 4 for compensated and cell families."
 nroots(::Val) = Val(4)
 nroots(::Val{:gen}) = Val(2); nroots(::Val{:uc}) = Val(2); nroots(::Val{:pair}) = Val(2)
+nroots(::Val{:gen0}) = Val(2); nroots(::Val{:pair0}) = Val(2)
+for f in keys(THETA_BUCKETS)                       # degree buckets: the θ family with their own padding
+    @eval build(::Val{$(QuoteNode(f))}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r) = build(Val(:theta), st, cp, sp, tab, r)
+    @eval commit(::Val{$(QuoteNode(f))}, st::FlatState, tab, r, t, dr, a) = commit(Val(:theta), st, tab, r, t, dr, a)
+    @eval nroots(::Val{$(QuoteNode(f))}) = Val(2)
+end
 nroots(::Val{:soc}) = Val(2); nroots(::Val{:link}) = Val(2); nroots(::Val{:theta}) = Val(2)
 
 """
@@ -601,7 +684,7 @@ function plan(M::DeviceModel, S::DeviceState, β; κmin=1.0, families=FAMILIES, 
     cells === nothing || (CELLINFO[] = cells)            # cell structure of the partition levels (cells.jl)
     sch = schedule(tp, M; families=families, bmax=bmax, bdefault=bdefault, rng=rng)
     fams = Tuple(f for f in families if haskey(sch, f) && !isempty(sch[f]))
-    hts = NamedTuple{fams}(Tuple(host_table(f, tp, sch[f]) for f in fams))
+    hts = NamedTuple{fams}(Tuple(host_table(f, tp, sch[f]; D=family_degree(f, tp, sch[f])) for f in fams))
     dts = NamedTuple{fams}(Tuple(device_table(f, hts[f]) for f in fams))
     return (tp=tp, sched=sch, fams=fams, host=hts, dev=dts, sp=static_params(M), cp=chain_params(M, S; cls=cls),
             k=consts(M, β; κmin=κmin, cpumap=cpumap), st=flat_state(M, S))

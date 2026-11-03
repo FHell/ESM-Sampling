@@ -50,7 +50,8 @@ comparison uses given uniforms.
 | `test/test_convergence.jl` | multi-chain diagnostics on synthetic chains: iid passes, AR chains give the expected ESS, location and scale differences raise $\hat R$, random walks fail, warmup detection |
 | `test/test_exact.jl` | end-to-end exactness (§1); about 2–3 minutes; skipped with `EXACT_SKIP=1` |
 
-Tests that need `data/processed/model.h5` are skipped if it is absent.
+Tests that need `data/processed/model.h5` are skipped if it is absent. The CPU tests a new move
+family needs are listed in [moves/adding_a_move.md](moves/adding_a_move.md) §4.
 
 ## 3. Device tests (`device/test/`)
 
@@ -60,14 +61,16 @@ Tests that need `data/processed/model.h5` are skipped if it is absent.
 | `test_sampler.jl` | term-batch $\Delta C(t)$ = CPU `eval_move!` per family; conflict-freeness of every round; at most two sign changes of every secondary quantity on every site (KS only with `KS=1`) |
 | `test_mock.jl` | the main comparison: every site of two rounds of every plain family with the same uniforms on both sides; $t$ per draw, node values, $r$ and costs after committing; Reactant against Julia arrays |
 | `test_rounds.jl` | one sweep on arrays and traced with the same uniforms; many sweeps in one compiled program: $r$ cache drift and cost of the downloaded state |
-| `test_comp.jl` | compensated families (`:spair`, `:tsocL`, `:tpotL` with all terms; `:tsoc`, `:tpot` without losses and lossy links) against the CPU with mock uniforms, then Reactant against arrays |
+| `test_comp.jl` | compensated families (`:spair`, `:tsocL`, `:tpotL` with all terms; `:tsoc`, `:tpot` without losses and lossy links), storage blocks (`:sblkL2/4`; `:sblk2/4`), cell templates (all levels): the same explicit CPU moves and uniforms, $t$ (own points, and the device sampler on the CPU walk's points), the Jacobian decision, node values, $r$ and costs after committing, the guard rate; then Reactant against arrays |
+| `test_program.jl` | the merged program (operation sweeps + capacity pass) against the two compiled calls; with `FULL=1` all families in it |
 | `test_kmove.jl`, `test_kpeak.jl`, `test_kren.jl` | capacity moves against the CPU Metropolis forms with the same proposals |
 | `test_kmove_bias.jl`, `test_bias_dev.jl` | capacity moves with the bias; device bias change against differences of `bias_term` |
 | `test_driver_parts.jl` | device chain parameters = host chain parameters |
 | `test_exact_dev.jl`, `diag_exact_soc.jl` | statistical runs; off unless `RUN_STAT=1` |
 
 Shared setups: `setup40.jl`, `setup_all_terms.jl` (40 nodes, all model terms), `helpers.jl`
-(CPU reference moves built as in `local_sweep!`), `mockrng.jl` (`MockRNG`).
+(CPU reference moves built as in `local_sweep!`), `mockrng.jl` (`MockRNG`). The device tests of
+a new family: [moves/adding_a_move.md](moves/adding_a_move.md) §6.
 
 ## 4. Running
 

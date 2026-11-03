@@ -34,8 +34,12 @@ Rate 0.1.
 **Use of both.** They move country-scale shares in one draw, which single-unit moves would
 need many steps for. They are kept in every kernel.
 
-**Device.** Cell templates `:cell` and `:cellpair` (`device/src/cells.jl`, being added): a
-round covers every cell of one partition level at once (cells of a level are disjoint), with
-the carriers per cell and step drawn on the host. To match the CPU's level probabilities
-$p_q$, level $q$ gets a number of rounds proportional to $p_q$ divided by its number of cells.
-The driver does not schedule them yet ([../device.md](../device.md)).
+**Device.** Cell templates `:cell{q}`, `:cellu{q}`, `:cellpair{q}`, `:cellpairu{q}`
+(`device/src/cells.jl`). Each family is one partition level q.
+* *Round.* A round covers every cell of the level at once (cells of a level are disjoint), times
+  the time classes, because the commitment follows.
+* *Host choices.* The carriers per cell and step are drawn on the host. The `u` families hold
+  the committable carriers.
+* *Level probabilities.* Level q gets rounds ∝ $p_q$/(number of cells), which matches the CPU's
+  level probabilities $p_q$ (one round per level and class at `cell_power = 1`).
+* *Scheduling.* The driver schedules them with `families = :all` ([../device.md](../device.md)).

@@ -19,6 +19,8 @@ family name and whether the device port has it.
 | [capacity.md](capacity.md) | `kscale`, `kpeak`; level-0 carrier scaling and capacity slice updates | capacities |
 | [weather.md](weather.md) | regime FFBS, weather coordinate moves, weather shear | weather |
 
+How to add a family, with its tests and its device port: [adding_a_move.md](adding_a_move.md).
+
 ## Where each family runs
 
 | family | CPU kernel (`fine_kernel`) | device |
@@ -29,18 +31,18 @@ family name and whether the device port has it.
 | `pair` | all | `:pair` |
 | `xpair`, `xloc`, `xlocc` | all | missing (planned as local re-routing templates) |
 | `spair` | all (SoC form) | `:spair` |
-| `cell`, `cellpair` | all | `:cell`, `:cellpair` (cell templates, being added) |
+| `cell`, `cellpair` | all | `:cell{q}`, `:cellpair{q}` (level-bucketed cell templates) |
 | `tpot`, `tmode`, `tline`, `tcut`, `tmode0`, `tline0`, `tsoc` | flow, adaptive | `:tpot`, `:tsoc` (no requirement tracking); others missing |
 | `tpotL`, `tmodeL`, `tlineL`, `tcutL`, `tsocL` | adaptive | `:tpotL`, `:tsocL` (static coefficients); others missing |
-| storage plateau and shape | flow, adaptive (SoC form) | missing (planned as block profiles) |
+| storage plateau and shape | flow, adaptive (SoC form) | `:sblk{L}`, `:sblkL{L}` (one unit; aggregates missing) |
 | `amode`, `amode0`, `amodeL`, `acut`, `acutL`, learned shapes | adaptive | missing |
 | `kscale`, `kpeak` | all, at the complete level | Metropolis forms, renewables included (`kren`); the learned `kpeak` variant missing |
 | fine-level weather moves | all, with `fine_weather > 0` | missing |
 | level-0 moves (weather slice and shear, FFBS, capacity slice, carrier scaling) | level-0 warmup chain | not ported (host side) |
 
-The device families `:spair`, `:tsoc`, `:tsocL`, `:tpot`, `:tpotL` (and the cell templates,
-which are being added) exist next to the plain families, but the device driver schedules only
-the plain ones so far ([../device.md](../device.md)). The device port is under active
+The device families `:spair`, `:tsoc(L)`, `:tpot(L)` and the cell templates are scheduled by the
+device driver with `families = :all` (`device_families`); the default is the plain families. The
+block families exist but are not scheduled yet ([../device.md](../device.md)). The device port is under active
 development; its current state is recorded in `docs/reactant_phase3.md`.
 
 ## Common vocabulary

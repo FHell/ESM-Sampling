@@ -226,7 +226,8 @@ interpolation points (`thermal_segments = 4`), the unit-commitment parameters.
 ## 5. Data pipeline
 
 The data flow one way, from PyPSA-Eur and the weather sources into one HDF5 file per network
-(`data/processed/*.h5`, layout in [data.md](data.md)):
+(`data/processed/*.h5`, layout in [data.md](data.md), provenance of every source in
+[data_sources.md](data_sources.md)):
 
 1. `scripts/download_data.sh` fetches the PyPSA example network `carbon_management.nc`,
    the OPSD `weather_data` (national temperatures) and `time_series` (ENTSO-E load

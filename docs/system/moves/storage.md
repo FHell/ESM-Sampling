@@ -47,6 +47,13 @@ to propagate step by step; block moves move inter-block energy in one draw. The 
 state of charge limits the inter-block range of short storage and the power limit bounds the
 amplitudes, so which lengths matter depends on the storage class.
 
-**Device.** Missing; planned as one block family with a profile table (plateau, proxy and
-learned shapes) and compensation sites at the end steps or every step
-([../device.md](../device.md)).
+**Device.** `:sblk{L}` (share-preserving) and `:sblkL{L}` (linear), $L$ = 2, 4, 8, 16, 32, for
+one storage unit (`device/src/blocks.jl`).
+* *Profile.* Each site has a profile from a host table: the plateau and optional shapes with
+  zero ends.
+* *Compensation.* It runs at every step whose power changes.
+* *Rounds.* Blocks of one parity × one storage slot per node.
+
+> **Status: missing.** The cell–class aggregates of the block moves; the proxy and learned
+> shapes as device tables (any shape can be set with `set_profiles!`); the driver does not
+> schedule the block families yet ([../device.md](../device.md)).

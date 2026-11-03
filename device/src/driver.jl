@@ -12,6 +12,29 @@
 # Proposal normals and uniforms of the capacity moves are drawn on the host (a few thousand
 # numbers per call); the operation rounds use Reactant's RNG.
 
+"""
+Proxy class of every (node, step), 1 = surplus, flattened (C, T·N): the CPU's `frame_injections`
+p = renewable output − load, less the load-weighted share `w` (C, N) of the system total, is
+positive. With renewables as load, renewable output − load = −dnet. A function of (x, k) only.
+"""
+function proxy_class(dnet, w)
+    p = -dnet
+    p = p .- reshape(w, size(w, 1), 1, size(w, 2)) .* sum(p; dims=3)
+    return Float64.(reshape(p .> 0, size(dnet, 1), :))     # broadcast after the reshape: a materialized traced array
+end
+
+"Load-weighted node shares (C, N) of the chains' weather (the CPU's `frame_injections` weights)."
+function load_shares(P::ML.Problem, ss::Vector{ML.State})
+    N = P.E.sys.N
+    w = zeros(length(ss), N)
+    for (c, s) in enumerate(ss)
+        Xn = ML.weather_nodes(P.W, s.ℓ, s.xs[end])
+        d = vec(ML.mean(max.(Xn[1], 0.0); dims=2))
+        w[c, P.E.wspecs[1].B.support] .= d ./ sum(d)
+    end
+    return w
+end
+
 "Capacity-dependent chain parameters from raw capacities (the formulas of `chain_params`, traceable)."
 function chain_params_dev(M, kg, ks, cls, Cn::Val{C}) where {C}
     A = reshape(M.gav, 1, :)
@@ -33,7 +56,7 @@ recomputed from the net load, scaling of the dispatchable (`gq`) and storage (`s
 peak-set moves (`gq`); Metropolis with given proposals, optional bias. Returns
 (st, kg, ks, cp, BS, RS, dnet, cren, capren).
 """
-function capacity_pass(st::FlatState, kg, ks, dnet, cren, capren, KP, Z, U, Zp, Up, gq, sq, σk, cls,
+function capacity_pass(st::FlatState, kg, ks, dnet, cren, capren, KP, Z, U, Zp, Up, gq, sq, σk, wsh,
                        BD, BS, gitem, sitem, RP, RS, Zr, Ur, rq, ritem, ::Val{dims}; σ, βk, βv, physical::Bool) where {dims}
     C, T, N, Ug, Us, Ul, mpk = dims
     m3(x, n) = reshape(x, C, T, n) .+ 0.0          # materialized (a lazy reshape of a traced array has another type)
@@ -55,9 +78,29 @@ function capacity_pass(st::FlatState, kg, ks, dnet, cren, capren, KP, Z, U, Zp, 
     BSn = bias === nothing ? nothing : out[3]
     m2(x) = reshape(x, C, :) .+ 0.0
     st2 = FlatState(m2(S.θ), m2(S.ω), m2(S.uc), m2(S.e), m2(S.u), m2(r))
+    cls = proxy_class(S.dnet, wsh)                 # from (x, k) after this pass, for the next operation sweeps
     cp = chain_params_dev(KP_model_view(KP), S.kg, S.ks, cls, Val(C))
     return st2, S.kg, S.ks, cp, BSn, RS, S.dnet, S.cren, S.capren
 end
+
+"""
+One compiled program per checkpoint: `ns` operation sweeps (`run_sweeps`, the count traced,
+Reactant's RNG), then the capacity pass on the same state (`capacity_pass`, host-drawn proposals).
+`kparts` are the capacity-pass arguments after the state (`kargs(…)[2:end]`). Returns the outputs
+of `capacity_pass`. Equal to the two separate calls to round-off (`test/test_program.jl`).
+"""
+function sweep_program(st::FlatState, cp, sp, k, tabs, ns, rng, fv::Val, kparts...; dims, σ, βk, βv, physical)
+    st = run_sweeps(st, cp, sp, k, tabs, ns, rng, fv)
+    return capacity_pass(st, kparts..., dims; σ, βk, βv, physical)
+end
+
+"""
+Operation families of a device run: the plain families, then the compensated families (`:spair`;
+LINEAR `:tsocL`/`:tpotL` when the model needs requirement tracking (line losses, lossy links),
+else share-preserving `:tsoc`/`:tpot`) and the level-bucketed cell templates of `ci`.
+"""
+device_families(M::DeviceModel, ci) =
+    (FAMILIES_FAST..., :spair, (tracking(M) ? (:tsocL, :tpotL) : (:tsoc, :tpot))..., (ci === nothing ? () : cell_families(ci))...)
 
 "Write the renewable capacities of chain c (device order `ren_units`) into the State `s` (coefficients)."
 function ren_to_host!(P::ML.Problem, kr::AbstractMatrix, c::Int, s::ML.State)
@@ -76,13 +119,14 @@ end
 KP_model_view(KP) = KP
 
 """
-    run_device(cfg) -> results
+    device_setup(cfg) -> NamedTuple
 
-Device run of `cfg.nchains` chains (see the module comment): `mlda_warmup` + `nsamples`
-checkpoints, each after `device_sweeps` operation sweeps and one capacity pass.
+Everything a device run needs before compiling: the problem and the host chains, the packed
+model and the plan, the device arrays and the two programs as plain functions with their
+argument builder `kargs` and the host draws `draws()`. Shared by `run_device` and the profiler
+(`device/scripts/profile_device.jl`).
 """
-function run_device(cfg::ML.Config)
-    t0 = time()
+function device_setup(cfg::ML.Config; families=FAMILIES_FAST)
     rng = MersenneTwister(cfg.seed)
     P, sL, info = ML.setup(cfg; rng=rng)
     L = ML.nlevels(P) - 1
@@ -98,7 +142,10 @@ function run_device(cfg::ML.Config)
     chains = [ML.chain_start(MersenneTwister(cfg.seed + 7 * c), P, sL, kinds[c], false) for c in 1:K]
     M, ix = pack(P, L)
     S = to_device(P, M, ix, chains)
-    pl = plan(M, S, P.βv)
+    wsh = load_shares(P, chains)
+    LM = ML.LocalModel(P, L)
+    fams = families === :all ? device_families(M, cell_info(P, LM, ix)) : families
+    pl = plan(M, S, P.βv; cls=proxy_class(S.dnet, wsh), families=fams, cells=cell_info(P, LM, ix))
     T, N = M.T, M.N
     Ug, Us, Ul = length(ix.gidx), length(ix.sidx), length(M.kcap)
     dims = Val((K, T, N, Ug, Us, Ul, max(1, round(Int, 0.05 * T))))    # last: peak-set size (q = 0.05, as the CPU)
@@ -106,7 +153,6 @@ function run_device(cfg::ML.Config)
     gq = [q for (k, q) in units if k == 1]; sq = [q for (k, q) in units if k == 2]
     nprop = cfg.kmove_nprop
     σk = cfg.kpeak_sigma .* max.(vec(maximum(S.kg[:, gq]; dims=1)), 100.0)     # fixed per-unit scales
-    LM = ML.LocalModel(P, L)
     RP, RS = pack_ren(P, M, chains)
     rq = collect(1:length(ren_units(P)))
     usebias = P.use_bias
@@ -119,7 +165,7 @@ function run_device(cfg::ML.Config)
     kgd, ksd = R(S.kg), R(S.ks)
     dn, crd, cap = R(S.dnet), R(S.cren), R(S.capren)
     KPd = R(KParams(M))
-    gqd, sqd, σkd, clsd = R(gq), R(sq), R(σk), R(pl.cp.cls)
+    gqd, sqd, σkd, wshd = R(gq), R(sq), R(σk), R(wsh)
     BDd = BD === nothing ? nothing : R(BD); BSd = BS === nothing ? nothing : R(BS)
     gid = gitem === nothing ? nothing : R(gitem); sid = sitem === nothing ? nothing : R(sitem)
     rid = ritem === nothing ? nothing : R(ritem)
@@ -135,12 +181,39 @@ function run_device(cfg::ML.Config)
     # every device array is an argument (captured arrays would be compiled in as constants)
     σ_, βk_, βv_, ph_ = cfg.kmove_sigma, P.βk, P.βv, P.E.measure == :physical
     kp(args...) = capacity_pass(args..., dims; σ=σ_, βk=βk_, βv=βv_, physical=ph_)
+    fp(st, cp, sp, k, tabs, ns, rng, kparts...) = sweep_program(st, cp, sp, k, tabs, ns, rng, fv, kparts...;
+                                                                 dims=dims, σ=σ_, βk=βk_, βv=βv_, physical=ph_)
     kargs(st, kg, ks, dn, crd, cap, Z, U, Zp, Up, BD, BS, RS, Zr, Ur) =
-        (st, kg, ks, dn, crd, cap, KPd, Z, U, Zp, Up, gqd, sqd, σkd, clsd, BD, BS, gid, sid, RPd, RS, Zr, Ur, rqd, rid)
-    tc1 = @elapsed fsw = @compile sw(st, cp, sp, kk, tabs, Reactant.ConcreteRNumber(cfg.device_sweeps), drng)
-    tc2 = @elapsed fkp = @compile kp(kargs(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)...)
-    ML.logmsg(cfg, @sprintf("device (%s): compiled the operation sweeps (%.0f s) and the capacity pass (%.0f s); %d chains",
-                            cfg.device_backend, tc1, tc2, K))
+        (st, kg, ks, dn, crd, cap, KPd, Z, U, Zp, Up, gqd, sqd, σkd, wshd, BD, BS, gid, sid, RPd, RS, Zr, Ur, rqd, rid)
+    return (; P, info, K, kinds, chains, M, ix, S, pl, LM, units, usebias, packb, R, sw, kp, fp, kargs, draws,
+            st, cp, sp, kk, tabs, kgd, ksd, dn, crd, cap, BDd, BSd, RSd, drng, Z, U, Zp, Up, Zr, Ur,
+            nsd=Reactant.ConcreteRNumber(cfg.device_sweeps))
+end
+
+"""
+    run_device(cfg) -> results
+
+Device run of `cfg.nchains` chains (see the module comment): `mlda_warmup` + `nsamples`
+checkpoints, each after `device_sweeps` operation sweeps and one capacity pass.
+"""
+function run_device(cfg::ML.Config; merged::Bool=true, families=FAMILIES_FAST)
+    t0 = time()
+    D = device_setup(cfg; families=families)
+    (; P, K, kinds, chains, M, ix, S, LM, usebias, packb, R, sw, kp, fp, kargs, draws, nsd) = D
+    (; st, cp, sp, kk, tabs, kgd, ksd, dn, crd, cap, BDd, BSd, RSd, drng, Z, U, Zp, Up, Zr, Ur) = D
+    kpart(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur) =
+        kargs(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)[2:end]
+    if merged                                       # one program per checkpoint: sweeps, then the capacity pass
+        tc1 = @elapsed ffp = @compile fp(st, cp, sp, kk, tabs, nsd, drng, kpart(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)...)
+        tc2 = 0.0
+        ML.logmsg(cfg, @sprintf("device (%s): compiled one program (operation sweeps + capacity pass, %.0f s); %d chains",
+                                cfg.device_backend, tc1, K))
+    else
+        tc1 = @elapsed fsw = @compile sw(st, cp, sp, kk, tabs, nsd, drng)
+        tc2 = @elapsed fkp = @compile kp(kargs(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)...)
+        ML.logmsg(cfg, @sprintf("device (%s): compiled the operation sweeps (%.0f s) and the capacity pass (%.0f s); %d chains",
+                                cfg.device_backend, tc1, tc2, K))
+    end
     # ---- loop
     nwarm, nprod = cfg.mlda_warmup, cfg.nsamples
     online = usebias && cfg.bias_online
@@ -148,17 +221,33 @@ function run_device(cfg::ML.Config)
     PB = (usebias && cfg.bias_post) ? ML.PostBias() : nothing
     names = ML.monitor_names(P)
     traces = [Vector{Vector{Float64}}() for _ in 1:K]
-    nsd = Reactant.ConcreteRNumber(cfg.device_sweeps)
     Sh = deepcopy(S)
+    tim = Dict("operation" => 0.0, "capacity" => 0.0, "draws" => 0.0, "download" => 0.0, "host" => 0.0)
+    sync(x) = (Reactant.synchronize(x); x)
     for it in 1:nwarm+nprod
-        st = fsw(st, cp, sp, kk, tabs, nsd, drng)
-        Z, U, Zp, Up, Zr, Ur = draws()
-        st, kgd, ksd, cp, BSn, RSd, dn, crd, cap = fkp(kargs(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)...)
+        if merged                                   # "operation" then holds sweeps and capacity pass
+            tim["operation"] += @elapsed begin
+                st, kgd, ksd, cp, BSn, RSd, dn, crd, cap = ffp(st, cp, sp, kk, tabs, nsd, drng,
+                                                               kpart(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)...)
+                sync(st.r); sync(kgd)
+            end
+            tim["draws"] += @elapsed (Z, U, Zp, Up, Zr, Ur = draws())
+        else
+            tim["operation"] += @elapsed (st = fsw(st, cp, sp, kk, tabs, nsd, drng); sync(st.r))
+            tim["draws"] += @elapsed (Z, U, Zp, Up, Zr, Ur = draws())
+            tim["capacity"] += @elapsed begin
+                st, kgd, ksd, cp, BSn, RSd, dn, crd, cap = fkp(kargs(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)...)
+                sync(st.r); sync(kgd)
+            end
+        end
         BSn === nothing || (BSd = BSn)
+        th0 = time()
         # checkpoint on the host
-        unflat!(Sh, st)
-        Sh.kg .= Array(kgd); Sh.ks .= Array(ksd)
-        krh = Array(RSd.kr)
+        tim["download"] += @elapsed begin
+            unflat!(Sh, st)
+            Sh.kg .= Array(kgd); Sh.ks .= Array(ksd)
+            krh = Array(RSd.kr)
+        end
         refit = false
         for c in 1:K
             ren_to_host!(P, krh, c, chains[c])
@@ -172,15 +261,27 @@ function run_device(cfg::ML.Config)
             (PB !== nothing && it > nwarm) && ML.post_record!(PB, P, chains[c], q)
         end
         if refit                                    # the target changed: re-pack the bias aggregates
-            chains = [ML.evaluate!(P, x) for x in chains]
+            chains .= [ML.evaluate!(P, x) for x in chains]    # in place: `packb` reads this vector
             BD, BS, gitem, sitem, ritem = packb()
             BDd, BSd = R(BD), R(BS)                 # new values, same shapes: no recompile
         end
+        tim["host"] += time() - th0
         if it % max(1, (nwarm + nprod) ÷ 10) == 0
             tot = [tr[end][length(P.E.kspecs)+3] for tr in traces]
             ML.logmsg(cfg, @sprintf("  checkpoint %4d/%d (%d sweeps each)  total per chain %s  [%.0fs]", it, nwarm + nprod,
                                     cfg.device_sweeps, join((@sprintf("%.4e", x) for x in tot), " "), time() - t0))
         end
     end
-    return ML.chains_report(cfg, P, names, traces, kinds, PB, nwarm, nprod, t0)
+    ncall = nwarm + nprod
+    tim["host"] -= tim["download"]
+    ML.logmsg(cfg, "device profile per call (" * string(cfg.device_sweeps) * " operation sweeps, " * string(K) * " chains): " *
+                   join((@sprintf("%s %.3f s", k, tim[k] / ncall) for k in ("operation", "capacity", "draws", "download", "host")), ", "))
+    res = ML.chains_report(cfg, P, names, traces, kinds, PB, nwarm, nprod, t0)
+    ML.HDF5.h5open(cfg.out, "r+") do f
+        for (k, v) in tim
+            f["device_profile/$k"] = v / ncall
+        end
+        f["device_profile/compile_operation"] = tc1; f["device_profile/compile_capacity"] = tc2
+    end
+    return res
 end

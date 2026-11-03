@@ -8,6 +8,20 @@ function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], 
     ws, wa = ML.MoveWS(P), ML.MoveWS(P); wa.follow = false
     τ = fam == :spair ? site[2] : site[end]; τm = mod1(τ - 1, T)      # spair sites are (s, τ, q1, q2)
     gi(q) = ix.gidx[q]
+    sf = string(fam)
+    if startswith(sf, "sblk")                                  # storage block (plateau or shape profile)
+        L = parse(Int, replace(sf, "sblkL" => "", "sblk" => ""))
+        s, b0, p = site
+        si, i = ix.sidx[s]
+        κs = LC.kst[si][i] * E.stors[si].hours[i] / LM.Δt
+        wss = [ML.MoveWS(P) for _ in 1:L+2]
+        bm = ML.BlockMove(wss, 0, Int[], P, LM, LC, Float64[], Float64[])
+        shape = p == 1 ? nothing : D.profiles(L)[:, p]
+        ML.prep_storage_ms!(bm, P, LM, LC, [(si, i)], b0, L, shape, jac; κmin=κmin, learn=learn) || return nothing
+        return bm
+    end
+    fam = startswith(sf, "cellpair") ? :cellpair : startswith(sf, "cell") ? :cell : fam     # level buckets
+    fam = fam == :gen0 ? :gen : fam == :pair0 ? :pair : D.istheta(fam) ? :theta : fam     # structure-specialised variants
     if fam == :gen
         g, i = gi(site[1]); ML.prep_node!(ws, P, LM, E.gens[g].vf, i, 1.0, τ)
     elseif fam == :uc
