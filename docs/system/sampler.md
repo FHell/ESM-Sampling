@@ -17,9 +17,9 @@ with their convergence diagnostics. The individual move families are in
    nodal peak load, batteries at 5 % of it, interior dispatch).
 2. **Level-0 warmup** (only at $\alpha = 1$): a chain on the coarsest level learns the bias
    $\hat b$ from its scores (§7.1).
-3. **Finest-level chain(s)**: `mlda_warmup` sweeps of warmup, in which the adaptive modes,
-   the online bias and the optional CO₂ price adapt, then `nsamples` production sweeps.
-   One chain in the single-chain driver, `nchains` chains in the multi-chain mode (§8), many
+3. **Finest-level chains**: `mlda_warmup` sweeps of warmup, in which the adaptive modes,
+   the online bias and the optional CO₂ price adapt, then `nsamples` production sweeps with
+   the bias and the CO₂ price frozen. `nchains` chains in the CPU driver (`run`, §9), many
    chains as a batch on the device ([device.md](device.md)).
 4. **Outputs**: traces of monitored quantities, sampled prices, the learned quantities,
    diagnostics and the bias post-correction ([data.md](data.md)).
@@ -240,12 +240,11 @@ little; `kpeak` moves capacity and peak dispatch together.
   operation (`descent_iters`) precedes the warmup.
 - **Online refits** (`bias_online`, default on). In the finest chain the scores
   $s_z = -\beta_v\nabla_{z_0}C$ and $s_k = -\beta_v\partial_{k_0}C$, carried to level-0
-  coordinates, enter the regression every `bias_online_every` steps. The coefficients are
-  refitted (monotone QP) only when the observation count reaches $2^j\ge4$, and never after
-  `bias_freeze` observations. The multi-chain mode and the device driver pool the scores of
-  all chains and freeze the bias at the end of the warmup; the single-chain driver keeps
-  refitting during production unless `bias_freeze` is set. After a refit every chain's state
-  is re-evaluated.
+  coordinates, enter the regression every `bias_online_every` steps during the finest-level
+  warmup. The coefficients are refitted (monotone QP) only when the observation count reaches
+  $2^j\ge4$. Both drivers pool the scores of all chains and freeze the bias at the end of the
+  warmup, so production samples one fixed target. After a refit every chain's state is
+  re-evaluated.
 - **Post-correction** (`bias_post`, default on). Every production sample records its level-0
   weather and capacities and the bias in use. After the run, $\tilde b$ is refitted from all
   scores and every sample gets the self-normalized weight
@@ -272,18 +271,19 @@ With `fine_weather = 0` the weather stays at its initial draw at the fine level.
 
 ### 7.3 Canonical CO₂ price
 
-With `co2_cap > 0` the single-chain driver tunes $\mu$ during the finest-level warmup by
-$\mu\leftarrow\mu\exp(0.5\,n^{-0.6}\,\mathrm{clamp}(E_n/\Gamma - 1,\pm1))$ ($E_n$ the
-current annual emissions, $\Gamma$ the cap) and freezes it for production.
+With `co2_cap > 0` the CPU driver tunes $\mu$ during the finest-level warmup by
+$\mu\leftarrow\mu\exp(0.5\,n^{-0.6}\,\mathrm{clamp}(E_n/\Gamma - 1,\pm1))$ after sweep $n$
+($E_n$ the current annual emissions averaged over the chains, $\Gamma$ the cap), re-evaluates
+every chain, and freezes $\mu$ for production.
 
-> **Status: deviation.** The multi-chain mode and the device driver ignore `co2_cap`.
+> **Status: deviation.** The device driver ignores `co2_cap`.
 
 ## 8. Adaptation
 
 Adaptation follows diminishing adaptation (Roberts and Rosenthal, 2007). The adaptive kernel
 (`AdaptiveModes`) observes its own state after every sweep: the angle fluctuation covariance
 (running mean per node and step, weight $1/n$), the intra-block fluctuation profiles of
-dispatch and state of charge per dyadic block length and season class, and the moments of
+dispatch and state of charge per dyadic block length and meteorological season, and the moments of
 (node requirement, unit output) per node and proxy class. At observation counts $2^j\ge4$ it
 recomputes the transport directions (leading eigenvectors of the angle covariance), their
 localized Haar pieces, the temporal shapes and the response coefficients $\beta$. Every
@@ -294,7 +294,7 @@ level-0 warmup only.
 
 ## 9. Multi-chain runs and convergence
 
-With `nchains` $= K > 0$, `run_chains` runs $K$ finest-level chains for `mlda_warmup` +
+The CPU driver `run` (`run_chains`) runs `nchains` $= K$ finest-level chains for `mlda_warmup` +
 `nsamples` sweeps each (one after another per sweep on the CPU, each sweep threaded
 internally; as the batch dimension on the device). Starts are cycled from `chain_starts`:
 `"low"` and `"high"` scale the start capacities by 0.5 and 2 (clamped to the boxes), the others
@@ -319,6 +319,7 @@ By the score identity, the marginal price at node $n$ and step $\tau$ is
 $\partial F/\partial d_{n,\tau} = \Delta t\,\mathbb E_\pi[c_{\rm shed}\mathbb 1(r>0) -
 c_{\rm dump}\mathbb 1(r<0)]$: the sampled price is the imbalance probability weighted by the
 shed and dump prices. `PriceAcc` accumulates it per node and step and `RegionPriceAcc` per
-country, system and meteorological season. At finite $\beta_v$ the sampled prices have a
+country, system and meteorological season, over the production sweeps of all chains of the
+CPU driver. At finite $\beta_v$ the sampled prices have a
 heavier upper tail than LP duals, because near-optimal states shed occasionally where the LP
 sits at the margin.

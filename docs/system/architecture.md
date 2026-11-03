@@ -1,9 +1,8 @@
 # Architecture
 
 This document maps the system onto the code: the packages and files, the main types, the
-call graph of a run in each driver mode, the caches, threading and colouring, the outputs and
-the tests. A final, clearly marked section lists legacy code that still exists but is not
-part of the system. What the code computes is described in [ensemble.md](ensemble.md),
+call graph of a run in each driver, the caches, threading and colouring, the outputs and
+the tests. What the code computes is described in [ensemble.md](ensemble.md),
 [model.md](model.md), [weather_model.md](weather_model.md) and [sampler.md](sampler.md); the
 device port in [device.md](device.md).
 
@@ -15,13 +14,12 @@ device port in [device.md](device.md).
 | `device/` | package `ESMDevice` (depends on `ESMSampling` by path, and on Reactant 0.2.304): the GPU port |
 | `test/`, `device/test/` | tests ([testing.md](testing.md)) |
 | `configs/` | TOML run configurations ([config.md](config.md)) |
-| `scripts/` | driver script, data preparation, benchmarks, plotting |
+| `scripts/` | driver script (`run.jl`), data preparation (`download_data.sh`, `prepare_data.py`, the ERA5 scripts), benchmarks (`bench_perf.jl`, `prof_kernel.jl`, `regress_cmp.jl`, `xloc_eff.jl`, `xloc_leak.jl`) |
 | `data/raw/`, `data/processed/` | downloaded sources and model input files ([data.md](data.md)); not in git |
 | `results/` | run outputs and the caches (`results/cache/`); not in git |
 | `external/pypsa-eur/` | the PyPSA-Eur workflow used to build the 256-node network |
 | `external/reactant-bench/` | Reactant prototypes and benchmarks |
 | `work/perf/` | a working copy used for CPU performance work |
-| `toy/` | legacy toy models (§9) |
 
 ## 2. Files of `src/`
 
@@ -29,33 +27,28 @@ In include order (`src/ESMSampling.jl`):
 
 | file | content |
 |---|---|
-| `spatial.jl` | `ModeBasis`; graph Haar bases (`haar_basis`, `haar_field_basis`, weighted for capacities); Laplace modes; projections |
+| `spatial.jl` | `ModeBasis`; graph Haar bases (`haar_basis`, `haar_field_basis`, weighted for capacities); identity basis of the links; component indicators; projections |
 | `layout.jl` | `FieldSpec` (kinds `KFIELD`, `STEP`, `INSTANT`), `Layout`, `Transfer`, `split_state`/`merge_state`, `restrict_to`/`prolong_to` |
 | `system.jl` | `System`, `load_system` (HDF5 input), `subsystem` (sub-networks for tests) |
 | `flowbasis.jl` | `FlowBasis`: proxy capacities and injections, `CongestionADMM`, transport modes, angle basis, storage shapes |
 | `energy.jl` | `GenGroup`, `StorGroup`, `LineTerms`, `EnergyModel`, `build_energy_model`, `energy_cost` (with gradients), `log_measure`, `set_co2_price!` |
-| `constraints.jl` | `Constraints` for hard walls (empty with regularized constraints) |
-| `lp.jl` | the reference capacity-expansion LP (JuMP/HiGHS), `LPSolution`, cache |
-| `weather.jl` | `WeatherModel`, `DetailModel`, fit (EM, details), exact sampling, `weather_nodes`, cache |
-| `hmc.jl` | reflective dynamics on a polytope; `descend!` serves the optional pre-descent |
+| `lp.jl` | the reference capacity-expansion LP (JuMP/HiGHS), `LPSolution`, cache, `interior_center`, `to_modes` |
+| `weather.jl` | `WeatherModel`, `DetailModel`, fit (EM, details), exact sampling, `weather_nodes`, cache; `season`, the one season definition (DJF, MAM, JJA, SON) |
 | `bias.jl` | `BiasModel`: $\hat g$, $\hat h$, $\hat b$, score regression, monotone QP |
-| `hierarchy.jl` | `Problem`, `State`, `logtarget`, `make_state`, `bias_term` |
+| `hierarchy.jl` | `Problem`, `State`, `logtarget`, `make_state`, `bias_term`, `level0_potential` (pre-descent) |
 | `bias_online.jl` | `OnlineBias`, `online_bias_step!` |
 | `bias_post.jl` | `PostBias`, `post_correct` |
-| `mlda.jl` | `MLDASampler` (the sampler-state container of every CPU driver), `quantities`, `base_step`, `level_step`, carrier scaling `scale_step`; MLDA proper is legacy |
-| `gibbs.jl` | level-0 slice updates (`GibbsState`, `SweepCtx`, `StepWS`, `step_term`, `update_colour!`, `update_k!`, `slice_coord!`) |
-| `pairs.jl` | legacy slice pair moves |
-| `local.jl` | the local exact kernel: `GridSolver`, `LocalModel`, `LocalCost`, `MoveWS`, `eval_move!`, line sampler, move preparation, `local_sweep!`, `kscale_sweep!`, `LocalKernel`, `fine_local_step`, `local_base_step` |
+| `level0.jl` | level-0 slice updates of the bias warmup (`GibbsState`, `SweepCtx`, `StepWS`, `step_term`, `update_colour!`, `update_k!`, `slice_coord!`) |
+| `local.jl` | the local exact kernel: `GridSolver`, `LocalModel`, `LocalCost`, `MoveWS`, `eval_move!`, line sampler, move preparation, `local_sweep!`, `kscale_sweep!`, `LocalKernel`, `fine_local_step`, `local_base_step`, block-move workspaces and `commit_block!` |
 | `weather_moves.jl` | level-0 weather move with pro-rata shear |
 | `weather_fine.jl` | fine-level weather moves |
 | `flowmoves.jl` | `FlowFrames`, transport families, storage multiscale sweep, `flow_sweep!`, localized modes |
-| `timehier.jl` | prolongation rules in time and intra-block diagnostics (legacy) |
 | `adaptive.jl` | `AdaptiveModes`, learned families, `adaptive_sweep!`, `kpeak_sweep!` |
-| `decompose.jl` | decomposed LP start (legacy) |
-| `diagnostics.jl` | single-chain ESS and split-$\hat R$, `PriceAcc`, `RegionPriceAcc` |
+| `sampler.jl` | `ChainSampler` (the kernels of one chain), `quantities`, carrier scaling `scale_step`, `base_step` |
+| `diagnostics.jl` | single-chain ESS (`ess`), `PriceAcc`, `RegionPriceAcc` |
 | `convergence.jl` | multi-chain diagnostics (rank-normalized $\hat R$, bulk/tail ESS, MCSE, warmup detection) |
-| `run.jl` | `Config`, `load_config`, `setup`, `heuristic_start`, level-0 chain, `run` |
-| `chains.jl` | multi-chain mode: `run_chains`, `chain_start`, `monitor_quantities`, `chains_report` |
+| `run.jl` | `Config`, `load_config`, `setup`, `heuristic_start`, the level-0 chain `run_level0!`, `predescend`, `new_sampler`, `run` |
+| `chains.jl` | the CPU driver `run_chains`, `chain_start`, `monitor_quantities`, `chains_report`, `write_run_outputs` |
 
 `device/src/`: `ESMDevice.jl` (device model, state, exact cost), `terms.jl` (term batch,
 dense sampler), `rounds.jl` (plain families, schedule, device loop), `comp.jl` (compensated
@@ -72,21 +65,23 @@ families), `cells.jl` (cell templates), `kmove.jl` (`kscale`/`kpeak` Metropolis)
   transpose `Ut`, ranks per level, Haar cell labels), the coefficient layout of a level, and the
   transfer between consecutive levels.
 - `EnergyModel`: the fields (`kspecs`, `vspecs`, `wspecs`), generator and storage groups, line
-  terms, prices, options (`measure`, `storage`, `renewables`, `regularized`, `brownfield`), the
-  partitions and the optional `FlowBasis`.
+  terms, prices, options (`measure`, `brownfield`; `storage = :soc`, `renewables = :load` and
+  `regularized = true` are fixed and kept as fields for the device checks), the partitions and
+  the optional `FlowBasis`.
 - `WeatherModel`: specs, layouts and transfers of the weather fields, climatology and scales,
   the switching VAR, the `DetailModel`s, the historical data per level and the responsibilities.
 - `BiasModel`: basis knots, coefficients $\theta$, $a$, $c$, the bias samples, the regression
   accumulators and the `active` flag of level-0 learning.
-- `Problem`: energy model, weather model, levels with their layouts, transfers and constraints,
+- `Problem`: energy model, weather model, levels with their layouts and transfers,
   $\beta_k$, $\beta_v$, the bias and `use_bias` ($\alpha$).
 - `State`: level `ℓ`, regimes `m`, `z0`, innovations `ws`, anomalies `xs` per level, coefficient
   vectors `k` and `v`, the cached log target `L` (without the weather prior) and `CostParts`.
 
 **Sampler (CPU).**
 
-- `MLDASampler`: the state container of a chain's kernels (base kernel choice, `GibbsState`,
-  `LocalKernel`, carrier-scaling scales, `p_fine`, statistics); its MLDA fields are legacy.
+- `ChainSampler` (`new_sampler`): the kernels of one chain: the `LocalKernel` of the fine
+  level and, for the level-0 bias warmup, the `GibbsState` (slice widths) and the step sizes of
+  the carrier scaling move.
 - `LocalKernel`: per-level `LocalModel`s (built lazily under a lock), per-thread `MoveWS`,
   `FlowFrames` and `AdaptiveModes` per level, block workspaces, the fine kernel mode and the
   weather fraction.
@@ -111,8 +106,8 @@ families), `cells.jl` (cell templates), `kmove.jl` (`kscale`/`kpeak` Metropolis)
 
 ## 4. Call graph of a run
 
-**Entry.** `scripts/run.jl <config.toml>` → `load_config` → `run(cfg)`; with `nchains > 0`,
-`run` hands over to `run_chains`. Device runs start from `device/scripts/run_device.jl` →
+**Entry.** `scripts/run.jl <config.toml>` → `load_config` (with `check_config`) → `run(cfg)`,
+which is `run_chains(cfg)`. Device runs start from `device/scripts/run_device.jl` →
 `ESMDevice.run_device(cfg)`.
 
 **Setup** (`setup`, shared by all drivers): `load_system` → `build_energy_model` (with
@@ -122,13 +117,21 @@ families), `cells.jl` (cell templates), `kmove.jl` (`kscale`/`kpeak` Metropolis)
 start at $\alpha = 1$) → the start state at the finest level by prolongation from the
 reference level (`make_state`).
 
-**Single-chain driver** (`run`, `nchains = 0`): `new_sampler` → level-0 restriction and
-`predescend` → `run_level0!` with learning (warmup, bias) → `run_level0!` (level-0 production
-chain of `n0` iterations) → exact weather draws for the diagnostics → finest level:
-`mlda_warmup` + `nsamples` calls of `level_step`, which with `p_fine = 1` is always
-`fine_local_step`, each followed by `online_bias_step!` and, during warmup, the CO₂ price
-update; production records quantities, post-correction samples and sampled prices → the
-$\alpha = 0$ level-0 comparison (`alpha0`) → `weather_cost_map` → HDF5.
+**Level-0 warmup** (at $\alpha = 1$, shared by the CPU and device drivers): `new_sampler` →
+`restrict_state` to level 0 → `predescend` (`descend!` on `level0_potential`, operation only)
+→ `run_level0!` with `learn = true` for `warmup0` iterations, each a `base_step`
+(`local_base_step`: local operation sweep, weather slice updates, weather shear, capacity
+slice updates, FFBS, carrier scaling, in random order), with bias observations and refits →
+`bias.active = false`.
+
+**CPU driver** (`run_chains`): `setup` → level-0 warmup → `chain_start` per chain →
+`new_sampler` per chain → per sweep and chain `fine_local_step`, during the warmup
+`online_bias_step!` (all chains re-evaluated after a refit) and, with `co2_cap > 0`, the CO₂
+price update on the chain mean (all chains re-evaluated); `monitor_quantities`; in
+production `post_record!` and the sampled prices (`accumulate_prices!`,
+`accumulate_region_prices!`) → `chains_report` (diagnostics, post-correction, HDF5) →
+`write_run_outputs` (prices, bias, CO₂ price, learned quantities, weather model,
+calibration).
 
 **Fine step** (`fine_local_step`): `local_model` → for the flow and adaptive kernels
 `FlowFrames` (refreshed) and `AdaptiveModes` → in random order the operation sweep
@@ -139,11 +142,6 @@ $\alpha = 0$ level-0 comparison (`alpha0`) → `weather_cost_map` → HDF5.
 build the move list → per move `clear!`, `prep_*` (direction and compensation) → `finalize!`
 (touch sets, primary breakpoints) → `sample_line!` (`walk!` over `eval_move!`) → Jacobian step
 (`logjac`) → `commit!`/`commit_block!` → `evaluate!` of the state.
-
-**Multi-chain mode** (`run_chains`): `setup` → level-0 warmup at $\alpha = 1$ →
-`chain_start` per chain → `new_sampler` per chain with `p_fine = 1` → per sweep and chain
-`level_step`, `online_bias_step!` (warmup only; all chains re-evaluated after a refit),
-`monitor_quantities`, `post_record!` → `chains_report` (diagnostics, post-correction, HDF5).
 
 **Device driver** (`run_device`): `setup` → level-0 warmup at $\alpha = 1$ → `chain_start` →
 `pack`, `to_device`, `plan` → compile `run_sweeps` and `capacity_pass` → per checkpoint: sweeps,
@@ -163,7 +161,7 @@ capacity pass, `unflat!`, `to_host!`, online bias, `monitor_quantities`, `post_r
 
 ## 6. Threading and colouring
 
-Julia threads (`-t`) parallelize within a sweep; chains of the multi-chain mode run one after
+Julia threads (`-t`) parallelize within a sweep; the chains of the CPU driver run one after
 another. In `local_sweep!` the steps of one parity class run in parallel with `:static`
 scheduling, each step with its own `Xoshiro` stream seeded from the chain's generator and a
 per-thread `MoveWS` (two per thread in the SoC form, for the linked step). Storage and
@@ -177,48 +175,10 @@ links ([device.md](device.md) §4).
 ## 7. Outputs
 
 Each driver writes one HDF5 file (`out`); the layout is in [data.md](data.md) §3.
-`scripts/plot_results.py` plots the single-chain output.
 
 ## 8. Tests
 
-See [testing.md](testing.md) for the strategy. CPU: `test/runtests.jl` (bases and transfers,
-FFBS, the Haar basis, and the included files `test_local.jl`, `test_flow.jl`, `test_bias.jl`,
-`test_model.jl`, `test_convergence.jl`), plus `test/test_exact.jl` (end-to-end exactness, run
-separately). Device: the files in `device/test/`, each run on its own.
-
-## 9. Legacy code (not part of the system)
-
-The following code still exists and runs, but is not part of the system described in these
-documents. It is kept for reference or possible later use; nothing in the system depends on
-it except where noted.
-
-- **Multilevel delayed acceptance** (`src/mlda.jl`: `mlda_core`, `mlda_step`,
-  `perturb_details`, `pcn`, `detail_scales`, `LevelStats`, `violated_fields`). Coarse chains on a
-  split state with delayed acceptance of fine proposals. Reached through `level_step` when
-  `p_fine < 1`; configuration keys `J`, `frac`, `ϱ`, `p_fine`; outputs `pairs/`, `mlda/`,
-  `estimate/multilevel`. The system sets `p_fine = 1` (the multi-chain and device drivers do so
-  always). Its toy studies are in `toy/`.
-- **Other base kernels.** `kernel = "gibbs"` (coordinate slice Gibbs at level 0, `gibbs_step`,
-  and `fine_gibbs_step` at finer levels) and `kernel = "hmc"` (reflective HMC, `hmc.jl`, with
-  `nleap`, `mass_windows`, `p_ffbs`, `p_scale`). The system uses `kernel = "local"`, whose level-0
-  kernel reuses the slice updates of `gibbs.jl` and whose optional pre-descent uses `descend!`.
-- **Slice pair moves** (`src/pairs.jl`: `pair_sweep!`, `storage_shift_sweep!`), superseded by the
-  exact pair families.
-- **Temporal block moves** (`block_sweep!`, `prep_block!` in `local.jl`;
-  `temporal_multigrid_sweep!` in `gibbs.jl`): time-constant directions over dyadic blocks. Only
-  experiment scripts call them. (`BlockMove` itself is part of the system.)
-- **Decomposed LP start** (`src/decompose.jl`, `init = "decomposed"`, `decomp_cap`,
-  `decomp_block_days`).
-- **Prolongation rules and intra-block diagnostics** (`src/timehier.jl`) and
-  `init_by_prolongation` in `run.jl`; used by experiment scripts.
-- **Alternative model forms** kept as options on the CPU: hard walls (`regularized = false`,
-  with `constraints.jl` and the feasibility test in `runtests.jl`), Laplace bases
-  (`basis = "laplace"`), the LP storage form (`storage = "lp"`) and renewables with utilization
-  fields (`renewables = "dispatch"`). The local kernel needs the Haar basis and regularized
-  constraints; the device supports only the SoC form and renewables as load.
-- **Parts of the single-chain driver** beyond the fine chain: the level-0 production chain
-  (`n0`) and the $\alpha = 0$ comparison at level 0 (`alpha0`), the weather–cost map
-  (`costmap/`), and the multilevel estimator.
-- **Experiment scripts** `scripts/exp_*.jl`, `scripts/compare_kernels.jl`, `scripts/scaling.jl`.
-  The benchmark scripts (`bench_perf.jl`, `prof_kernel.jl`, `regress_cmp.jl`, `xloc_eff.jl`,
-  `xloc_leak.jl`, `device/scripts/throughput.jl`) are current tools.
+See [testing.md](testing.md) for the strategy. CPU: `test/runtests.jl` (level transfers,
+FFBS, cost gradients, the Haar basis, and the included files `test_local.jl`, `test_flow.jl`,
+`test_bias.jl`, `test_model.jl`, `test_convergence.jl`), plus `test/test_exact.jl` (end-to-end
+exactness, run separately). Device: the files in `device/test/`, each run on its own.

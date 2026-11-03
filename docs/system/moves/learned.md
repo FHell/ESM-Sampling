@@ -15,8 +15,9 @@ tables, so every move is exact. See [README.md](README.md) for the other familie
 - the **angle fluctuation covariance** $C_\theta = \mathbb E[(\theta_\tau-\bar\theta_\tau)
   (\theta_\tau-\bar\theta_\tau)^\top]$ with a running mean per node and step (angles taken off
   their component means);
-- per dyadic length $L\in\{2,4,8,16,32\}$ ($L<T/2$) and **season class** (four 92-day blocks of
-  the year from the block's start step), the second moments of intra-block profiles of the
+- per dyadic length $L\in\{2,4,8,16,32\}$ ($L<T/2$) and **season class** (the meteorological
+  season DJF, MAM, JJA, SON of the block's start step, `season` in `weather.jl`, the same
+  seasons as the weather model and the sampled prices), the second moments of intra-block profiles of the
   dispatch (block mean removed) and of the state of charge (linear interpolation of the end
   values removed);
 - per node and proxy class (deficit, surplus from the frames), the running moments of

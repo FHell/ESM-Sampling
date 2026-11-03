@@ -42,8 +42,8 @@ comparison uses given uniforms.
 
 | file | checks |
 |---|---|
-| `test/runtests.jl` | nested Laplace bases; level transfers (split/merge round trip, block means commute with restriction); FFBS against the exact regime posterior; cost gradients against finite differences on the 40-node data; graph Haar bases; and three tests of legacy code ([architecture.md](architecture.md) §9) |
-| `test/test_local.jl` | sparse Haar field bases (orthonormality, sparsity, cell projections, gauge-free angles); segment helpers (`logseg`, truncated exponential); local moves on the 40-node model in both storage forms: cache cost = global cost, `xloc` templates keep the balance except at the leak nodes, cell-level probabilities, recorded walk evaluation bitwise equal to the plain one, incremental cost = global, cache consistency, line draws against quadrature (single-step and linked two-step), scaling moves keep the caches consistent |
+| `test/runtests.jl` | level transfers on graph Haar bases (split/merge round trip, block means commute with restriction); FFBS against the exact regime posterior; cost gradients against finite differences on the 40-node data; graph Haar bases |
+| `test/test_local.jl` | sparse Haar field bases (orthonormality, sparsity, cell projections, gauge-free angles); segment helpers (`logseg`, truncated exponential); local moves on the 40-node model: cache cost = global cost, `xloc` templates keep the balance except at the leak nodes, cell-level probabilities, recorded walk evaluation bitwise equal to the plain one, incremental cost = global, cache consistency, line draws against quadrature (single-step and linked two-step), scaling moves keep the caches consistent |
 | `test/test_flow.jl` | batched congestion ADMM against a QP; transport modes and angle basis orthonormal and gauge-free; storage shapes; face projection of the modes; flow moves: incremental = global, shares and excess invariant across the kink, caches; adaptive modes update on schedule and give gauge-free directions and zero-end shapes; `kpeak` keeps the caches consistent |
 | `test/test_bias.jl` | the monotone fit gives a non-decreasing implied price within $[-c_{\rm dump}, c_{\rm shed}]$ |
 | `test/test_model.jl` | all model-completion terms on (40 nodes): incremental = global for random local and transport moves, caches, line draws with requirement-tracking kinks and with commitment against quadrature, level-0 gradients against finite differences, fine-level weather moves (incremental = global, caches, the non-centered representation and the regime step reproduce the anomalies, line draws with the Gaussian prior), the local $z_0$ quadratic against `logp_z0` |
@@ -76,6 +76,9 @@ nice -n 19 julia --project=. -t 4 test/runtests.jl
 nice -n 19 julia --project=. -t 4 test/test_exact.jl
 cd device && nice -n 19 julia --project=. -t 4 test/test_mock.jl
 ```
+
+A smoke run of the CPU driver: `scripts/run.jl` on a copy of `configs/chains40.toml` (a
+mechanics configuration) with small `mlda_warmup` and `nsamples`.
 
 Device tests run traced code on Reactant's CPU backend by default. Each fresh Julia process
 costs minutes of start-up and compilation, so iterate in one persistent Julia session and

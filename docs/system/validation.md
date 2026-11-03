@@ -18,8 +18,8 @@ makes 64–512 chains cheap.
 
 **Monitored quantities.** System totals (total cost, capex, opex, shed, emissions, penalty);
 capacities per carrier and per country; operation (mean line loading, mean H₂ state of
-charge); prices (mean and load-weighted sampled price, per country and season in the
-single-chain outputs); weather (annual means of the level-0 fields, regime frequencies),
+charge); prices (mean and load-weighted sampled price; per node, country and season in the
+CPU driver's outputs); weather (annual means of the level-0 fields, regime frequencies),
 whose reference is known exactly from draws of the weather model (at $\alpha = 1$, after the
 post-correction).
 
@@ -43,7 +43,7 @@ before the measurement window starts. The post-correction weights enter the weig
 estimates; their ESS is reported next to the chain ESS, and a weight ESS below about 30 % of
 the samples counts as not converged.
 
-> **Status: deviation.** The multi-chain mode freezes the bias at the end of the warmup, but
+> **Status: deviation.** The drivers freeze the bias at the end of the warmup, but
 > the adaptive modes (`AdaptiveModes`, `freeze` defaults to never) keep updating on their
 > geometric schedule during production, and the convergence verdict does not yet include the
 > weight-ESS condition.
@@ -93,7 +93,7 @@ where possible, so that its size is measured.
 At a fixed weather year, our sampler at $\beta$, $10\beta$ and $100\beta$ (single temperature
 for the capacity comparison, §2.1) should approach PyPSA's single-year optimum with
 differences shrinking like $1/\beta$, and the sampled nodal prices should approach the LP
-duals (the single-chain driver writes `prices/lp` when the reference LP is at the finest
+duals (the CPU driver writes `prices/lp` when the reference LP is at the finest
 level). Line losses and soft limits can be switched on in both models (PyPSA's
 `transmission_losses` is a piecewise-linear loss model, close to our interpolant). This
 connects the regularized, priced target to the hard-constrained LP. Size: 40 nodes × 6 h,
@@ -146,5 +146,5 @@ year-to-year spread and the MGA envelope.
 > **Status: missing.** None of §2 has been carried out. Missing pieces: the PyPSA-Eur
 > time-series import mode of the extractor, PyPSA-Eur solves of the imported networks,
 > stacked multi-year and MGA runs, ERA5 cutouts for many years (HPC), and the stabilization of
-> the $\alpha = 1$ bias. What exists: the convergence diagnostics and the multi-chain mode, the
+> the $\alpha = 1$ bias. What exists: the convergence diagnostics and the multi-chain CPU driver, the
 > LP-dual output for §2.3, and the ERA5 weather import (`prepare_era5.py`).

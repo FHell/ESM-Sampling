@@ -11,15 +11,14 @@ it. The CPU sampler it reproduces is in [sampler.md](sampler.md), the verificati
 ## 1. Scope
 
 The device runs the finest, spatially complete level with many chains as a batch dimension,
-in the formulation the system uses: `storage = "soc"`, `renewables = "load"`,
-`regularized = true`, with every model-completion term (losses and soft limits as hinge
+in the formulation of the system: state-of-charge storage, renewables as load, all
+constraints priced, with every model-completion term (losses and soft limits as hinge
 sums, lossy links, merged vintages, fleet unit commitment, the CO₂ price through the
 marginal costs). The measure enters only the Jacobians of the capacity moves.
 
 Everything else stays on the CPU host: setup, the weather model, the reference LP and the
 heuristic start, the level-0 warmup that learns the bias, adaptation and bias refits,
-checkpoints and I/O. The LP storage form, renewables with utilization fields, hard walls and
-coarse levels are not ported.
+checkpoints and I/O. Coarse levels are not ported.
 
 ## 2. State
 
@@ -102,13 +101,14 @@ then recomputed on the device.
 `configs/device40.toml`):
 
 1. `setup` on the CPU, and at $\alpha = 1$ the level-0 warmup that learns the bias;
-2. `nchains` chain starts as in the multi-chain mode, all with the weather of the set-up state;
+2. `nchains` chain starts as in the CPU driver, all with the weather of the set-up state;
 3. `pack`, `to_device`, `plan` (schedule and index tables), upload, and two compiles (the
    operation sweeps and the capacity pass), on the backend `device_backend`;
 4. `mlda_warmup + nsamples` checkpoints: sweeps, capacity pass, download, conversion to
    `State`s, online bias refits during the warmup (pooled over chains, frozen afterwards, the
    bias aggregates re-packed after a refit), monitored quantities, post-correction records;
-5. `chains_report`: the same diagnostics and HDF5 output as the CPU multi-chain mode.
+5. `chains_report`: the same diagnostics and HDF5 output as the CPU driver (without the
+   additional outputs of `write_run_outputs`).
 
 ## 7. Status
 
