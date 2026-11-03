@@ -1,47 +1,21 @@
-# Laplace modes of the network and nested mode bases on node supports.
+# Nested sparse bases of the node-indexed fields: graph Haar bases.
 #
 # Every node-indexed field (utilizations, capacities, potentials, load,
-# availability) is expanded in modes of the graph Laplacian. A field with node
-# support S uses the Gram-Schmidt orthonormalization of the global modes
-# restricted to S, taken in order of increasing eigenvalue. Level ℓ keeps the
-# basis vectors spanned by the first M_ℓ global modes, so the bases are nested
-# and the coarse coordinates of a field are a prefix of its fine coordinates.
-
-"""
-    laplace_modes(N, edges)
-
-Eigen-decomposition of the weighted graph Laplacian with `edges` given as
-`(a, b, w)`. Returns `(U, λ)` with eigenvalues in ascending order.
-"""
-function laplace_modes(N::Int, edges)
-    L = zeros(N, N)
-    for (a, b, w) in edges
-        L[a, a] += w
-        L[b, b] += w
-        L[a, b] -= w
-        L[b, a] -= w
-    end
-    F = eigen(Symmetric(L))
-    U = F.vectors
-    # fix signs so that every mode has a positive sum (or first nonzero entry)
-    for j in 1:N
-        s = sum(U[:, j])
-        if abs(s) < 1e-10
-            s = U[findfirst(x -> abs(x) > 1e-10, U[:, j]), j]
-        end
-        s < 0 && (U[:, j] .*= -1)
-    end
-    return U, F.values
-end
+# availability) is expanded in a graph Haar basis of a nested partition of the
+# network (whole network → countries → nodes). A field with node support S uses
+# the Haar basis of the partition restricted to S. Level ℓ keeps the basis
+# vectors spanned by the first M_ℓ global vectors (the cell-constant fields of a
+# partition level), so the bases are nested and the coarse coordinates of a
+# field are a prefix of its fine coordinates.
 
 """
 Orthonormal, nested basis of a field on its node `support`, stored sparse.
 
 `rank_at[M]` is the number of basis vectors spanned by the first `M` global
-modes, so the level-ℓ basis of the field is `U[:, 1:rank_at[M_ℓ]]`. For graph
-Haar bases, `cells[m]` gives the cell label of every support node when the
-first `m` vectors span exactly the cell-constant fields of a partition; the
-orthogonal projection onto them is then the cell mean (O(support) work).
+basis vectors, so the level-ℓ basis of the field is `U[:, 1:rank_at[M_ℓ]]`.
+`cells[m]` gives the cell label of every support node when the first `m`
+vectors span exactly the cell-constant fields of a partition; the orthogonal
+projection onto them is then the cell mean (O(support) work).
 `Ut` is the transpose (fast row access: the coefficients touched by one node).
 """
 struct ModeBasis
@@ -101,36 +75,6 @@ function project!(out::AbstractVector, B::ModeBasis, m::Int, r::AbstractVector, 
         mul!(out, U, t)
     end
     return out
-end
-
-"""
-    nested_basis(Ug, support; deflate)
-
-Sequential Gram-Schmidt of the global modes `Ug[support, j]`, `j = 1, 2, …`,
-after projecting out the orthonormal columns of `deflate` (used to remove the
-gauge modes of the potentials).
-"""
-function nested_basis(Ug::Matrix{Float64}, support::Vector{Int};
-                      deflate::Matrix{Float64}=zeros(length(support), 0), tol=1e-7)
-    S, N = length(support), size(Ug, 2)
-    target = S - size(deflate, 2)
-    cols = Vector{Vector{Float64}}()
-    rank_at = zeros(Int, N)
-    for j in 1:N
-        length(cols) == target && (rank_at[j] = target; continue)
-        v = Ug[support, j]
-        for _ in 1:2
-            v .-= deflate * (deflate' * v)
-            for c in cols
-                v .-= dot(c, v) .* c
-            end
-        end
-        nv = norm(v)
-        nv > tol && push!(cols, v ./ nv)
-        rank_at[j] = length(cols)
-    end
-    @assert length(cols) == target "mode basis incomplete on support of size $S"
-    return ModeBasis(reduce(hcat, cols; init=zeros(S, 0)), support, rank_at)
 end
 
 "Identity basis: the field is not coarsened in space (used for DC links)."

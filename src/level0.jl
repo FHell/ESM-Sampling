@@ -1,6 +1,6 @@
-# Coordinate Gibbs base kernel for level 0 (alternative to reflective HMC).
+# Level-0 slice updates of the bias warmup chain (used by `local_base_step`).
 #
-# With all constraints priced (regularized Ω) the level-0 potential
+# With all constraints priced the level-0 potential
 #
 #   U = β_k capex(k) + β_v Σ_τ cost_τ(k, v, x) + b̂(z0, k) − log p(z0 | m)
 #
@@ -11,11 +11,7 @@
 # evaluated locally, and steps with |τ − τ'| ≥ 5 can be updated in parallel.
 #
 # Coordinates are updated by slice sampling (stepping out + shrinkage), which is
-# exact for the conditional for any width. The sweep visits the moves (colour
-# classes, the k coordinates, FFBS, carrier scaling) in a uniformly random
-# order, and coordinates within a block in random order, so the kernel is a
-# mixture over orderings of reversible updates and is itself π₀-reversible, as
-# MLDA requires of the coarse kernel.
+# exact for the conditional for any width.
 
 const NCOLOURS = 5
 
@@ -114,7 +110,6 @@ function step_term(P::Problem, ℓ::Int, ctx::SweepCtx, ws::StepWS, zv, x, z0, m
     end
     cost = 0.0
     θ = ws.y[E.fθ]
-    θpen = !ishard(E, lv, vs, E.fθ)
     LT = E.lines
     @inbounds for e in eachindex(sys.line_s)
         a, b = sys.line_bus0[e], sys.line_bus1[e]
@@ -122,18 +117,17 @@ function step_term(P::Problem, ℓ::Int, ctx::SweepCtx, ws::StepWS, zv, x, z0, m
         ov, loss = line_eval(LT, e, sys.line_s[e], fl)
         r[a] += fl + 0.5 * loss
         r[b] += -fl + 0.5 * loss
-        θpen && (cost += c_viol * Δt * ov)
+        cost += c_viol * Δt * ov
     end
     if E.flink > 0
         y = ws.y[E.flink]
-        hard = ishard(E, lv, vs, E.flink)
         @inbounds for l in eachindex(sys.link_cap)
-            yc = hard ? y[l] : clamp(y[l], -1.0, 1.0)
+            yc = clamp(y[l], -1.0, 1.0)
             u = sys.link_cap[l] * yc
             j0, j1 = link_inj(E.link_eta[l], u)
             r[sys.link_bus0[l]] += j0
             r[sys.link_bus1[l]] += j1
-            hard || (cost += c_viol * Δt * sys.link_cap[l] * abs(y[l] - yc))
+            cost += c_viol * Δt * sys.link_cap[l] * abs(y[l] - yc)
         end
     end
     R = 0.0
@@ -141,44 +135,24 @@ function step_term(P::Problem, ℓ::Int, ctx::SweepCtx, ws::StepWS, zv, x, z0, m
         fixed = g.vf == 0                       # renewables as negative load: full output
         y = fixed ? ws.r : ws.y[g.vf]
         kv = ctx.kgen[gi]
-        hard = fixed || ishard(E, lv, vs, g.vf)
         for i in eachindex(g.bus)
-            yc = fixed ? 1.0 : (hard ? y[i] : clamp(y[i], 0.0, 1.0))
+            yc = fixed ? 1.0 : clamp(y[i], 0.0, 1.0)
             A = g.wf > 0 ? clamp(ws.x[g.wf][i], 0.0, 1.0) : g.avail[i]
             p = A * kv[i] * yc
             cost += Δt * gen_vint(g, i, A, kv[i], yc)[1]
             r[g.bus[i]] -= p
-            hard || (cost += c_viol * Δt * (kv[i] + κ0) * abs(y[i] - yc))
+            fixed || (cost += c_viol * Δt * (kv[i] + κ0) * abs(y[i] - yc))
             g.ucf > 0 && (cost += uc_cost(g, i, A, kv[i], kv[i] + κ0, Δt, c_viol, yc, ws.y[g.ucf][i], ws.y1[g.ucf][i]))
             g.carrier == "gas" || (R += A * kv[i])
         end
     end
-    @inbounds for (si, s) in enumerate(E.stors)
-        if issoc(E)
-            ye, ye1 = ws.y[s.fe], ws.y1[s.fe]
-            kv = ctx.kst[si]
-            for i in eachindex(s.bus)
-                c, _, j = soc_cost(s, i, kv[i], kv[i] + κ0, Δt, c_viol, ye[i], ye1[i])
-                cost += c
-                r[s.bus[i]] += j
-            end
-            continue
-        end
-        yp, ym, ye, ye1 = ws.y[s.fp], ws.y[s.fm], ws.y[s.fe], ws.y1[s.fe]
+    @inbounds for (si, s) in enumerate(E.stors)               # state-of-charge form
+        ye, ye1 = ws.y[s.fe], ws.y1[s.fe]
         kv = ctx.kst[si]
-        hard = ishard(E, lv, vs, s.fp)
         for i in eachindex(s.bus)
-            pc, mc = hard ? (yp[i], ym[i]) : (clamp(yp[i], 0.0, 1.0), clamp(ym[i], 0.0, 1.0))
-            cost += Δt * s.mc[i] * kv[i] * (pc + mc)
-            r[s.bus[i]] += kv[i] * (pc - mc)
-            if !hard
-                w = kv[i] + κ0
-                ec, ec1 = clamp(ye[i], 0.0, 1.0), clamp(ye1[i], 0.0, 1.0)
-                cost += c_viol * Δt * w * (abs(yp[i] - pc) + abs(ym[i] - mc))
-                cost += c_viol * w * s.hours[i] * abs(ye[i] - ec)
-                gd = s.hours[i] * (ec1 - ec) / Δt - s.eta_in[i] * pc + mc / s.eta_out[i] - s.qt[i]
-                gd > 0 && (cost += c_viol * Δt * w * gd)
-            end
+            c, _, j = soc_cost(s, i, kv[i], kv[i] + κ0, Δt, c_viol, ye[i], ye1[i])
+            cost += c
+            r[s.bus[i]] += j
         end
     end
     # priced balance on the level's load-mode projection of the residual
@@ -354,137 +328,4 @@ function update_k!(rng, P::Problem, G::GibbsState, s::State)
         d = slice_coord!(rng, s.k, i, lf, G.wk[i])
         G.adapt && (G.wk[i] = 0.9 * G.wk[i] + 0.1 * max(3d, 1e-3 * G.wk[i]))
     end
-end
-
-"""
-One reversible Gibbs sweep at level 0: the colour classes, the k block, FFBS
-and the carrier scaling move, in uniformly random order.
-"""
-function gibbs_step(rng, P::Problem, s::State, S::MLDASampler, G::GibbsState)
-    @assert P.E.regularized "the coordinate Gibbs kernel needs regularized constraints"
-    s = copy(s)
-    moves = shuffle(rng, vcat(collect(1:NCOLOURS), [-1, -2, -3]))
-    for mv in moves
-        if mv > 0
-            ctx = SweepCtx(P, s.k)
-            update_colour!(rng, P, G, ctx, s.v, s.z0, s.m, mv)
-        elseif mv == -1
-            update_k!(rng, P, G, s)
-        elseif mv == -2
-            s.m = ffbs(rng, regime_loglik(P.W, s.z0), P.W.Ptr, P.W.π0)
-        else
-            s.xs = [s.z0]
-            evaluate!(P, s)
-            s = scale_step(rng, P, s, S)
-        end
-    end
-    s.xs = [s.z0]
-    G.sweeps += 1
-    if G.adapt && G.sweeps % 5 == 0
-        nv = length(P.E.vspecs)
-        for f in eachindex(G.nmove)
-            G.nmove[f] > 0 || continue
-            w = max(3 * G.smove[f] / G.nmove[f], 1e-8)
-            f <= nv ? (G.wv[f] = w) : (G.wz[f-nv] = w)
-        end
-        fill!(G.nmove, 0.0); fill!(G.smove, 0.0)
-    end
-    return evaluate!(P, s)
-end
-
-"""
-Gibbs sweep of the operation at level ℓ ≥ 1 with (k, x) fixed, colour classes in
-random order: π_ℓ-reversible, mixed with MLDA steps at that level (v2 §5.2).
-Slice widths are those adapted at level 0, rescaled per level by the adaptation
-accumulators of that sweep.
-"""
-function fine_gibbs_step(rng, P::Problem, s::State, G::GibbsState)
-    s = copy(s)
-    ℓ = s.ℓ
-    ctx = SweepCtx(P, s.k; ℓ=ℓ)
-    adapt = G.adapt
-    G.adapt = false
-    for c in shuffle(rng, collect(1:NCOLOURS))
-        update_colour!(rng, P, G, ctx, s.v, s.z0, s.m, c; ℓ=ℓ, x=s.xs[end])
-    end
-    G.adapt = adapt
-    return evaluate!(P, s)
-end
-
-"Slice sampling of t for the move v[idx] .+= t (a direction with unit entries)."
-function slice_dir!(rng, v, idx::Vector{Int}, lf, w; maxsteps=16)
-    base = v[idx]
-    setto!(t) = (@inbounds for q in eachindex(idx); v[idx[q]] = base[q] + t; end)
-    logy = lf() - randexp(rng)
-    L = -w * rand(rng)
-    R = L + w
-    J = floor(Int, maxsteps * rand(rng))
-    K = maxsteps - 1 - J
-    setto!(L)
-    while J > 0 && lf() > logy
-        L -= w; setto!(L); J -= 1
-    end
-    setto!(R)
-    while K > 0 && lf() > logy
-        R += w; setto!(R); K -= 1
-    end
-    for _ in 1:200
-        t = L + rand(rng) * (R - L)
-        setto!(t)
-        lf() > logy && return abs(t)
-        t < 0 ? (L = t) : (R = t)
-    end
-    setto!(0.0)
-    return 0.0
-end
-
-"""
-    temporal_multigrid_sweep!(rng, P, G, s, widths, stats; lengths, mcap)
-
-Multigrid directions in time at the level of `s`, with (k, x) fixed: for every
-dyadic block length L, every block and every v field, shift each of the first
-`mcap` spatial coefficients by a common t over the block (for state-of-charge
-fields this is the intertemporal storage shift), sampled along the line under
-the level's cost. Blocks of one length are coloured into non-interacting
-classes and updated in parallel. `widths[f, iL]` are the slice widths and
-`stats[f, iL, 1:2]` accumulate (count, Σ|t|) for their adaptation.
-"""
-function temporal_multigrid_sweep!(rng, P::Problem, G::GibbsState, s::State, widths, stats;
-                                   lengths=[2, 4, 8, 16, 32, 64, 128, 256], mcap::Int=10)
-    ℓ = s.ℓ
-    E = P.E
-    lv = P.lv[ℓ+1]
-    T = lv.T
-    ctx = SweepCtx(P, s.k; ℓ=ℓ)
-    x = s.xs[end]
-    for iL in shuffle(rng, collect(eachindex(lengths)))
-        L = lengths[iL]
-        nb = cld(T, L)
-        evens = [b for b in 0:2:nb-1 if !(isodd(nb) && b == nb - 1)]
-        classes = [evens, collect(1:2:nb-1)]
-        isodd(nb) && nb > 1 && push!(classes, [nb - 1])
-        for cls in shuffle(rng, classes)
-            isempty(cls) && continue
-            seeds = rand(rng, UInt64, length(cls))
-            loc = [zeros(size(stats)) for _ in cls]
-            Threads.@threads :static for q in eachindex(cls)
-                r = Xoshiro(seeds[q])
-                ws = G.wss[Threads.threadid()]
-                a = cls[q] * L + 1
-                b = min(a + L - 1, T)
-                dirs = [(f, j) for f in eachindex(E.vspecs) for j in 1:min(lv.m[f], mcap)]
-                shuffle!(r, dirs)
-                for (f, j) in dirs
-                    idx = [lv.off[f] + (τ - 1) * lv.m[f] + j for τ in a:b]
-                    taus = E.vspecs[f].kind == INSTANT ? vcat(mod(a - 2, T) + 1, collect(a:b)) : collect(a:b)
-                    lf = () -> -sum(step_term(P, ℓ, ctx, ws, s.v, x, s.z0, s.m, τ) for τ in taus)
-                    d = slice_dir!(r, s.v, idx, lf, widths[f, iL])
-                    loc[q][f, iL, 1] += 1
-                    loc[q][f, iL, 2] += d
-                end
-            end
-            stats .+= sum(loc)
-        end
-    end
-    return evaluate!(P, s)
 end

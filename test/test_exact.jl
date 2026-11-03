@@ -19,7 +19,7 @@ function exact_setup()
     n1 = first(n for n in cand if length(adj[n]) >= 2)
     nodes = sort(unique(vcat(n1, adj[n1][1:2])))
     sys = MX.subsystem(sys0, nodes)
-    E = MX.build_energy_model(sys; basis=:flow, flow_theta=:haar, storage=:soc, renewables=:load,
+    E = MX.build_energy_model(sys; basis=:flow, flow_theta=:haar,
                               flow_kw=(K_max=2, nyears=1))
     levels = [(1, 120), (3, 120)]                  # 73 steps: quick
     W = MX.fit_weather_model(MersenneTwister(1), E, levels; K=2)

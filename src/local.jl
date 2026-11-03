@@ -33,7 +33,7 @@
 # potential exceeds its running minimum by `maxnats` (40: neglected mass < e⁻⁴⁰).
 # No step widths.
 
-const ROLE_THETA, ROLE_LINK, ROLE_GEN, ROLE_SP, ROLE_SM, ROLE_SE, ROLE_UC = 1, 2, 3, 4, 5, 6, 7
+const ROLE_THETA, ROLE_LINK, ROLE_GEN, ROLE_SE, ROLE_UC = 1, 2, 3, 6, 7
 
 """
 Sparse solver for flow re-routing: per AC component, the sparse Cholesky factor
@@ -199,7 +199,7 @@ struct LocalModel
     nodelines::Vector{Vector{Int}}
     cell::Vector{Int}                         # balance cell of every node at this level
     ncell::Vector{Int}
-    units::Vector{Vector{NTuple{2,Int}}}      # per node: (field, support index) of gens, charge, discharge
+    units::Vector{Vector{NTuple{2,Int}}}      # per node: (field, support index) of the dispatchable generators
     GS::GridSolver                            # sparse flow re-routing
     comp::Vector{Int}
     complete::Vector{Bool}                    # per v field
@@ -219,8 +219,6 @@ end
 function LocalModel(P::Problem, ℓ::Int; cell_power::Float64=1.0, xr_partner::Int=1, xr_ball::Int=0)
     E = P.E
     sys = E.sys
-    @assert !isempty(E.parts) "local moves need the graph-Haar basis (basis = \"haar\")"
-    @assert E.regularized "local moves need regularized constraints"
     lv = P.lv[ℓ+1]
     N = sys.N
     nv = length(E.vspecs)
@@ -235,9 +233,6 @@ function LocalModel(P::Problem, ℓ::Int; cell_power::Float64=1.0, xr_partner::I
     end
     for (si, s) in enumerate(E.stors)
         role[s.fe] = (ROLE_SE, si); bus[s.fe] = s.bus
-        s.fp > 0 || continue
-        role[s.fp] = (ROLE_SP, si); role[s.fm] = (ROLE_SM, si)
-        bus[s.fp] = s.bus; bus[s.fm] = s.bus
     end
     nodelines = [Int[] for _ in 1:N]
     for e in eachindex(sys.line_s)
@@ -253,16 +248,12 @@ function LocalModel(P::Problem, ℓ::Int; cell_power::Float64=1.0, xr_partner::I
         g.vf > 0 || continue
         push!(units[n], (g.vf, i))
     end
-    for s in E.stors, (i, n) in enumerate(s.bus)
-        s.fp > 0 || continue
-        push!(units[n], (s.fp, i)); push!(units[n], (s.fm, i))
-    end
     GS = GridSolver(sys)
     comp = GS.comp
     complete = [iscomplete(lv, E.vspecs, f) for f in 1:nv]
     gcounts = [length(unique(zip(E.parts[1:q]...))) for q in eachindex(E.parts)]
     qlev = something(findlast(<=(lv.M), gcounts), 1)
-    injecting = [f for f in 1:nv if role[f][1] in (ROLE_GEN, ROLE_SP, ROLE_SM)]
+    injecting = [f for f in 1:nv if role[f][1] == ROLE_GEN]
     cellunits = Vector{Vector{Vector{Vector{NTuple{2,Int}}}}}()
     cellfields = Vector{Vector{Vector{Int}}}()
     for q in 1:qlev
@@ -353,17 +344,10 @@ function rebuild_step!(LC::LocalCost, P::Problem, LM::LocalModel, Xn, τ::Int)
     end
     T = size(LC.r, 2)
     for (si, s) in enumerate(E.stors)
-        if issoc(E)
-            Ye = LC.Y[s.fe]
-            for i in eachindex(s.bus)
-                pc, mc = soc_power(s, i, Float64(P.lv[LM.ℓ+1].h), clamp(Ye[i, τ], 0.0, 1.0), clamp(Ye[i, mod(τ, T)+1], 0.0, 1.0))
-                r[s.bus[i]] += LC.kst[si][i] * (pc - mc)
-            end
-            continue
-        end
-        Yp, Ym = LC.Y[s.fp], LC.Y[s.fm]
+        Ye = LC.Y[s.fe]
         for i in eachindex(s.bus)
-            r[s.bus[i]] += LC.kst[si][i] * (clamp(Yp[i, τ], 0.0, 1.0) - clamp(Ym[i, τ], 0.0, 1.0))
+            pc, mc = soc_power(s, i, Float64(P.lv[LM.ℓ+1].h), clamp(Ye[i, τ], 0.0, 1.0), clamp(Ye[i, mod(τ, T)+1], 0.0, 1.0))
+            r[s.bus[i]] += LC.kst[si][i] * (pc - mc)
         end
     end
     Sτ = view(LC.S, :, τ)
@@ -456,7 +440,6 @@ mutable struct MoveWS
     dS::Vector{Float64}
     smark::Vector{Vector{Bool}}
     stu::Vector{NTuple{2,Int}}       # storage units whose step-τ term changes
-    stp::Vector{NTuple{2,Int}}       # storage units whose step-(τ−1) dynamics term changes
     zidx::Vector{Int}
     zval::Vector{Float64}
     bps::Vector{Float64}
@@ -517,7 +500,7 @@ function MoveWS(P::Problem)
     sup = [nsupport(s.B) for s in E.vspecs]
     MoveWS([zeros(n) for n in sup], [falses(n) |> collect for n in sup], NTuple{2,Int}[],
            fill(false, nl), Int[], zeros(nl), fill(false, N), Int[], zeros(N), fill(false, N), Int[], zeros(N),
-           [fill(false, length(s.bus)) for s in E.stors], NTuple{2,Int}[], NTuple{2,Int}[],
+           [fill(false, length(s.bus)) for s in E.stors], NTuple{2,Int}[],
            Int[], Float64[], Float64[], Float64[], Float64[], Float64[], Float64[],
            [zeros(n) for n in sup], [zeros(Int, n) for n in sup], Float64[], Float64[], Float64[], Int[], Float64[], Int[],
            Bool[], Int[], Float64[], Float64[], false, true, Int[], Int[], Float64[], Float64[],
@@ -542,7 +525,7 @@ function clear!(ws::MoveWS)
     for c in ws.cells; ws.cmark[c] = false; ws.dS[c] = 0.0; end
     empty!(ws.cells)
     for (si, i) in ws.stu; ws.smark[si][i] = false; end
-    empty!(ws.stu); empty!(ws.stp)
+    empty!(ws.stu)
     empty!(ws.zidx); empty!(ws.zval); empty!(ws.bps)
     ws.trec = false
     return ws
@@ -708,12 +691,7 @@ function finalize!(ws::MoveWS, P::Problem, LM::LocalModel, LC::LocalCost, τ::In
             # no injection; the start-up and wall kinks are secondary breakpoints
         else
             ws.smark[g][i] || (ws.smark[g][i] = true; push!(ws.stu, (g, i)))
-            if issoc(E)                       # SoC form: e_τ moves the injection at τ (and at τ−1: linked step)
-                touch_node!(ws, LM.bus[f][i])
-            else
-                rl == ROLE_SE && push!(ws.stp, (g, i))
-                rl != ROLE_SE && touch_node!(ws, LM.bus[f][i])
-            end
+            touch_node!(ws, LM.bus[f][i])     # e_τ moves the injection at τ (and at τ−1: linked step)
         end
     end
     for q in eachindex(ws.wf)                 # weather entries: data-map kinks (load ≥ 0, availability in [0, 1])
@@ -768,21 +746,6 @@ end
     return Δt * gen_vint(g, i, A, k, yc)[1] + cv * Δt * w * abs(y - yc), A * k * yc
 end
 
-@inline function stor_cost(s::StorGroup, i, k, w, Δt, cv, yp, ym, ye, ye1)
-    pc, mc = clamp(yp, 0.0, 1.0), clamp(ym, 0.0, 1.0)
-    ec, ec1 = clamp(ye, 0.0, 1.0), clamp(ye1, 0.0, 1.0)
-    c = Δt * s.mc[i] * k * (pc + mc) + cv * Δt * w * (abs(yp - pc) + abs(ym - mc)) + cv * w * s.hours[i] * abs(ye - ec)
-    gd = s.hours[i] * (ec1 - ec) / Δt - s.eta_in[i] * pc + mc / s.eta_out[i] - s.qt[i]
-    gd > 0 && (c += cv * Δt * w * gd)
-    return c, gd, k * (pc - mc)
-end
-
-@inline function dyn_cost(s::StorGroup, i, w, Δt, cv, yp, ym, ye, ye1)
-    pc, mc = clamp(yp, 0.0, 1.0), clamp(ym, 0.0, 1.0)
-    gd = s.hours[i] * (clamp(ye1, 0.0, 1.0) - clamp(ye, 0.0, 1.0)) / Δt - s.eta_in[i] * pc + mc / s.eta_out[i] - s.qt[i]
-    return (gd > 0 ? cv * Δt * w * gd : 0.0), gd
-end
-
 @inline φbal(E::EnergyModel, x) = x > 0 ? E.c_shed * x : -E.c_dump * x
 
 """
@@ -791,7 +754,7 @@ secondary quantities (storage dynamics residuals, cell sums, requirement-trackin
 kinks, commitment walls) and `ws.dr`/`ws.dS`. Two passes: every entry except the
 units of requirement-tracking kinks first (their node residual changes define the
 kinks), then those units.
-`mode` (SoC form only; otherwise ignored): 0 plain, 1 plain and record the terms at
+`mode`: 0 plain, 1 plain and record the terms at
 t = 0 (start of a line walk), 2 evaluate from the recorded terms (same arithmetic;
 valid while the caches and the prepared move are unchanged, i.e. from the walk up to
 the commit; `clear!` invalidates them, and mode 2 without valid terms is plain).
@@ -802,8 +765,6 @@ entries, requirement-tracking kinks) always use the plain evaluation.
 function eval_move!(ws::MoveWS, P::Problem, LM::LocalModel, LC::LocalCost, τ::Int, t::Float64;
                     prev::Union{Nothing,MoveWS}=nothing, next::Union{Nothing,MoveWS}=nothing, mode::Int=0)
     E = P.E
-    soc = issoc(E)
-    soc || (mode = 0)
     mode == 2 && ws.trec && return eval_cached!(ws, P, LM, LC, τ, t)
     rec = mode == 1 && cacheable(E, ws)
     rec && (empty!(ws.tent); empty!(ws.tline); empty!(ws.tstu); empty!(ws.tcell); ws.trec = true)
@@ -886,43 +847,18 @@ function eval_move!(ws::MoveWS, P::Problem, LM::LocalModel, LC::LocalCost, τ::I
     end
     # storage, step τ
     τ1 = mod(τ, T) + 1
-    τm = mod(τ - 2, T) + 1
     @inbounds for (si, i) in ws.stu
         s = E.stors[si]
         k = LC.kst[si][i]; w = k + κ0
-        if soc
-            Ye = LC.Y[s.fe]
-            ye, ye1 = Ye[i, τ], Ye[i, τ1]
-            dye1 = next === nothing ? 0.0 : next.dy[s.fe][i]
-            c0, _, j0 = soc_cost(s, i, k, w, Δt, cv, ye, ye1)
-            c1, d1, j1 = soc_cost(s, i, k, w, Δt, cv, ye + t * ws.dy[s.fe][i], ye1 + t * dye1)
-            Δ += c1 - c0
-            ws.dr[s.bus[i]] += j1 - j0
-            push!(ws.sec, d1, s.eta_in[i] > 0 ? d1 - s.eta_in[i] : 1.0, -d1 * s.eta_out[i] - 1.0)
-            rec && push!(ws.tstu, StuTerm(si, i, s.bus[i], ye, ye1, ws.dy[s.fe][i], dye1, k, w, c0, j0, s.eta_in[i], s.eta_out[i]))
-            continue
-        end
-        Yp, Ym, Ye = LC.Y[s.fp], LC.Y[s.fm], LC.Y[s.fe]
-        yp, ym, ye, ye1 = Yp[i, τ], Ym[i, τ], Ye[i, τ], Ye[i, τ1]
-        c0, _, j0 = stor_cost(s, i, k, w, Δt, cv, yp, ym, ye, ye1)
-        dye1 = next === nothing ? 0.0 : next.dy[s.fe][i]       # block moves: τ+1 moves too
-        c1, gd1, j1 = stor_cost(s, i, k, w, Δt, cv, yp + t * ws.dy[s.fp][i], ym + t * ws.dy[s.fm][i],
-                                ye + t * ws.dy[s.fe][i], ye1 + t * dye1)
+        Ye = LC.Y[s.fe]
+        ye, ye1 = Ye[i, τ], Ye[i, τ1]
+        dye1 = next === nothing ? 0.0 : next.dy[s.fe][i]       # linked and block moves: τ+1 moves too
+        c0, _, j0 = soc_cost(s, i, k, w, Δt, cv, ye, ye1)
+        c1, d1, j1 = soc_cost(s, i, k, w, Δt, cv, ye + t * ws.dy[s.fe][i], ye1 + t * dye1)
         Δ += c1 - c0
         ws.dr[s.bus[i]] += j1 - j0
-        push!(ws.sec, gd1)
-    end
-    @inbounds for (si, i) in ws.stp
-        soc && break
-        prev !== nothing && prev.smark[si][i] && continue      # term τ−1 already evaluated by the step before
-        s = E.stors[si]
-        w = LC.kst[si][i] + κ0
-        Yp, Ym, Ye = LC.Y[s.fp], LC.Y[s.fm], LC.Y[s.fe]
-        ye1 = Ye[i, τ]
-        c0, _ = dyn_cost(s, i, w, Δt, cv, Yp[i, τm], Ym[i, τm], Ye[i, τm], ye1)
-        c1, gd1 = dyn_cost(s, i, w, Δt, cv, Yp[i, τm], Ym[i, τm], Ye[i, τm], ye1 + t * ws.dy[s.fe][i])
-        Δ += c1 - c0
-        push!(ws.sec, gd1)
+        push!(ws.sec, d1, s.eta_in[i] > 0 ? d1 - s.eta_in[i] : 1.0, -d1 * s.eta_out[i] - 1.0)
+        rec && push!(ws.tstu, StuTerm(si, i, s.bus[i], ye, ye1, ws.dy[s.fe][i], dye1, k, w, c0, j0, s.eta_in[i], s.eta_out[i]))
     end
     # requirement-tracking kinks and their compensating units
     if ws.anydyn
@@ -961,7 +897,7 @@ function eval_move!(ws::MoveWS, P::Problem, LM::LocalModel, LC::LocalCost, τ::I
     return Δ
 end
 
-"Evaluation from the recorded terms (eval_move! mode 2, SoC form); same arithmetic as the plain path."
+"Evaluation from the recorded terms (eval_move! mode 2); same arithmetic as the plain path."
 function eval_cached!(ws::MoveWS, P::Problem, LM::LocalModel, LC::LocalCost, τ::Int, t::Float64)
     E = P.E
     Δt, cv, κ0 = LM.Δt, E.c_viol, E.κ0
@@ -1523,11 +1459,10 @@ function prep_node!(ws, P, LM, f, i, a, τ)
     addz_node!(ws, P.lv[LM.ℓ+1], P.E, f, τ, i, a)
 end
 
-"Injection per unit utilization of unit (f, i) at τ (generator Ak, charge −k, discharge +k)."
+"Injection per unit utilization of unit (f, i) at τ (generator Ak; storage k)."
 function κunit(P::Problem, LM::LocalModel, LC::LocalCost, f::Int, i::Int, τ::Int)
     rl, g = LM.role[f]
     rl == ROLE_GEN && return LC.A[g][i, τ] * LC.kgen[g][i]
-    rl == ROLE_SP && return -LC.kst[g][i]
     return LC.kst[g][i]
 end
 
@@ -1825,9 +1760,8 @@ leak compensated pro rata) and `xloc` (leak into the residuals); the dense globa
 re-routing `xpair` stays at a low rate (its cost grows like N per move).
 """
 function plain_families(E::EnergyModel)
-    fams = [(:unit, 0.3), (:pair, 0.25), (:xpair, 0.03), (:xlocc, 0.08), (:xloc, 0.04), (:potential, 0.1), (:cellpair, 0.1), (:cell, 0.1)]
-    issoc(E) && push!(fams, (:spair, 0.3))
-    return fams
+    return [(:unit, 0.3), (:pair, 0.25), (:xpair, 0.03), (:xlocc, 0.08), (:xloc, 0.04), (:potential, 0.1), (:cellpair, 0.1), (:cell, 0.1),
+            (:spair, 0.3)]
 end
 
 """
@@ -1849,8 +1783,7 @@ function local_sweep!(rng, P::Problem, LM::LocalModel, s::State;
     fl = families === nothing ? plain_families(E) : families   # (no reassignment: keeps `fams` concretely typed)
     LCc = LC === nothing ? LocalCost(P, LM, s) : LC     # single assignment: not boxed in the threaded closure
     ws0 = wsets === nothing ? [MoveWS(P) for _ in 1:Threads.maxthreadid()] : wsets
-    soc = issoc(E)
-    wsl::Vector{MoveWS} = soc && length(ws0) < 2 * Threads.maxthreadid() ? vcat(ws0, [MoveWS(P) for _ in 1:Threads.maxthreadid()]) : ws0
+    wsl::Vector{MoveWS} = length(ws0) < 2 * Threads.maxthreadid() ? vcat(ws0, [MoveWS(P) for _ in 1:Threads.maxthreadid()]) : ws0
     nth = Threads.maxthreadid()
     β = P.βv
     nextra = round(Int, extra * E.sys.N)
@@ -1865,8 +1798,8 @@ function local_sweep!(rng, P::Problem, LM::LocalModel, s::State;
         Threads.@threads :static for q in eachindex(cls)
             r = Xoshiro(seeds[q])
             ws = wsl[Threads.threadid()]
-            wa = soc ? wsl[nth+Threads.threadid()] : ws     # SoC form: the step before τ is linked
-            soc && (wa.follow = false)                        # (commitment moves only at τ: parallel classes stay independent)
+            wa = wsl[nth+Threads.threadid()]                # the step before τ is linked (state of charge)
+            wa.follow = false                                 # (commitment moves only at τ: parallel classes stay independent)
             τ = cls[q]
             τm = mod(τ - 2, T) + 1
             bm = blockmove([wa, ws], ws, P, LM, LCc)
@@ -1885,12 +1818,11 @@ function local_sweep!(rng, P::Problem, LM::LocalModel, s::State;
             shuffle!(r, moves)
             for (kind, f, j) in moves
                 clear!(ws)
-                soc && clear!(wa)
+                clear!(wa)
                 if kind == 0
                     prep_atom!(ws, P, LM, f, j, τ)
                     fi = nf
                 elseif fams[kind] == :spair
-                    soc || continue
                     prep_spair!(r, wa, ws, P, LM, LCc, τm, τ) || continue
                     fi = kind
                 elseif fams[kind] == :tpot
@@ -1900,7 +1832,6 @@ function local_sweep!(rng, P::Problem, LM::LocalModel, s::State;
                     prep_xloc!(r, ws, P, LM, LCc, τ, jac) || continue
                     fi = kind
                 elseif fams[kind] == :tsoc
-                    soc || continue
                     prep_tsoc!(r, wa, ws, P, LM, LCc, τm, τ, jac) || continue
                     fi = kind
                 elseif fams[kind] in (:amode, :amode0, :amodeL)
@@ -1928,7 +1859,7 @@ function local_sweep!(rng, P::Problem, LM::LocalModel, s::State;
                     ok || continue
                     fi = kind
                 elseif fams[kind] == :tsocL
-                    (soc && adapt !== nothing && frames !== nothing) || continue
+                    (adapt !== nothing && frames !== nothing) || continue
                     prep_tsoc!(r, wa, ws, P, LM, LCc, τm, τ, jac; learn=(AM=adapt, FF=frames)) || continue
                     fi = kind
                 elseif fams[kind] in (:tmode, :tline, :tmode0, :tline0)
@@ -1944,24 +1875,20 @@ function local_sweep!(rng, P::Problem, LM::LocalModel, s::State;
                 end
                 finalize!(ws, P, LM, LCc, τ)
                 isempty(ws.ent) && continue
-                if soc
-                    finalize!(wa, P, LM, LCc, τm)
-                    link_soc!(wa, ws, LM)
-                    empty!(bm.bps); append!(bm.bps, wa.bps); append!(bm.bps, ws.bps)
-                    t = sample_line!(r, bm, β, ws.secprev)
-                else
-                    t = sample_line!(r, ws, P, LM, LCc, τ, β)
-                end
+                finalize!(wa, P, LM, LCc, τm)
+                link_soc!(wa, ws, LM)
+                empty!(bm.bps); append!(bm.bps, wa.bps); append!(bm.bps, ws.bps)
+                t = sample_line!(r, bm, β, ws.secprev)
                 if kind > 0 && fams[kind] in (:tpot, :tsoc, :tmode, :tline, :amode, :tcut, :acut, :xlocc) && t != 0.0 && !isempty(jac) &&
-                   rand(r) >= exp(min(0.0, logjac(jac, t, soc ? bm : StepMove(ws, P, LM, LC, τ))))
+                   rand(r) >= exp(min(0.0, logjac(jac, t, bm)))
                     t = 0.0                                  # Jacobian correction rejected
                 end
-                soc ? commit_block!(bm, s.v, t) : commit!(ws, P, LM, LCc, s.v, τ, t)
+                commit_block!(bm, s.v, t)
                 loc[q][fi, 1] += 1
                 loc[q][fi, 2] += t != 0.0
             end
             clear!(ws)
-            soc && clear!(wa)
+            clear!(wa)
         end
         stats .+= sum(loc)
     end
@@ -2001,11 +1928,7 @@ function cache_cost(P::Problem, LM::LocalModel, LC::LocalCost)
         end
         for (si, s) in enumerate(E.stors), i in eachindex(s.bus)
             k = LC.kst[si][i]
-            if issoc(E)
-                c += soc_cost(s, i, k, k + κ0, Δt, cv, LC.Y[s.fe][i, τ], LC.Y[s.fe][i, τ1])[1]
-            else
-                c += stor_cost(s, i, k, k + κ0, Δt, cv, LC.Y[s.fp][i, τ], LC.Y[s.fm][i, τ], LC.Y[s.fe][i, τ], LC.Y[s.fe][i, τ1])[1]
-            end
+            c += soc_cost(s, i, k, k + κ0, Δt, cv, LC.Y[s.fe][i, τ], LC.Y[s.fe][i, τ1])[1]
         end
         for cl in eachindex(LM.ncell)
             nc = LM.ncell[cl]
@@ -2022,7 +1945,7 @@ end
 # For one investable unit (node capacity k of a generator or storage unit at a
 # spatially complete level) the scaling group (k, y_1..y_n) ↦ (e^u k, e^{−u} y)
 # acts on the raw capacity and all n utilizations of that unit (T for a
-# generator, 3T for storage: charge, discharge, state of charge). Inside the
+# generator, 2T with commitment, T for storage: the state of charge). Inside the
 # boxes it keeps every injection and state of charge unchanged, so only capex,
 # penalty weights and the clamps change. u is drawn from the generalized Gibbs
 # conditional ∝ π(g_u x) e^{(1−n)u} (Liu & Sabatti 2000) by slice sampling,
@@ -2065,17 +1988,11 @@ function kscale_delta!(dp, P::Problem, LM::LocalModel, LC::LocalCost, Kraw, kind
                 c1 += uc_cost(g, i, A, kc1, kc1 + κ0, Δt, cv, clamp(y1, 0.0, 1.0), u * sc, u1 * sc)
             end
             d = p1 - p0
-        elseif issoc(E)
+        else
             τ1 = mod(τ, T) + 1
             ye, ye1 = LC.Y[st.fe][i, τ], LC.Y[st.fe][i, τ1]
             c0, _, j0 = soc_cost(st, i, kc0, kc0 + κ0, Δt, cv, ye, ye1)
             c1, _, j1 = soc_cost(st, i, kc1, kc1 + κ0, Δt, cv, ye * sc, ye1 * sc)
-            d = -(j1 - j0)
-        else
-            τ1 = mod(τ, T) + 1
-            yp, ym, ye, ye1 = LC.Y[st.fp][i, τ], LC.Y[st.fm][i, τ], LC.Y[st.fe][i, τ], LC.Y[st.fe][i, τ1]
-            c0, _, j0 = stor_cost(st, i, kc0, kc0 + κ0, Δt, cv, yp, ym, ye, ye1)
-            c1, _, j1 = stor_cost(st, i, kc1, kc1 + κ0, Δt, cv, yp * sc, ym * sc, ye * sc, ye1 * sc)
             d = -(j1 - j0)
         end
         dp[τ] = d
@@ -2141,7 +2058,7 @@ function kscale_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, κ
         # pre-generated stream per (unit, proposal) lines up with the device kernel
         draws = mh ? [(randn(rng), rand(rng)) for _ in 1:nprop] : nothing
         k0 >= κmin || continue
-        n = kind == 1 ? (E.gens[gi].vf > 0 ? T : 0) * (E.gens[gi].ucf > 0 ? 2 : 1) : (issoc(E) ? T : 3T)
+        n = kind == 1 ? (E.gens[gi].vf > 0 ? T : 0) * (E.gens[gi].ucf > 0 ? 2 : 1) : T
         b0 = P.use_bias ? bias_term(P, k_at0(P, ℓ, s.k), s.z0) : 0.0
         kbase = copy(s.k)
         function setk!(u)
@@ -2197,7 +2114,7 @@ function kscale_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, κ
         else
             st = E.stors[gi]
             LC.kst[gi][i] = kc1
-            fields = st.fp > 0 ? [st.fp, st.fm, st.fe] : [st.fe]
+            fields = [st.fe]
         end
         for f in fields
             m = lv.m[f]
@@ -2221,7 +2138,7 @@ function kscale_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, κ
 end
 
 # ---------------------------------------------------------------------------
-# kernel = "local" in the driver and MLDA
+# the kernels of a chain: fine-level step and level-0 step
 # ---------------------------------------------------------------------------
 
 "Per-level local models (built lazily) and per-thread workspaces."
@@ -2292,10 +2209,10 @@ function fine_local_step(rng, P::Problem, s::State, S)
 end
 
 """
-Level-0 transition for kernel = "local": the moves {local sweep of v, weather
+Level-0 transition of the bias warmup chain: the moves {local sweep of v, weather
 colour classes (coordinate slice on z0 at fixed v), weather with pro-rata shear
-(`weather_shear_sweep!`), k slice block, FFBS, carrier scaling} in uniformly random order (a mixture over orderings of
-π₀-invariant updates, reversible as MLDA requires of its coarsest kernel).
+(`weather_shear_sweep!`), k slice block, FFBS, carrier scaling} in uniformly random
+order (a mixture over orderings of π₀-invariant updates).
 """
 function local_base_step(rng, P::Problem, s::State, S)
     K = S.loc
@@ -2340,18 +2257,8 @@ function local_base_step(rng, P::Problem, s::State, S)
 end
 
 # ---------------------------------------------------------------------------
-# temporal multigrid: block moves (time-constant directions over dyadic blocks)
+# block moves: workspaces and commit (storage multiscale, learned shapes, weather)
 # ---------------------------------------------------------------------------
-#
-# A block move applies one direction, the same at every step of a block of L
-# consecutive steps (the temporal Haar scaling function of the block: the
-# overcomplete frame in time), sampled exactly along its line. For a state of
-# charge this is a level shift over the block (only the dynamics terms at its
-# ends see it); for generation it is a block-constant re-dispatch. Families:
-#   batom (a spatial basis vector), bunit, bpair (same node, injection-balanced
-#   at every step), bsoc (state of charge of one unit), bcell, bcellpair.
-# Blocks of one length are coloured into non-adjacent classes (a block reads one
-# step on each side) and updated in parallel.
 
 "Per-thread pool of step workspaces for block moves."
 struct BlockPool
@@ -2400,146 +2307,3 @@ function commit_block!(bm::BlockMove, v::AbstractVector, t::Float64)
     end
 end
 
-"""
-Draw a block-move family and its selection (independent of v), and fill the step
-workspaces of steps a..b. Returns false if the draw is not a valid move.
-"""
-function prep_block!(rng, bm::BlockMove, P::Problem, LM::LocalModel, LC::LocalCost, fam::Symbol, a::Int, b::Int; κmin=1.0)
-    E = P.E
-    N = E.sys.N
-    lv = P.lv[LM.ℓ+1]
-    soc = issoc(E)
-    a0 = soc ? a - 1 : a                 # SoC form: the step before the block is linked (aux)
-    bm.n = b - a0 + 1
-    resize!(bm.τs, bm.n)
-    for q in 1:bm.n
-        bm.τs[q] = mod(a0 + q - 2, LM.T) + 1
-        clear!(bm.wss[q])
-    end
-    if fam == :batom
-        f = rand(rng, eachindex(E.vspecs))
-        j = rand(rng, 1:lv.m[f])
-        build = (ws, τ) -> prep_atom!(ws, P, LM, f, j, τ)
-    elseif fam == :bunit || fam == :bsoc
-        n = rand(rng, 1:N)
-        if fam == :bunit
-            isempty(LM.units[n]) && return false
-            f, i = rand(rng, LM.units[n])
-        else
-            st = LM.nodestor[n]
-            isempty(st) && return false
-            si, i = rand(rng, st)
-            f = E.stors[si].fe
-        end
-        LM.complete[f] || return false
-        build = (ws, τ) -> prep_node!(ws, P, LM, f, i, 1.0, τ)
-    elseif fam == :bpair
-        n = rand(rng, 1:N)
-        length(LM.units[n]) < 2 && return false
-        u1, u2 = rand(rng, LM.units[n]), rand(rng, LM.units[n])
-        u1 == u2 && return false
-        (LM.complete[u1[1]] && LM.complete[u2[1]]) || return false
-        build = function (ws, τ)
-            κ1, κ2 = κunit(P, LM, LC, u1..., τ), κunit(P, LM, LC, u2..., τ)
-            (abs(κ1) < κmin || abs(κ2) < κmin) && return
-            prep_node!(ws, P, LM, u1[1], u1[2], 1 / κ1, τ)
-            prep_node!(ws, P, LM, u2[1], u2[2], -1 / κ2, τ)
-        end
-    elseif fam == :bcell || fam == :bcellpair
-        q = draw_level(rng, LM)
-        cu, cf = LM.cellunits[q], LM.cellfields[q]
-        c = rand(rng, eachindex(cu))
-        fl = cf[c]
-        isempty(fl) && return false
-        if fam == :bcell
-            f = rand(rng, fl)
-            build = (ws, τ) -> cell_entries!(ws, P, LM, cu[c], f, 1.0, τ)
-        else
-            length(fl) < 2 && return false
-            f1, f2 = rand(rng, fl), rand(rng, fl)
-            f1 == f2 && return false
-            build = function (ws, τ)
-                K1 = sum(κunit(P, LM, LC, f, i, τ) for (f, i) in cell_units(cu[c], f1))
-                K2 = sum(κunit(P, LM, LC, f, i, τ) for (f, i) in cell_units(cu[c], f2))
-                (abs(K1) < κmin || abs(K2) < κmin) && return
-                cell_entries!(ws, P, LM, cu[c], f1, 1 / K1, τ)
-                cell_entries!(ws, P, LM, cu[c], f2, -1 / K2, τ)
-            end
-        end
-    else
-        error("unknown block family $fam")
-    end
-    empty!(bm.bps)
-    nonempty = false
-    for q in (soc ? 2 : 1):bm.n
-        build(bm.wss[q], bm.τs[q])
-        finalize!(bm.wss[q], P, LM, LC, bm.τs[q])
-        append!(bm.bps, bm.wss[q].bps)
-        nonempty |= !isempty(bm.wss[q].ent)
-    end
-    if soc
-        for q in 1:bm.n-1
-            link_soc!(bm.wss[q], bm.wss[q+1], LM)
-        end
-    end
-    return nonempty
-end
-
-"""
-    block_sweep!(rng, P, LM, s; lengths, bextra, families, LC, pools) -> (s, stats)
-
-Temporal multigrid sweep at the level of `s` ((k, x) fixed): for each block
-length L (random order) and a random offset, `bextra·N` block moves per block.
-"""
-function block_sweep!(rng, P::Problem, LM::LocalModel, s::State;
-                      lengths=[2, 4, 8, 16, 32, 64, 128], bextra::Float64=0.5,
-                      families=[(:batom, 0.2), (:bunit, 0.2), (:bpair, 0.2), (:bsoc, 0.15), (:bcell, 0.1), (:bcellpair, 0.15)],
-                      LC=nothing, pools=nothing, check::Bool=false)
-    E = P.E
-    T = LM.T
-    LCc = LC === nothing ? LocalCost(P, LM, s) : LC     # single assignment: not boxed in the threaded closure
-    lengths = filter(<(T ÷ 2), lengths)
-    Lmax = maximum(lengths; init=1) + 1
-    pl::Vector{BlockPool} = pools === nothing ? [BlockPool(P, Lmax) for _ in 1:Threads.maxthreadid()] : pools
-    fams = first.(families)
-    wts = cumsum(last.(families)); wts ./= wts[end]
-    nmv = max(1, round(Int, bextra * E.sys.N))
-    stats = zeros(length(fams), 2)
-    for L in shuffle(rng, lengths)
-        o = rand(rng, 0:L-1)
-        starts = vcat(o > 0 ? [1] : Int[], collect(o+1:L:T))
-        blocks = [(a, min((j < length(starts) ? starts[j+1] - 1 : T), T)) for (j, a) in enumerate(starts)]
-        nb = length(blocks)
-        nb < 3 && continue
-        idx = collect(1:nb)
-        classes = isodd(nb) ? [idx[1:2:nb-1], idx[2:2:nb-1], [nb]] : [idx[1:2:nb], idx[2:2:nb]]
-        for cls in shuffle(rng, classes)
-            seeds = rand(rng, UInt64, length(cls))
-            loc = [zeros(size(stats)) for _ in cls]
-            Threads.@threads :static for q in eachindex(cls)
-                r = Xoshiro(seeds[q])
-                pool = pl[Threads.threadid()]
-                a, b = blocks[cls[q]]
-                bm = blockmove(pool.wss, pool.wss[1], P, LM, LCc)
-                secprev = pool.wss[1].secprev
-                for _ in 1:nmv
-                    k = findfirst(>=(rand(r)), wts)
-                    prep_block!(r, bm, P, LM, LCc, fams[k], a, b) || continue
-                    t = sample_line!(r, bm, P.βv, secprev)
-                    commit_block!(bm, s.v, t)
-                    loc[q][k, 1] += 1
-                    loc[q][k, 2] += t != 0.0
-                end
-                for q2 in 1:bm.n
-                    clear!(bm.wss[q2])
-                end
-            end
-            stats .+= sum(loc)
-        end
-    end
-    if check
-        LC2 = LocalCost(P, LM, s)
-        @info "block cache drift" maximum(abs.(LCc.S .- LC2.S)) maximum(abs.(LCc.F .- LC2.F))
-    end
-    return evaluate!(P, s), stats
-end

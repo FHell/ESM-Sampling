@@ -1,22 +1,20 @@
-# Energy system model (§2) in utilization coordinates on the Laplace-mode
-# hierarchy.
+# Energy system model (docs/system/model.md) in utilization coordinates on the
+# graph-Haar hierarchy (optionally with transport modes, basis = :flow).
 #
 # Fields
 #   k:  one KFIELD per investable carrier (generator power, storage power with
 #       fixed energy-to-power ratio), node box [0, k̄].
-#   v:  θ (potentials, gauge modes removed), ω_G per generator carrier,
-#       ω_C for DC links (identity basis), ω₊, ω₋ (STEP) and ω_e (INSTANT) per
-#       storage carrier.
+#   v:  θ (potentials, gauge modes removed), ω_G per dispatchable generator
+#       carrier, ω_C for DC links (identity basis), the state of charge ω_e
+#       (INSTANT) per storage carrier, commitment fields (INSTANT) per committable
+#       carrier. Renewables are load: output A·k, curtailment is nodal dump.
 #   x:  load and availability per weather carrier (STEP).
 #
-# At a level where a field is complete in space its node-level constraints
-# are hard (exact). Where it is incomplete only an outer box on its mode
-# coefficients is hard; the node-level violations of the prolongated field are
-# priced at c_viol (energy units), and the cost is evaluated on the clamped
-# prolongation. This keeps (A1) — fine feasible ⇒ coarse feasible — exact.
-# The balance is priced on the projection of the nodal residual onto the
-# level's load modes, φ(U_m U_mᵀ r), the analogue of aggregating the balance
-# over a cluster: only imbalances resolved at the level are priced.
+# All constraints are priced: node-level violations of a field are priced at
+# c_viol (energy units), and the cost is evaluated on the clamped values. The
+# balance is priced on the projection of the nodal residual onto the level's
+# load modes, φ(U_m U_mᵀ r), the analogue of aggregating the balance over a
+# cluster: only imbalances resolved at the level are priced.
 
 struct GenGroup
     carrier::String
@@ -204,8 +202,8 @@ end
 struct StorGroup
     carrier::String
     bus::Vector{Int}
-    fp::Int
-    fm::Int
+    fp::Int                   # 0: no separate charge field in the state-of-charge form
+    fm::Int                   # 0: no separate discharge field
     fe::Int
     kf::Int
     kfix::Vector{Float64}
@@ -235,12 +233,12 @@ struct EnergyModel
     γk::Float64
     θlo::Vector{Float64}   # outer bounds of the θ mode coefficients
     θhi::Vector{Float64}
-    regularized::Bool      # price all constraints (no hard walls) at every level
+    regularized::Bool      # all constraints priced (always true)
     κ0::Float64            # capacity floor [MW] of the penalty weights (keeps the target proper)
-    parts::Vector{Vector{Int}}   # graph-Haar partitions (cell label per node, coarse → fine); empty for Laplace
+    parts::Vector{Vector{Int}}   # graph-Haar partitions (cell label per node, coarse → fine)
     measure::Symbol              # reference measure of dispatchable units: :utilization (dω) or :physical (dp = k dω)
-    storage::Symbol              # :lp (charge, discharge, state of charge) or :soc (state-of-charge trajectory only)
-    renewables::Symbol           # :dispatch (curtailment share ω per unit) or :load (output A·k, curtailment = nodal dump)
+    storage::Symbol              # :soc (state-of-charge trajectory; the only storage form)
+    renewables::Symbol           # :load (output A·k, curtailment = nodal dump; the only renewable form)
     flow::Any                    # FlowBasis (basis = :flow) or nothing
     lines::LineTerms             # line losses and thermal limits
     link_eta::Vector{Float64}    # link efficiencies (ones: lossless)
@@ -267,6 +265,7 @@ const UC_DEFAULTS = Dict("gas" => (0.3, 40.0, 4.0), "coal" => (0.4, 80.0, 3.0), 
                          "nuclear" => (0.5, 150.0, 1.0), "biomass" => (0.3, 40.0, 2.0), "oil" => (0.2, 20.0, 5.0),
                          "waste" => (0.4, 40.0, 2.0))
 
+"Whether storage is in the state-of-charge form (always true; kept for the device checks)."
 issoc(E::EnergyModel) = E.storage == :soc
 
 "Weights of the capacity bases: the node potentials (finite positive), else 1."
@@ -278,8 +277,7 @@ function kweights(kbar)
 end
 
 function build_energy_model(sys::System; c_shed=3000.0, c_dump=5.0, c_viol=c_shed, γk=10.0,
-                            regularized=true, κ0=1.0, basis=:laplace, measure=:utilization, storage=:lp,
-                            renewables=:dispatch, flow_kw=NamedTuple(), flow_theta=:nested,
+                            κ0=1.0, basis=:haar, measure=:utilization, flow_kw=NamedTuple(), flow_theta=:nested,
                             co2_price=nothing, brownfield::Bool=false, losses::Bool=false, loss_segments::Int=4,
                             thermal::Symbol=:hard, thermal_band::Float64=0.1, thermal_segments::Int=4,
                             link_losses::Bool=false, uc=String[], uc_params=Dict{String,Any}())
@@ -287,27 +285,21 @@ function build_energy_model(sys::System; c_shed=3000.0, c_dump=5.0, c_viol=c_she
     Zc = component_indicators(N, sys.line_bus0, sys.line_bus1)
     edges = transfer_edges(sys)
     FB = nothing
-    if basis == :haar || basis == :flow
-        # nested partition: whole network → countries → nodes (graph Haar, v2 §4.1 with ε = 0),
-        # sparse, with balanced binary contrasts inside every parent cell
-        cidx = Dict(c => i for (i, c) in enumerate(unique(sys.country)))
-        parts = [ones(Int, N), [cidx[c] for c in sys.country], collect(1:N)]
-        Ug, gcounts, _ = haar_basis(parts; edges=edges)
-        λg = Float64.(1:N)
-        comp = [argmax(abs.(Zc[i, :])) for i in 1:N]
-        mkbasis = (sup; weights=nothing) -> haar_field_basis(parts, gcounts, sup; edges=edges, weights=weights)
-        θbasis = haar_field_basis([comp, sys.country, collect(1:N)], gcounts, collect(1:N); edges=edges, drop_top=true)
-        if basis == :flow       # transport modes from the proxy ensemble first (docs/flow_hierarchy.md §2)
-            FB = flow_basis(sys; flow_kw...)
-            # :nested — the modes are the coarse angle coordinates (dense complement);
-            # :haar — sparse Haar angles, the modes only as transport moves (large networks)
-            flow_theta == :nested && (θbasis = flow_theta_basis(FB, θbasis, N))
-        end
-    else
-        Ug, λg = laplace_modes(N, edges)
-        parts = Vector{Int}[]
-        mkbasis = (sup; weights=nothing) -> nested_basis(Ug, sup)
-        θbasis = nested_basis(Ug, collect(1:N); deflate=Zc)
+    @assert basis in (:haar, :flow) "unknown basis $basis (haar or flow)"
+    # nested partition: whole network → countries → nodes (graph Haar, ε = 0),
+    # sparse, with balanced binary contrasts inside every parent cell
+    cidx = Dict(c => i for (i, c) in enumerate(unique(sys.country)))
+    parts = [ones(Int, N), [cidx[c] for c in sys.country], collect(1:N)]
+    Ug, gcounts, _ = haar_basis(parts; edges=edges)
+    λg = Float64.(1:N)
+    comp = [argmax(abs.(Zc[i, :])) for i in 1:N]
+    mkbasis = (sup; weights=nothing) -> haar_field_basis(parts, gcounts, sup; edges=edges, weights=weights)
+    θbasis = haar_field_basis([comp, sys.country, collect(1:N)], gcounts, collect(1:N); edges=edges, drop_top=true)
+    if basis == :flow       # transport modes from the proxy ensemble first (model.md §2)
+        FB = flow_basis(sys; flow_kw...)
+        # :nested — the modes are the coarse angle coordinates (dense complement);
+        # :haar — sparse Haar angles, the modes only as transport moves (large networks)
+        flow_theta == :nested && (θbasis = flow_theta_basis(FB, θbasis, N))
     end
     kspecs, vspecs, wspecs = FieldSpec[], FieldSpec[], FieldSpec[]
 
@@ -336,9 +328,8 @@ function build_energy_model(sys::System; c_shed=3000.0, c_dump=5.0, c_viol=c_she
         @assert allunique(bus)
         S = length(u)
         k0 = brownfield ? copy(G[:k0][u]) : zeros(S)
-        isren = renewables == :load && haskey(sys.weather, Symbol(c))
+        isren = haskey(sys.weather, Symbol(c))
         if isren                         # output A·k exactly; curtailment is the negative nodal residual (dump)
-            @assert regularized "renewables = :load needs regularized constraints"
             vf = 0
         else
             push!(vspecs, FieldSpec(Symbol("g_", c), STEP, mkbasis(bus), zeros(S), ones(S)))
@@ -388,18 +379,9 @@ function build_energy_model(sys::System; c_shed=3000.0, c_dump=5.0, c_viol=c_she
         @assert allunique(bus)
         S = length(u)
         B = mkbasis(bus)
-        if storage == :soc
-            @assert regularized "storage = :soc needs regularized constraints"
-            push!(vspecs, FieldSpec(Symbol("se_", c), INSTANT, B, zeros(S), ones(S)))
-            fe = length(vspecs)
-            fp_, fm_ = 0, 0
-        else
-            push!(vspecs, FieldSpec(Symbol("sp_", c), STEP, B, zeros(S), ones(S)))
-            push!(vspecs, FieldSpec(Symbol("sm_", c), STEP, B, zeros(S), ones(S)))
-            push!(vspecs, FieldSpec(Symbol("se_", c), INSTANT, B, zeros(S), ones(S)))
-            fe = length(vspecs)
-            fp_, fm_ = fe - 2, fe - 1
-        end
+        push!(vspecs, FieldSpec(Symbol("se_", c), INSTANT, B, zeros(S), ones(S)))   # state of charge
+        fe = length(vspecs)
+        fp_, fm_ = 0, 0
         invest = all(St[:invest][u] .> 0.5)
         kf = 0
         if invest
@@ -414,7 +396,7 @@ function build_energy_model(sys::System; c_shed=3000.0, c_dump=5.0, c_viol=c_she
     LT = LineTerms(sys.line_alpha; losses=losses, segments=loss_segments, thermal=thermal,
                    band=thermal_band, band_segments=thermal_segments)
     E = EnergyModel(sys, Ug, λg, kspecs, vspecs, wspecs, gens, stors, fθ, flink,
-                    c_shed, c_dump, c_viol, γk, θlo, θhi, regularized, κ0, parts, measure, storage, renewables, FB,
+                    c_shed, c_dump, c_viol, γk, θlo, θhi, true, κ0, parts, measure, :soc, :load, FB,
                     LT, link_losses ? copy(sys.link_eta) : ones(length(sys.link_cap)), Ref(μdata), brownfield)
     co2_price === nothing || set_co2_price!(E, Float64(co2_price))
     return E
@@ -533,18 +515,14 @@ end
 datamap(s::FieldSpec, x) = s.name == :load ? max(x, 0.0) : clamp(x, 0.0, 1.0)
 datamap_deriv(s::FieldSpec, x) = s.name == :load ? Float64(x > 0) : Float64(0 < x < 1)
 
-"Whether the constraints of field f are hard walls at this level (else priced)."
-ishard(E::EnergyModel, lay::Layout, specs, f::Int) = !E.regularized && iscomplete(lay, specs, f)
-
 """
-Node-level values of a v or k field: returns `(Y, Yc, hard)` with `Yc` the
-clamped values used in the cost (`Yc === Y` where the constraints are hard).
+Node-level values of a v or k field: returns `(Y, Yc, free)` with `Yc` the
+clamped values used in the cost (`Yc === Y` and `free` for unbounded fields).
 """
 function field_nodes(E::EnergyModel, z, lay::Layout, specs, f::Int)
     Y = nodevals(z, lay, specs, f)
-    complete = ishard(E, lay, specs, f)
     s = specs[f]
-    if complete || all(isinf, s.lo) && all(isinf, s.hi)
+    if all(isinf, s.lo) && all(isinf, s.hi)
         return Y, Y, true
     end
     return Y, clamp.(Y, s.lo, s.hi), false
@@ -585,16 +563,10 @@ function energy_cost(E::EnergyModel, lk::Layout, lv::Layout, zk, zv, Xn; grad=fa
         kn[f] = Y
         cap = f_capex(E, f)
         E.brownfield && (capex -= dot(cap, s.lo))           # existing capacity is sunk: capex on k − k0
-        if ishard(E, lk, ks, f)
-            kc[f] = Y
-            capex += dot(cap, Y)
-            grad && (gkn_capex[f] .= cap)
-        else
-            kc[f] = clamp.(Y, s.lo, s.hi)
-            ex = Y .- kc[f]
-            capex += dot(cap, Y) + E.γk * dot(cap, abs.(ex))
-            grad && (gkn_capex[f] .= cap .+ E.γk .* cap .* sign.(ex))
-        end
+        kc[f] = clamp.(Y, s.lo, s.hi)
+        ex = Y .- kc[f]
+        capex += dot(cap, Y) + E.γk * dot(cap, abs.(ex))
+        grad && (gkn_capex[f] .= cap .+ E.γk .* cap .* sign.(ex))
     end
     dkc = grad ? [zeros(length(kc[f])) for f in eachindex(kc)] : nothing
 
@@ -612,7 +584,6 @@ function energy_cost(E::EnergyModel, lk::Layout, lv::Layout, zk, zv, Xn; grad=fa
 
     # ---- potentials and line flows
     Θ = nodevals(zv, lv, vs, E.fθ)
-    θpen = !ishard(E, lv, vs, E.fθ)
     nl = length(sys.line_s)
     F = zeros(nl, T)
     LT = E.lines
@@ -623,18 +594,18 @@ function energy_cost(E::EnergyModel, lk::Layout, lv::Layout, zk, zv, Xn; grad=fa
         ov, loss = line_eval(LT, e, sys.line_s[e], fe)
         r[a, t] += fe + 0.5 * loss                # losses are drawn half at each end
         r[b, t] += -fe + 0.5 * loss
-        θpen && (pen += c_viol * Δt * ov)
+        pen += c_viol * Δt * ov
     end
 
     # ---- DC links
     if E.flink > 0
-        Yl, Lc, lhard = field_nodes(E, zv, lv, vs, E.flink)
+        Yl, Lc, lfree = field_nodes(E, zv, lv, vs, E.flink)
         for t in 1:T, l in eachindex(sys.link_cap)
             u = sys.link_cap[l] * Lc[l, t]
             j0, j1 = link_inj(E.link_eta[l], u)
             r[sys.link_bus0[l], t] += j0
             r[sys.link_bus1[l], t] += j1
-            lhard || (pen += c_viol * Δt * sys.link_cap[l] * abs(Yl[l, t] - Lc[l, t]))
+            lfree || (pen += c_viol * Δt * sys.link_cap[l] * abs(Yl[l, t] - Lc[l, t]))
         end
     end
 
@@ -673,48 +644,21 @@ function energy_cost(E::EnergyModel, lk::Layout, lv::Layout, zk, zv, Xn; grad=fa
 
     # ---- storage
     st_cache = Vector{Any}(undef, length(E.stors))
-    for (si, s) in enumerate(E.stors)
-        if issoc(E)
-            Ye, Ec, _ = field_nodes(E, zv, lv, vs, s.fe)
-            kv = s.kf > 0 ? kc[s.kf] : s.kfix
-            for t in 1:T, i in eachindex(s.bus)
-                c, _, j = soc_cost(s, i, kv[i], kv[i] + E.κ0, Δt, c_viol, Ye[i, t], Ye[i, mod(t, T)+1])
-                pc, mc = soc_power(s, i, Δt, Ec[i, t], Ec[i, mod(t, T)+1])
-                cst += Δt * s.mc[i] * kv[i] * (pc + mc)
-                pen += c - Δt * s.mc[i] * kv[i] * (pc + mc)
-                r[s.bus[i], t] += j
-            end
-            st_cache[si] = (Ye, Ec, kv)
-            continue
-        end
-        Yp, Pc, compp = field_nodes(E, zv, lv, vs, s.fp)
-        Ym, Mc, _ = field_nodes(E, zv, lv, vs, s.fm)
+    for (si, s) in enumerate(E.stors)                 # state-of-charge form
         Ye, Ec, _ = field_nodes(E, zv, lv, vs, s.fe)
         kv = s.kf > 0 ? kc[s.kf] : s.kfix
         for t in 1:T, i in eachindex(s.bus)
-            pp, pm = kv[i] * Pc[i, t], kv[i] * Mc[i, t]
-            cst += Δt * s.mc[i] * (pp + pm)
-            r[s.bus[i], t] += pp - pm
+            c, _, j = soc_cost(s, i, kv[i], kv[i] + E.κ0, Δt, c_viol, Ye[i, t], Ye[i, mod(t, T)+1])
+            pc, mc = soc_power(s, i, Δt, Ec[i, t], Ec[i, mod(t, T)+1])
+            cst += Δt * s.mc[i] * kv[i] * (pc + mc)
+            pen += c - Δt * s.mc[i] * kv[i] * (pc + mc)
+            r[s.bus[i], t] += j
         end
-        gdyn = nothing
-        if !compp
-            gdyn = zeros(length(s.bus), T)
-            for t in 1:T, i in eachindex(s.bus)
-                ex = abs(Yp[i, t] - Pc[i, t]) + abs(Ym[i, t] - Mc[i, t])
-                ex > 0 && (pen += c_viol * Δt * (kv[i] + E.κ0) * ex)
-                exe = abs(Ye[i, t] - Ec[i, t])
-                exe > 0 && (pen += c_viol * (kv[i] + E.κ0) * s.hours[i] * exe)
-                t1 = mod(t, T) + 1
-                gd = s.hours[i] * (Ec[i, t1] - Ec[i, t]) / Δt - s.eta_in[i] * Pc[i, t] + Mc[i, t] / s.eta_out[i] - s.qt[i]
-                gdyn[i, t] = gd
-                gd > 0 && (pen += c_viol * Δt * (kv[i] + E.κ0) * gd)
-            end
-        end
-        st_cache[si] = (Yp, Pc, Ym, Mc, Ye, Ec, compp, kv, gdyn)
+        st_cache[si] = (Ye, Ec, kv)
     end
 
     # ---- priced balance, on the level-ℓ projection of the nodal residual
-    #      (the Laplace-mode analogue of aggregating the balance over a cluster)
+    #      (the analogue of aggregating the balance over a cluster)
     Bl = E.wspecs[1].B
     mr = modes_at(Bl, lv.M)
     rproj = mr < N
@@ -752,7 +696,7 @@ function energy_cost(E::EnergyModel, lk::Layout, lv::Layout, zk, zv, Xn; grad=fa
         a, b = sys.line_bus0[e], sys.line_bus1[e]
         dψ, dL = line_deval(LT, e, sys.line_s[e], F[e, t])
         dF = Gr[a, t] * (1 + 0.5 * dL) + Gr[b, t] * (-1 + 0.5 * dL)
-        θpen && (dF += c_viol * Δt * dψ)
+        dF += c_viol * Δt * dψ
         dΘ[a, t] += sys.line_b[e] * dF
         dΘ[b, t] -= sys.line_b[e] * dF
     end
@@ -796,25 +740,16 @@ function energy_cost(E::EnergyModel, lk::Layout, lv::Layout, zk, zv, Xn; grad=fa
         g.vf > 0 && add_field_grad!(gv, lv, vs, g.vf, dY)
     end
     for (si, s) in enumerate(E.stors)
-        if issoc(E)
-            Ye, Ec, kv = st_cache[si]
-            dk = s.kf > 0 ? dkc[s.kf] : zeros(length(kv))
-            add_field_grad!(gv, lv, vs, s.fe, soc_grad(s, Ye, Ec, kv, dk, Gr, Δt, c_viol, E.κ0))
-            continue
-        end
-        Yp, Pc, Ym, Mc, Ye, Ec, comp, kv, gdyn = st_cache[si]
+        Ye, Ec, kv = st_cache[si]
         dk = s.kf > 0 ? dkc[s.kf] : zeros(length(kv))
-        dYp, dYm, dYe = stor_grad(s, Yp, Pc, Ym, Mc, Ye, Ec, comp, kv, gdyn, dk, Gr, Δt, c_viol, E.κ0)
-        add_field_grad!(gv, lv, vs, s.fp, dYp)
-        add_field_grad!(gv, lv, vs, s.fm, dYm)
-        add_field_grad!(gv, lv, vs, s.fe, dYe)
+        add_field_grad!(gv, lv, vs, s.fe, soc_grad(s, Ye, Ec, kv, dk, Gr, Δt, c_viol, E.κ0))
     end
 
     # capacities: chain through the clamp and the modes
     gk_capex = zeros(lk.n)
     gk_op = zeros(lk.n)
     for (f, s) in enumerate(ks)
-        mask = ishard(E, lk, ks, f) ? ones(length(kn[f])) : Float64.((s.lo .< kn[f]) .& (kn[f] .< s.hi))
+        mask = Float64.((s.lo .< kn[f]) .& (kn[f] .< s.hi))
         add_field_grad!(gk_capex, lk, ks, f, reshape(gkn_capex[f], :, 1))
         add_field_grad!(gk_op, lk, ks, f, reshape(mask .* dkc[f], :, 1))
     end
@@ -842,8 +777,8 @@ end
 """
 Log density of the reference measure relative to Lebesgue measure on the
 utilization coordinates. With `measure = :physical` the dispatch of dispatchable
-units (generators without weather-dependent availability, and storage: charge,
-discharge and state of charge) is measured in MW (MWh), dp = k dω, which adds
+units (generators without weather-dependent availability, and the state of charge
+of storage) is measured in MW (MWh), dp = k dω, which adds
 n_u log(k_u + κ0) per investable unit u whose fields are complete at the level
 (n_u = number of its utilization coordinates). In utilization coordinates the
 cost-confined dispatch of a unit occupies a volume ∝ k^(−n_conf), an entropic
@@ -864,7 +799,7 @@ function log_measure(E::EnergyModel, lk::Layout, lv::Layout, zk)
     for st in E.stors
         (st.kf > 0 && iscomplete(lv, E.vspecs, st.fe) && iscomplete(lk, E.kspecs, st.kf)) || continue
         kc === nothing && (kc = [clamp.(vec(nodevals(zk, lk, E.kspecs, f)), s.lo, s.hi) for (f, s) in enumerate(E.kspecs)])
-        val += (issoc(E) ? 1 : 3) * lv.T * sum(log.(kc[st.kf] .+ E.κ0))
+        val += lv.T * sum(log.(kc[st.kf] .+ E.κ0))
     end
     return val
 end
@@ -894,43 +829,3 @@ function gen_grad(g::GenGroup, Y, Yc, comp, kv, A, dk, gXw, Xw, Gr, Δt, c_viol,
     return dY
 end
 
-@inline function clamp_grad!(dY, Y, Yc, dYc, i, t, scale, kvi, c_viol, dk)
-    if 0.0 < Y[i, t] < 1.0
-        dY[i, t] = dYc[i, t]
-    else
-        dY[i, t] = c_viol * scale * kvi * sign(Y[i, t] - Yc[i, t])
-        dk[i] += c_viol * scale * abs(Y[i, t] - Yc[i, t])
-    end
-end
-
-function stor_grad(s::StorGroup, Yp, Pc, Ym, Mc, Ye, Ec, comp, kv, gdyn, dk, Gr, Δt, c_viol, κ0)
-    T = size(Yp, 2)
-    dPc, dMc, dEc = zeros(size(Yp)), zeros(size(Ym)), zeros(size(Ye))
-    @inbounds for t in 1:T, i in eachindex(s.bus)
-        dpp = Δt * s.mc[i] + Gr[s.bus[i], t]
-        dpm = Δt * s.mc[i] - Gr[s.bus[i], t]
-        dPc[i, t] += kv[i] * dpp
-        dMc[i, t] += kv[i] * dpm
-        dk[i] += Pc[i, t] * dpp + Mc[i, t] * dpm
-    end
-    comp && return dPc, dMc, dEc
-    @inbounds for t in 1:T, i in eachindex(s.bus)
-        gd = gdyn[i, t]
-        if gd > 0
-            w = c_viol * Δt * (kv[i] + κ0)
-            t1 = mod(t, T) + 1
-            dEc[i, t1] += w * s.hours[i] / Δt
-            dEc[i, t] -= w * s.hours[i] / Δt
-            dPc[i, t] -= w * s.eta_in[i]
-            dMc[i, t] += w / s.eta_out[i]
-            dk[i] += c_viol * Δt * gd
-        end
-    end
-    dYp, dYm, dYe = zeros(size(Yp)), zeros(size(Ym)), zeros(size(Ye))
-    @inbounds for t in 1:T, i in eachindex(s.bus)
-        clamp_grad!(dYp, Yp, Pc, dPc, i, t, Δt, kv[i] + κ0, c_viol, dk)
-        clamp_grad!(dYm, Ym, Mc, dMc, i, t, Δt, kv[i] + κ0, c_viol, dk)
-        clamp_grad!(dYe, Ye, Ec, dEc, i, t, s.hours[i], kv[i] + κ0, c_viol, dk)
-    end
-    return dYp, dYm, dYe
-end

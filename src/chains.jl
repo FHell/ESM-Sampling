@@ -1,5 +1,5 @@
-# Several finest-level chains from dispersed starts and their convergence diagnostics
-# (docs/validation_plan.md Part A). Used by `run` when `nchains > 0`.
+# The CPU driver (`run`): several finest-level chains from dispersed starts and their
+# convergence diagnostics (docs/system/sampler.md §9, docs/system/validation.md).
 #
 # * Starts: capacities scaled (low ×0.5, high ×2, clamped to the boxes) or as set up
 #   (heuristic or LP); with fine weather moves every chain also starts from its own
@@ -79,16 +79,20 @@ end
 """
     run_chains(cfg) -> results
 
-The multi-chain mode of the driver (`nchains > 0`): level-0 warmup for the bias (α = 1),
-then `nchains` finest-level chains for `mlda_warmup + nsamples` sweeps each, diagnostics,
-HDF5 output (`chains/<k>/Q`, `convergence/…`).
+The CPU driver (`run`): level-0 warmup for the bias (α = 1), then `nchains`
+finest-level chains for `mlda_warmup + nsamples` sweeps each. During the warmup the
+online bias is refitted from the pooled scores of all chains and, with `co2_cap > 0`,
+the CO₂ price is tuned to the cap; both are frozen for production. Production
+records the monitored quantities, the post-correction samples and the sampled
+prices. Output: diagnostics and traces (`chains_report`) plus prices, the learned
+quantities and the calibration (`write_run_outputs`).
 """
 function run_chains(cfg::Config)
     rng = MersenneTwister(cfg.seed)
     P, sL, info = setup(cfg; rng=rng)
     L = nlevels(P) - 1
     t0 = time()
-    if P.use_bias                                  # level-0 warmup and bias learning, as in `run`
+    if P.use_bias                                  # level-0 warmup and bias learning
         S0 = new_sampler(P, sL, cfg)
         s0 = predescend(P, restrict_state(P, sL, 0), cfg)
         logmsg(cfg, "level-0 warmup and bias learning ($(cfg.warmup0) its)")
@@ -96,31 +100,47 @@ function run_chains(cfg::Config)
         P.bias.active = false
     end
     K = cfg.nchains
+    @assert K >= 1 "nchains must be at least 1"
     kinds = [cfg.chain_starts[mod1(c, length(cfg.chain_starts))] for c in 1:K]
     newweather = cfg.fine_weather > 0
     newweather || logmsg(cfg, "fine_weather = 0: all chains share the weather of the set-up state")
     chains = [chain_start(MersenneTwister(cfg.seed + 7 * c), P, sL, kinds[c], newweather) for c in 1:K]
     samplers = [new_sampler(P, chains[c], cfg) for c in 1:K]
-    foreach(S -> (S.p_fine = 1.0), samplers)       # finest-level kernel only (MLDA shelved)
     rngs = [MersenneTwister(cfg.seed + 1000 * c) for c in 1:K]
     nwarm, nprod = cfg.mlda_warmup, cfg.nsamples
     online = P.use_bias && cfg.bias_online
-    OB = OnlineBias(; every=cfg.bias_online_every, freeze=K * nwarm)
+    OB = OnlineBias(; every=cfg.bias_online_every, freeze=K * nwarm)   # refits during the warmup only
     PB = (P.use_bias && cfg.bias_post) ? PostBias() : nothing
     names = monitor_names(P)
     LM = LocalModel(P, L)
+    pacc = PriceAcc(P.E.sys.N, P.lv[L+1].T)
+    raccs = Dict("country" => RegionPriceAcc(P.E.sys.country), "system" => RegionPriceAcc(fill("all", P.E.sys.N)))
+    μs = Float64[]
     traces = [Vector{Vector{Float64}}() for _ in 1:K]
     logmsg(cfg, "$K chains (starts: $(join(kinds, ", "))), $nwarm warmup + $nprod sweeps each")
     for it in 1:nwarm+nprod
         for c in 1:K
-            chains[c] = level_step(rngs[c], P, chains[c], samplers[c], L)
+            chains[c] = fine_local_step(rngs[c], P, chains[c], samplers[c])
             if online && it <= nwarm
                 chains[c], upd = online_bias_step!(P, chains[c], OB; monotone=bias_monotone_args(P, cfg))
                 upd && (chains = [evaluate!(P, x) for x in chains])   # a refit changes the target of every chain
             end
             q = monitor_quantities(P, chains[c]; LM=LM)
             push!(traces[c], q)
-            (PB !== nothing && it > nwarm) && post_record!(PB, P, chains[c], q)
+            if it > nwarm
+                PB === nothing || post_record!(PB, P, chains[c], q)
+                LC = LocalCost(P, LM, chains[c])
+                accumulate_prices!(pacc, P, LM, LC)
+                foreach(a -> accumulate_region_prices!(a, P, LM, LC, chains[c]), values(raccs))
+            end
+        end
+        if cfg.co2_cap > 0 && it <= nwarm           # canonical price tuned to the cap (Robbins–Monro on the chain mean)
+            em = mean(x.parts.co2 for x in chains)
+            μ = P.E.co2[] * exp(0.5 / it^0.6 * clamp(em / cfg.co2_cap - 1, -1.0, 1.0))
+            set_co2_price!(P.E, μ)
+            chains = [evaluate!(P, x) for x in chains]
+            push!(μs, μ)
+            it == nwarm && logmsg(cfg, @sprintf("CO₂ price tuned to the cap: μ = %.1f €/t (mean emissions %.3g t)", μ, em))
         end
         if it % max(1, (nwarm + nprod) ÷ 10) == 0
             tot = [tr[end][length(P.E.kspecs)+3] for tr in traces]
@@ -128,14 +148,62 @@ function run_chains(cfg::Config)
                                  join((@sprintf("%.4e", x) for x in tot), " "), time() - t0))
         end
     end
-    return chains_report(cfg, P, names, traces, kinds, PB, nwarm, nprod, t0)
+    res = chains_report(cfg, P, names, traces, kinds, PB, nwarm, nprod, t0)
+    write_run_outputs(cfg, P, info, samplers, pacc, raccs, online ? OB : nothing, μs)
+    return (; res..., P, chains, samplers, info)
+end
+
+"""
+    write_run_outputs(cfg, P, info, samplers, pacc, raccs, OB, μs)
+
+Outputs of the CPU driver beyond `chains_report` (appended to `cfg.out`): sampled
+prices, the bias coefficients and refit times, the tuned CO₂ price, the learned
+quantities of the adaptive kernel per chain, the weather model and the calibration.
+"""
+function write_run_outputs(cfg::Config, P::Problem, info, samplers, pacc, raccs, OB, μs)
+    L = nlevels(P) - 1
+    h5open(cfg.out, "r+") do f
+        if pacc.n > 0
+            f["prices/sampled"] = prices(pacc)            # €/MWh per node and finest step, all chains
+            (info.ref == L && cfg.init == "lp") && (f["prices/lp"] = info.lp.dF_dX[1] ./ P.levels[end][2])   # LP duals at the same level
+            for (rn, a) in raccs                           # per region and season (DJF, MAM, JJA, SON)
+                for (key, val) in region_price_summary(a)
+                    f["prices/regions/$rn/$key"] = val
+                end
+            end
+        end
+        f["bias/theta"] = P.bias.θ
+        f["bias/a"] = P.bias.a
+        f["bias/c"] = P.bias.c
+        OB === nothing || (f["bias/online_updates"] = OB.updates)
+        isempty(μs) || (f["co2/price_trace"] = μs; f["co2/price"] = P.E.co2[])
+        for (c, S) in enumerate(samplers), (ℓ, AM) in S.loc.adapt   # learned quantities of the adaptive fine kernel
+            g = "adaptive/chain$c/level$ℓ"
+            f["$g/updates"] = AM.updates
+            f["$g/transport_modes"] = AM.Dθ
+            for ((kind, Lb, cl), Φ) in AM.shapes
+                f["$g/shapes/$(kind)_L$(Lb)_season$cl"] = Φ
+            end
+            nz = [n for n in eachindex(AM.runits) if !isempty(AM.runits[n])]
+            f["$g/response/nodes"] = nz
+            f["$g/response/beta_deficit"] = reduce(vcat, [AM.β[n][:, 1] for n in nz]; init=Float64[])
+            f["$g/response/beta_surplus"] = reduce(vcat, [AM.β[n][:, 2] for n in nz]; init=Float64[])
+            f["$g/response/units_per_node"] = [length(AM.runits[n]) for n in nz]
+        end
+        f["weather/transition"] = P.W.Ptr
+        f["weather/em_loglik"] = P.W.loglik
+        f["calibration/beta"] = [P.βk, P.βv]
+        f["calibration/lp_objective"] = info.lp.objective
+        f["calibration/lp_capacity"] = [sum(k) for k in info.lp.k]
+        f["config/levels"] = reduce(hcat, [[a, b] for (a, b) in cfg.levels])
+    end
 end
 
 """
     chains_report(cfg, P, names, traces, kinds, PB, nwarm, nprod, t0)
 
 Convergence diagnostics of per-chain traces (`traces[c][sweep]` = monitored quantities),
-the bias post-correction, and the HDF5 output of the multi-chain modes (CPU and device).
+the bias post-correction, and the HDF5 output of the drivers (CPU and device).
 """
 function chains_report(cfg::Config, P::Problem, names, traces, kinds, PB, nwarm, nprod, t0)
     K = length(traces)

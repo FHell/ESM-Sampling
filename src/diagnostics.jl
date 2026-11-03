@@ -1,4 +1,5 @@
-# Convergence diagnostics and sampled shadow prices.
+# Single-chain effective sample size and sampled shadow prices (multi-chain
+# diagnostics: convergence.jl).
 
 """
 Effective sample size of a scalar chain (Geyer's initial monotone sequence on
@@ -24,25 +25,6 @@ function ess(x::AbstractVector{<:Real})
     end
     τ = -1 + 2s
     return n / max(τ, 1.0 / n)
-end
-
-"Split-R̂ (Gelman et al.) over chains (vector of equal-length vectors)."
-function split_rhat(chains::Vector{<:AbstractVector})
-    halves = Vector{Vector{Float64}}()
-    for c in chains
-        h = length(c) ÷ 2
-        h < 2 && continue
-        push!(halves, c[1:h]); push!(halves, c[end-h+1:end])
-    end
-    m = length(halves)
-    m < 2 && return NaN
-    n = minimum(length.(halves))
-    halves = [h[1:n] for h in halves]
-    means = mean.(halves)
-    B = n * var(means)
-    W = mean(var.(halves))
-    W == 0 && return 1.0
-    return sqrt(((n - 1) / n * W + B / n) / W)
 end
 
 """
@@ -73,12 +55,6 @@ prices(acc::PriceAcc) = acc.sum ./ max(acc.n, 1)
 # ---------------------------------------------------------------------------
 # aggregated sampled prices (per region and season)
 # ---------------------------------------------------------------------------
-
-"Meteorological season (DJF=1, MAM=2, JJA=3, SON=4) of step τ of a level with steps of h hours."
-function season_of_step(τ::Int, h::Int)
-    d = (τ - 1) * h ÷ 24 + 1
-    d >= 335 || d <= 59 ? 1 : d <= 151 ? 2 : d <= 243 ? 3 : 4
-end
 
 """
 Accumulator of the sampled prices aggregated per region (any node labelling,
@@ -114,7 +90,7 @@ function accumulate_region_prices!(acc::RegionPriceAcc, P::Problem, LM::LocalMod
     Xn = weather_nodes(P.W, LM.ℓ, s.xs[end])
     sp, n, lw, ld, ns, nd = zeros(R, 4), zeros(R, 4), zeros(R, 4), zeros(R, 4), zeros(R, 4), zeros(R, 4)
     for τ in 1:LM.T
-        q = season_of_step(τ, h)
+        q = season(τ, h)
         for i in 1:E.sys.N
             x = LC.S[LM.cell[i], τ]
             p = x > 0 ? E.c_shed : (x < 0 ? -E.c_dump : 0.0)

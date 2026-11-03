@@ -79,7 +79,7 @@ function load_system(path::String)
     end
 end
 
-"Edges of the transfer graph used for the Laplace modes: (a, b, capacity)."
+"Edges of the transfer graph (lines and links) used for the Haar contrasts: (a, b, capacity)."
 transfer_edges(sys::System) =
     vcat([(a, b, s) for (a, b, s) in zip(sys.line_bus0, sys.line_bus1, sys.line_s)],
          [(a, b, c) for (a, b, c) in zip(sys.link_bus0, sys.link_bus1, sys.link_cap)])

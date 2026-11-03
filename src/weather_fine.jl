@@ -1,6 +1,6 @@
-# Fine-level weather moves (docs/model_completion.md §5).
+# Fine-level weather moves (docs/system/moves/weather.md).
 #
-# With MLDA shelved, the fine chain has to move the weather itself. The weather
+# The fine chain moves the weather itself. The weather
 # model is non-centered: coordinates (m, z0, w_1..w_L), with the anomalies of level
 # ℓ an affine function of (z0, w_1..w_ℓ) given the regimes m. Three moves, each
 # π-invariant at the finest level:

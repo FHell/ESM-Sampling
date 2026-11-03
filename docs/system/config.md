@@ -2,30 +2,35 @@
 
 This document lists every key of `Config` (`src/run.jl`) with its default and meaning, and
 states which values define the system as it is run. A configuration file is TOML with a
-subset of these keys (`load_config`; unknown keys are an error). Examples are in `configs/`.
-The model features behind the keys are explained in [model.md](model.md), the sampler options
-in [sampler.md](sampler.md).
+subset of these keys (`load_config`; unknown keys are an error, and `check_config` rejects
+values the code does not support). Examples are in `configs/`. The model features behind the
+keys are explained in [model.md](model.md), the sampler options in [sampler.md](sampler.md).
 
 ## 1. System settings
 
-Several defaults are legacy values kept for old configurations. The system as documented
-uses:
+The defaults are the values of the system:
 
 | key | system value | default |
 |---|---|---|
-| `basis` | `"haar"` or `"flow"` | `"laplace"` |
-| `kernel` | `"local"` | `"gibbs"` |
-| `storage` | `"soc"` | `"lp"` |
-| `renewables` | `"load"` | `"dispatch"` |
-| `regularized` | `true` | `true` |
-| `p_fine` | `1.0` (implied in the multi-chain and device drivers) | `0.5` |
-| `init` | `"heuristic"` (large networks) or `"lp"` (small) | `"lp"` |
-| `measure` | open design choice; the configurations use `"physical"` | `"utilization"` |
+| `basis` | `"haar"` or `"flow"` | `"haar"` |
+| `storage` | `"soc"` (the only form) | `"soc"` |
+| `renewables` | `"load"` (the only form) | `"load"` |
+| `init` | `"heuristic"` (large networks) or `"lp"` (small) | `"lp"` (the default data file is the 40-node model) |
+| `measure` | open design choice; the configurations use `"physical"` | `"utilization"` (kept until the choice is made) |
+| `nchains` | several chains (the configurations use 4) | 4 |
+| `bias_online` | refits during the finest-level warmup, frozen afterwards | `true` |
 
-> **Status: deviation.** The defaults of `Config` do not describe the system; every system
-> configuration sets the keys above explicitly. See `configs/complete40.toml` (all model
-> terms, adaptive kernel), `configs/chains40.toml` (multi-chain screening) and
-> `configs/device40.toml` (device run).
+All constraints are priced (there are no hard walls), the fine-level transition is
+`fine_local_step` in every driver, and the bias is refitted during the warmup only and frozen
+for production in every driver.
+
+System configurations: `configs/complete40.toml` (all model terms, adaptive kernel, α = 1).
+`configs/chains40.toml` and `configs/device40.toml` are **mechanics tests only**: they combine
+α = 0, the physical measure and capacity scaling moves, in which combination capacities can
+run away; they exercise the drivers and diagnostics and are not physically meaningful runs.
+`configs/haar_poc.toml` and `configs/flow.toml` are the base configurations of the tests and
+benchmarks; `configs/flow256.toml` and `configs/full256_era5.toml` are smoke configurations of
+the 256-node network.
 
 ## 2. All keys
 
@@ -42,8 +47,8 @@ uses:
 
 | key | default | meaning |
 |---|---|---|
-| `levels` | `[(4,24), (12,24), (40,24), (40,6)]` | levels $(M_\ell, h_\ell)$, coarse to fine ([model.md](model.md) §2.3) |
-| `basis` | `"laplace"` | `"haar"`, `"flow"` (Haar plus transport modes) or `"laplace"` (legacy) |
+| `levels` | `[(10, 24), (40, 24)]` | levels $(M_\ell, h_\ell)$, coarse to fine ([model.md](model.md) §2.3); the default suits the 40-node data (countries daily → nodes daily) |
+| `basis` | `"haar"` | `"haar"` (graph Haar) or `"flow"` (Haar plus transport modes) |
 | `flow_theta` | `"nested"` | `basis = "flow"`: modes as the coarse angle coordinates (`"nested"`) or only as moves (`"haar"`, large networks) |
 
 **Model.**
@@ -52,12 +57,11 @@ uses:
 |---|---|---|
 | `c_shed`, `c_dump` | 3000, 5 | balance prices (€/MWh) |
 | `c_viol` | 3000 | price of constraint violations (€/MWh per unit of excess) |
-| `regularized` | `true` | price all constraints instead of hard walls |
 | `measure` | `"utilization"` | reference measure of dispatchable units: `"utilization"` or `"physical"` |
-| `storage` | `"lp"` | `"soc"` (state-of-charge trajectory) or `"lp"` |
-| `renewables` | `"dispatch"` | `"load"` (output $Ak$, curtailment as dump) or `"dispatch"` |
+| `storage` | `"soc"` | storage form; only `"soc"` (state-of-charge trajectory) exists |
+| `renewables` | `"load"` | renewables as load (output $Ak$, curtailment as dump); the only form |
 | `co2_price` | NaN | canonical CO₂ price (€/t); NaN uses the price contained in the data file |
-| `co2_cap` | 0 | > 0: tune the CO₂ price during the finest-level warmup to this mean annual emission (t/a); single-chain driver only |
+| `co2_cap` | 0 | > 0: tune the CO₂ price during the finest-level warmup to this mean annual emission (t/a), frozen for production; CPU driver (on the mean over chains) |
 | `brownfield` | `false` | existing capacities as floors, capex on $k-k_0$, merged vintages, fixed thermal fleets |
 | `losses`, `loss_segments` | `false`, 4 | quadratic line losses; interpolation cells per rating |
 | `thermal`, `thermal_band` | `"hard"`, 0.1 | `"soft"` thermal limits; band width as a fraction of the rating |
@@ -82,21 +86,19 @@ uses:
 
 | key | default | meaning |
 |---|---|---|
-| `init` | `"lp"` | `"lp"` (reference LP at the first complete level) or `"heuristic"` (no LP); other values are legacy |
-| `descent_iters` | 4000 | reflective descent of the level-0 operation before the level-0 warmup (0: off) |
+| `init` | `"lp"` | `"lp"` (reference LP at the first complete level) or `"heuristic"` (no LP) |
+| `descent_iters` | 4000 | descent of the level-0 operation before the level-0 warmup (0: off) |
 
 **Fine-level kernel.**
 
 | key | default | meaning |
 |---|---|---|
-| `kernel` | `"gibbs"` | `"local"` (the system); other values select legacy kernels |
 | `fine_kernel` | `"auto"` | `"local"`, `"flow"`, `"adaptive"`; `"auto"` is `"flow"` with a flow basis, else `"local"` |
 | `local_extra` | 4.0 | random moves per node and step and sweep, on top of the atoms |
 | `cell_level_power` | 1.0 | cell moves: partition level drawn $\propto$ (number of cells)$^p$ |
 | `xloc_partner_hops` | 1 | localized pairs: partner within this many hops |
 | `xloc_ball_hops` | 0 | localized pairs: re-routing ball radius (0: the pair only) |
 | `fine_weather` | 0.0 | fraction of the weather coordinates moved per fine step (0: weather fixed at the fine level) |
-| `p_fine` | 0.5 | probability of a fine-kernel step; the rest go to a legacy kernel ([architecture.md](architecture.md) §9); system: 1 |
 
 **Bias.**
 
@@ -107,9 +109,8 @@ uses:
 | `bias_monotone` | `true` | monotone, bounded implied price in the $\hat g$ fit |
 | `bias_warmstart` | 20.0 | weight (in samples) of the LP-score warm start; `init = "lp"` only; 0: off |
 | `bias_start`, `bias_every` | 150, 25 | level-0 warmup: first learning iteration, refit interval |
-| `bias_online` | `true` | online refits from the finest chain's scores |
+| `bias_online` | `true` | online refits from the pooled scores of the finest chains during the finest-level warmup; frozen afterwards (all drivers) |
 | `bias_online_every` | 1 | observe every n-th finest step |
-| `bias_freeze` | `typemax` | single-chain driver: no refits after this many observations (multi-chain and device: end of warmup) |
 | `bias_post` | `true` | post-correction by reweighting at $\alpha = 1$ |
 
 **Run lengths.**
@@ -117,16 +118,14 @@ uses:
 | key | default | meaning |
 |---|---|---|
 | `warmup0` | 1500 | level-0 warmup iterations (bias learning) |
-| `n0` | 1500 | single-chain driver: level-0 production iterations |
 | `mlda_warmup` | 100 | finest-level warmup sweeps (all drivers; device: checkpoints) |
 | `nsamples` | 300 | finest-level production sweeps (device: checkpoints) |
-| `alpha0` | `true` | single-chain driver: also run an $\alpha = 0$ level-0 chain |
 
-**Multi-chain mode and convergence.**
+**Chains and convergence.**
 
 | key | default | meaning |
 |---|---|---|
-| `nchains` | 0 | > 0: run this many finest-level chains (`run_chains`; device: chains) |
+| `nchains` | 4 | finest-level chains (CPU: `run_chains`; device: chains) |
 | `chain_starts` | `["low", "high", "heuristic", "heuristic"]` | starts, cycled: capacities ×0.5, ×2, as set up |
 | `rhat_max` | 1.01 | convergence: rank-normalized split-$\hat R$ below this |
 | `ess_min` | 400 | bulk and tail ESS at least this |
@@ -143,5 +142,6 @@ uses:
 | `kmove_sigma` | 0.3 | scaling-move proposal scale (log capacity) |
 | `kpeak_sigma` | 0.05 | peak-set proposal scale, fraction of the unit's start capacity (at least 100 MW) |
 
-**Legacy keys** of code outside the system: `J`, `frac`, `ϱ`, `nleap`, `mass_windows`,
-`p_ffbs`, `p_scale`, `decomp_cap`, `decomp_block_days`; see [architecture.md](architecture.md) §9.
+**Obsolete keys.** `kernel`, `p_fine`, `alpha0` and `regularized` are accepted with a warning
+when they carry the value the code always uses (`"local"`, `1.0`, `false`, `true`), so that
+older files still load; any other value is an error. Remove them from configuration files.

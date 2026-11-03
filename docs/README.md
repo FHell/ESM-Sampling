@@ -21,7 +21,7 @@ onto the code. Agent and session rules are in [../CLAUDE.md](../CLAUDE.md).
 | [system/moves/capacity.md](system/moves/capacity.md) | scaling and peak-set capacity moves, level-0 capacity moves |
 | [system/moves/weather.md](system/moves/weather.md) | weather moves at the fine level and in the level-0 chain |
 | [system/moves/adding_a_move.md](system/moves/adding_a_move.md) | checklist for adding a move family, on the CPU and on the device |
-| [system/architecture.md](system/architecture.md) | packages, files, types, call graph of each driver, caches, threading, outputs, tests, legacy code |
+| [system/architecture.md](system/architecture.md) | packages, files, types, call graph of each driver, caches, threading, outputs, tests |
 | [system/device.md](system/device.md) | the GPU port: scope, state, exact padded sampler, rounds, capacity pass, host loop, status |
 | [system/config.md](system/config.md) | every configuration key with its default, and the values that define the system |
 | [system/data.md](system/data.md) | input files and their HDF5 layout, output layouts of each driver, caches |

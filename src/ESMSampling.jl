@@ -1,8 +1,9 @@
 """
 Near-optimal sampling of energy system decisions under weather uncertainty.
 
-Implements near_optimal_sampling_setup.md on a PyPSA-Eur network with a
-multilevel hierarchy of Laplace modes (space) and block coarsening (time).
+The CPU reference of the sampler (docs/system/): weather, capacities and dispatch
+of a PyPSA-Eur network sampled jointly from a two-temperature ensemble with a
+learned bias, on a graph-Haar hierarchy in space and block coarsening in time.
 """
 module ESMSampling
 
@@ -23,24 +24,19 @@ include("layout.jl")
 include("system.jl")
 include("flowbasis.jl")
 include("energy.jl")
-include("constraints.jl")
 include("lp.jl")
 include("weather.jl")
-include("hmc.jl")
 include("bias.jl")
 include("hierarchy.jl")
 include("bias_online.jl")
 include("bias_post.jl")
-include("mlda.jl")
-include("gibbs.jl")
-include("pairs.jl")
+include("level0.jl")
 include("local.jl")
 include("weather_moves.jl")
 include("weather_fine.jl")
 include("flowmoves.jl")
-include("timehier.jl")
 include("adaptive.jl")
-include("decompose.jl")
+include("sampler.jl")
 include("diagnostics.jl")
 include("convergence.jl")
 include("run.jl")

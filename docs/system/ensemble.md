@@ -200,7 +200,7 @@ $\rho_K$ only with the factor $r$; in $\rho_0$ it acts at full strength.
 
 ## 6. Regularized constraints
 
-No constraint is a hard wall (`regularized = true`). Every physical limit is priced at a
+No constraint is a hard wall. Every physical limit is priced at a
 large slope, so the target is positive everywhere:
 
 - **Balance.** The nodal residual $r_{n,\tau}$ (demand minus supply, including line and link

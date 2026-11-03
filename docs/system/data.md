@@ -38,7 +38,7 @@ Written by h5py in row-major order; Julia reads the axes reversed. Node and unit
 Matrices of traces are stored quantity × sample in Julia (sample × quantity when read with
 h5py). `quantity_names` names the rows.
 
-**Multi-chain mode and device runs** (`chains_report`):
+**CPU driver and device runs** (`chains_report`):
 
 | path | content |
 |---|---|
@@ -48,24 +48,18 @@ h5py). `quantity_names` names the rows.
 | `convergence/warmup_detected`, `window_start`, `converged`, `thresholds` | run-level verdict and the thresholds used |
 | `post/weights`, `post/ess`, `post/Q_weighted` | bias post-correction ($\alpha = 1$) |
 
-**Single-chain driver** (`run`):
+**CPU driver only** (`write_run_outputs`, appended to the same file):
 
 | path | content |
 |---|---|
-| `quantity_names` | quantities of `quantities` |
-| `finest/Q` | finest-chain production trace |
-| `level0/warmup_Q`, `level0/Q`, `level0/weather_diag`, `level0/warmup_weather_diag` | level-0 chain traces |
-| `exact/weather_diag` | weather diagnostics of exact draws (reference) |
-| `diagnostics/ess_*`, `diagnostics/rhat_*` | single-chain ESS and split-$\hat R$ per quantity, level 0 and finest |
-| `prices/sampled`, `prices/lp` | sampled prices per node and finest step (€/MWh); LP duals when the reference level is the finest |
+| `prices/sampled`, `prices/lp` | sampled prices per node and finest step over all chains (€/MWh); LP duals when the reference LP (`init = "lp"`) is at the finest level |
 | `prices/regions/<country\|system>/{mean,load_weighted,p_shed,p_dump}/{mean,se,trace}`, `regions`, `seasons` | sampled prices and shortage/surplus frequencies per region and meteorological season |
-| `post/weights`, `logw`, `ess`, `Q_weighted`, `Q_unweighted`, `weather_diag_weighted`, `weather_diag_unweighted`, `weather_diag_exact` | bias post-correction |
-| `bias/theta`, `bias/a`, `bias/c`, `bias/online_updates` | final bias coefficients and refit times |
-| `adaptive/level<ℓ>/updates`, `transport_modes`, `shapes/<kind>_L<L>_season<c>`, `response/{nodes,beta_deficit,beta_surplus,units_per_node}` | learned quantities of the adaptive kernel |
+| `bias/theta`, `bias/a`, `bias/c`, `bias/online_updates` | bias coefficients (after the post-correction refit when `bias_post`) and the observation counts of the online refits |
+| `co2/price`, `co2/price_trace` | tuned CO₂ price and its warmup trace (`co2_cap > 0`) |
+| `adaptive/chain<c>/level<ℓ>/updates`, `transport_modes`, `shapes/<kind>_L<L>_season<s>`, `response/{nodes,beta_deficit,beta_surplus,units_per_node}` | learned quantities of the adaptive kernel per chain (season `s`: DJF, MAM, JJA, SON) |
 | `weather/transition`, `weather/em_loglik` | fitted regime transition matrix and EM trace |
 | `calibration/beta`, `lp_objective`, `lp_capacity` | temperatures $(\beta_k,\beta_v)$ and the reference LP |
 | `config/levels` | the levels |
-| `estimate/…`, `pairs/…`, `mlda/…`, `alpha0/Q`, `costmap/…`, `level0/hmc_acc` | legacy outputs ([architecture.md](architecture.md) §9) |
 
 ## 4. Caches
 

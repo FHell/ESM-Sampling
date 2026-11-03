@@ -43,16 +43,15 @@ its support, and a node-level box $[\underline y,\bar y]$.
 | `uc_<carrier>` | instant | committable units | $[0,1]$ | committed fraction $c$ |
 | `links` | step | links (identity basis) | $[-1,1]$ | signed link utilization $u$ |
 | `se_<carrier>` | instant | storage units | $[0,1]$ | state of charge as a fraction of $h k$ |
-| `sp_`, `sm_<carrier>` | step | storage units | $[0,1]$ | charge, discharge utilization (`storage = "lp"` only) |
 | `load`, `onwind`, `offwind`, `solar` | step | weather supports | none | weather fields ([weather_model.md](weather_model.md)) |
 
 A step field has one value per step; an instant field has one value per instant (the start
-of each step), and the year is cyclic. Renewables treated as load (`renewables = "load"`)
-have no utilization field.
+of each step), and the year is cyclic. Renewables are treated as load and have no
+utilization field.
 
 ### 2.2 Spatial bases
 
-With `basis = "haar"` or `"flow"` every field is expanded in a sparse orthonormal **graph
+Every field is expanded in a sparse orthonormal **graph
 Haar basis** on its support, for the nested partition network → countries → nodes
 (`haar_basis`). The first vectors are the normalized indicators of the coarsest cells; then,
 level by level, each parent cell gets contrasts between its children arranged as a balanced
@@ -70,8 +69,6 @@ of partition level $q$, so the orthogonal projection onto a level is the cell me
   vectors are the Haar vectors with the modes projected out (dense); with
   `flow_theta = "haar"` the angles keep the sparse Haar basis and the modes are used only as
   move directions (large networks).
-- `basis = "laplace"` (Laplace modes of the network, nested by Gram–Schmidt) is legacy; the
-  local kernel needs the Haar basis ([architecture.md](architecture.md) §9).
 
 ### 2.3 Levels
 
@@ -120,8 +117,7 @@ incrementally (`cache_cost` equals `energy_cost` to round-off).
 `brownfield` minus the sunk $\sum_u c_u k_{0,u}$. It enters as $-\beta_k K$.
 
 **Dispatchable generators.** Output $p = A\,\mathrm{cl}(k)\,\mathrm{cl}(\omega)$, with $A$ the
-constant availability (or the weather availability $\bar a$ for a weather-dependent unit
-when `renewables = "dispatch"`). Cost $\Delta t\,C_{\rm vint}(p) + c_v\Delta t\,w\,|\omega -
+constant availability. Cost $\Delta t\,C_{\rm vint}(p) + c_v\Delta t\,w\,|\omega -
 \mathrm{cl}(\omega)|$. Without vintages $C_{\rm vint}(p) = \mathrm{mc}\,p$. With
 `brownfield`, a unit holds the existing capacity $k_0$ (old vintage) and $k - k_0$ (new) and
 dispatches in merit order:
@@ -130,9 +126,8 @@ $q_{\rm lo}$ the capacity of the cheaper vintage (`gen_vint`). Marginal costs ar
 $\mathrm{mc} = \mathrm{mc}_{\rm fuel} + \mu\,\mathrm{ef}$ for the canonical CO₂ price $\mu$ and
 the emission factor ef of each vintage (`set_co2_price!`). Emissions are reported.
 
-**Renewables as load** (`renewables = "load"`). Output is $\bar a\,\mathrm{cl}(k)$ exactly,
-with its (small) running cost; curtailment is the negative nodal residual and is priced as
-dump. With `renewables = "dispatch"` they are dispatchable units with a utilization field.
+**Renewables as load.** Output is $\bar a\,\mathrm{cl}(k)$ exactly, with its (small)
+running cost; curtailment is the negative nodal residual and is priced as dump.
 
 **Fleet unit commitment** (`uc`). For a committable unit, the committed fraction
 $c\in[0,1]$ is an instant field. Costs: no-load $\Delta t\,a\,A k\,\mathrm{cl}(c)$, start-up
@@ -141,7 +136,7 @@ $c_v\Delta t\,w\,[(\mathrm{cl}(\omega)-\mathrm{cl}(c))_+ + (g_{\min}\mathrm{cl}(
 |c-\mathrm{cl}(c)|]$. The parameters $(g_{\min}, s, a)$ per carrier are assumptions
 (`UC_DEFAULTS`: gas 0.3/40/4, coal 0.4/80/3, lignite 0.5/100/3, nuclear 0.5/150/1, …).
 
-**Storage, state-of-charge form** (`storage = "soc"`). One trajectory $e_\tau\in[0,1]$ per
+**Storage, state-of-charge form.** One trajectory $e_\tau\in[0,1]$ per
 unit. With $d_\tau = h(\mathrm{cl}(e_{\tau+1})-\mathrm{cl}(e_\tau))/\Delta t - q$ ($q$ the
 inflow per unit power), charging is $p^+ = d/\eta^+$ for $d\ge0$ and discharge
 $p^- = \min(-d\,\eta^-, 1)$ otherwise (energy beyond the power limit is spilled). The
@@ -150,9 +145,6 @@ $c_v w h|e - \mathrm{cl}(e)|$ (energy outside the box), $c_v\Delta t\,w(p^+-1)_+
 beyond the rating), $c_v\Delta t\,w(-d\eta^- - 1)_+$ for units without inflow (discharge beyond
 the rating), and $c_v\Delta t\,w\,d$ for units that cannot charge ($\eta^+ = 0$). Simultaneous
 charge and discharge cannot occur.
-
-**Storage, LP form** (`storage = "lp"`, legacy). Separate charge, discharge and SoC fields
-with the dynamics inequality priced at $c_v$.
 
 **Links.** Signed flow $u\,\mathrm{cap}$ with $u$ clamped to $[-1,1]$, losses $(1-\eta)|u\,\mathrm{cap}|$
 at the receiving end (`link_inj`; $\eta = 1$ unless `link_losses`), penalty
@@ -201,11 +193,8 @@ as it is run.
 
 | key | default | feature |
 |---|---|---|
-| `storage` | `"lp"` | `"soc"`: state-of-charge storage (the system form); `"lp"`: charge/discharge/SoC fields |
-| `renewables` | `"dispatch"` | `"load"`: renewables as negative load (the system form) |
 | `measure` | `"utilization"` | `"physical"`: reference measure in MW for dispatchable units (open choice) |
-| `regularized` | `true` | all constraints priced; `false` gives hard walls (legacy) |
-| `basis`, `flow_theta` | `"laplace"`, `"nested"` | spatial basis (§2.2) |
+| `basis`, `flow_theta` | `"haar"`, `"nested"` | spatial basis (§2.2) |
 | `co2_price` | NaN (the file's price, 150 €/t) | canonical CO₂ price $\mu$ |
 | `co2_cap` | 0 (off) | tune $\mu$ during the finest-level warmup so that the mean emissions equal the cap, then freeze |
 | `brownfield` | `false` | existing capacities as floors, capex on $k-k_0$, merged vintages, fixed thermal fleets; the upper box is raised to at least $1.1\,k_0$ |

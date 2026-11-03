@@ -69,9 +69,6 @@ function AdaptiveModes(P::Problem, ℓ::Int; K::Int=8, lengths=[2, 4, 8, 16, 32]
                   haar_theta(E), Vector{Tuple{Int,Float64}}[])
 end
 
-"Season class (1 winter … 4 autumn) of step τ at a level with h-hour steps (depends on τ only)."
-seasonof(τ::Int, h::Int) = ((((τ - 1) * h) ÷ 24) ÷ 92) % 4 + 1
-
 "Accumulate one state (its local caches) into the empirical moments (Welford around the running means)."
 function observe!(AM::AdaptiveModes, P::Problem, LM::LocalModel, LC::LocalCost)
     AM.nobs >= AM.freeze && return AM
@@ -108,7 +105,7 @@ function observe!(AM::AdaptiveModes, P::Problem, LM::LocalModel, LC::LocalCost)
                 acc = zeros(size(C))
                 cnt = 0
                 for b in 0:nb-1, i in axes(Y, 1)
-                    seasonof(b * L + 1, h) == cl || continue
+                    season(b * L + 1, h) == cl || continue
                     if kind == :gen
                         seg = d[i, b*L+1:(b+1)*L]
                         seg = seg .- mean(seg)
@@ -294,7 +291,7 @@ function adaptive_block_sweep!(rng, P::Problem, LM::LocalModel, AM::AdaptiveMode
                 jac = empty!(pool.wss[1].jac)
                 us1 = NTuple{2,Int}[(0, 0)]                     # single-unit selection (reused)
                 b0 = cls[q]
-                cl = seasonof(b0, h)
+                cl = season(b0, h)
                 Φs = get(AM.shapes, (:soc, L, cl), nothing)
                 Φg = get(AM.shapes, (:gen, L, cl), nothing)
                 for _ in 1:nmoves
@@ -361,13 +358,13 @@ function adaptive_sweep!(rng, P::Problem, LM::LocalModel, FF::FlowFrames, AM::Ad
     fams, mult = flow_families(P.E)
     fams = vcat(fams, [(:amode, 0.03), (:acut, 0.1), (:amode0, 0.03)])
     learned && append!(fams, [(:tmodeL, 0.03), (:tcutL, 0.1), (:tlineL, 0.05), (:tpotL, 0.05), (:amodeL, 0.02), (:acutL, 0.08)])
-    learned && issoc(P.E) && push!(fams, (:tsocL, 0.05))
+    learned && push!(fams, (:tsocL, 0.05))
     wb = sum(last.(fams[1:findfirst(f -> f[1] == :tpot, fams)-1]))
     mult = sum(last.(fams)) / wb
     s, st1 = local_sweep!(rng, P, LM, s; wsets=wsets, extra=extra * mult, families=fams, frames=FF, adapt=AM)
     lrn = learned && length(AM.updates) > 0 ? (AM=AM, FF=FF) : nothing
-    issoc(P.E) && rand(rng) < 0.5 && ((s, _) = storage_ms_sweep!(rng, P, LM, s; pools=pools,
-                                                             learn=(lrn !== nothing && rand(rng) < 0.5) ? lrn : nothing))
+    rand(rng) < 0.5 && ((s, _) = storage_ms_sweep!(rng, P, LM, s; pools=pools,
+                                                   learn=(lrn !== nothing && rand(rng) < 0.5) ? lrn : nothing))
     s, st2 = adaptive_block_sweep!(rng, P, LM, AM, s; pools=pools, learn=lrn)
     LC = LocalCost(P, LM, s)
     observe!(AM, P, LM, LC)

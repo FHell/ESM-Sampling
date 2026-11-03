@@ -1,5 +1,5 @@
-# Multilevel Gaussian-mixture weather model (§3) on the Laplace-mode/time
-# hierarchy.
+# Multilevel Gaussian-mixture weather model (docs/system/weather_model.md) on the
+# space/time hierarchy.
 #
 # Coordinates: standardized anomalies x' (physical anomaly / scale_f) in the
 # level layout of the weather fields. Coarsest level: regime-switching VAR(1)
@@ -42,7 +42,11 @@ end
 n0(W::WeatherModel) = W.lays[1].n ÷ W.lays[1].T
 harmonics(τ, T0) = (1.0, cos(2π * τ / T0), sin(2π * τ / T0))
 
-"Meteorological season (DJF=1, MAM=2, JJA=3, SON=4) of the level-0 step τ0."
+"""
+Meteorological season (DJF=1, MAM=2, JJA=3, SON=4) of step τ0 of a level with
+steps of h0 hours (365-day year from 1 January). The one season definition of the
+code: weather details, sampled prices and the season classes of the learned shapes.
+"""
 function season(τ0::Int, h0::Int)
     d = (τ0 - 1) * h0 ÷ 24 + 1
     d >= 335 || d <= 59 ? 1 : d <= 151 ? 2 : d <= 243 ? 3 : 4

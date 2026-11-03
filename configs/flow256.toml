@@ -1,21 +1,14 @@
 # Flow-based hierarchy on the 256-node PyPSA-Eur network of the 10-country region
 # (external/pypsa-eur, config/config.esm.yaml): sparse Haar angles with the transport
-# modes as moves, SoC storage, renewables as negative load.
+# modes as moves, α = 0. Sample counts are those of a smoke test.
 data = "data/processed/model256.h5"
 out = "results/flow256.h5"
 basis = "flow"
 flow_theta = "haar"
-kernel = "local"
-storage = "soc"
-renewables = "load"
 levels = [[10, 24], [256, 24]]
 use_bias = false
-alpha0 = false
 descent_iters = 0
 warmup0 = 5
-n0 = 5
-J = [2]
-p_fine = 0.7
 mlda_warmup = 2
 nsamples = 5
 init = "heuristic"

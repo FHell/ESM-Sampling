@@ -31,7 +31,7 @@ when done, and the affected document is updated in the same change.
   sweeps) does not converge (max $\hat R$ 4.6, bulk ESS 4–18); the slowest quantities are the
   capacities, the annual weather means and the regimes. Runs long enough for the criterion of
   [validation.md](validation.md) §1 are needed, on the device for 256 nodes.
-- **Freeze adaptation before the measurement window** in the multi-chain mode (the adaptive
+- **Freeze adaptation before the measurement window** in the drivers (the adaptive
   modes keep updating), and add the weight-ESS condition to the verdict.
 - **Comparison with PyPSA-Eur** ([validation.md](validation.md) §2): the time-series import mode
   of the extractor, PyPSA-Eur solves on the imported networks, the low-temperature limit,
@@ -45,7 +45,7 @@ when done, and the affected document is updated in the same change.
 - **Investable line ratings and storage energy-to-power ratios** (currently fixed; they shape
   the feasible operation).
 - **Interannual variability** in the weather model (a per-year latent factor).
-- **`co2_cap`** in the multi-chain mode and the device driver.
+- **`co2_cap`** in the device driver.
 - **Temperature scaling with resolution:** a fixed $\beta_v$ makes the operational slack per
   unit of cost grow with the number of steps; decide whether $\beta_v$ should scale with the
   number of confined coordinates.
