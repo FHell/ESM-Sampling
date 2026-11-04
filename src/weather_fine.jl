@@ -446,10 +446,11 @@ not given; it follows the accepted moves). Moves in coarse blocks j with equal j
 at their level are independent (their windows at the finest level are separated; M
 from the spread of the windows; the bias change of a move is local to its window) and
 run in parallel. Then `zblocks` joint block moves of z0 in expectation (weather_blocks.jl),
-in sequence.
+in sequence, of the lengths whose window spans at most `zmaxspan` finest-level steps.
 """
 function fine_weather_sweep!(rng, P::Problem, LM::LocalModel, s::State; frac::Float64=0.05, frac0::Float64=0.05,
-                             comp::Bool=true, pools=nothing, LC=nothing, BC=nothing, zblocks::Float64=0.0)
+                             comp::Bool=true, pools=nothing, LC=nothing, BC=nothing, zblocks::Float64=0.0,
+                             zmaxspan::Int=600)
     W = P.W
     L = s.ℓ
     @assert LM.ℓ == L
@@ -510,7 +511,7 @@ function fine_weather_sweep!(rng, P::Problem, LM::LocalModel, s::State; frac::Fl
     end
     # joint low-frequency block moves of z0 (weather_blocks.jl), `zblocks` per sweep in expectation
     nb = zblocks > 0 ? floor(Int, zblocks) + (rand(rng) < zblocks - floor(zblocks)) : 0
-    nb > 0 && z0_block_sweep!(rng, P, LM, s, nb; LC=LC, BC=BC, pool=pools[1], comp=comp)
+    nb > 0 && z0_block_sweep!(rng, P, LM, s, nb; LC=LC, BC=BC, pool=pools[1], comp=comp, maxspan=zmaxspan)
     BC === nothing || bias_resum!(BC, P.bias)
     return evaluate!(P, s), stats
 end

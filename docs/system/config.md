@@ -101,6 +101,7 @@ the 256-node network.
 | `kop` | `false` | capacity moves with their operation ([moves/capacity.md](moves/capacity.md)) in every fine step, after `kscale` and `kpeak` |
 | `fine_weather` | 0.0 | fraction of the weather coordinates moved per fine step (0: weather fixed at the fine level) |
 | `fine_weather_blocks` | 1.0 | with `fine_weather > 0`: joint $z_0$ block moves (16, 64, 365 level-0 steps) per fine step, in expectation ([moves/weather.md](moves/weather.md)) |
+| `fine_weather_block_steps` | 600 | ... only of the lengths whose window spans at most this many finest-level steps: all three daily, 16 and 64 at 3 h and 6 h, 16 at 1 h |
 
 **Bias.**
 

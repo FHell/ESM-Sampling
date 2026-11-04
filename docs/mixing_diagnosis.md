@@ -712,3 +712,16 @@ measured took 145 ms without and 188 ms with one block move). At α = 0 the move
 cost-confined (median |t| of accepted moves 2.4e-3, 1.0e-3, 4.8e-4 in the direction units), as
 in §5.2. Far from equilibrium (the relaxed heuristic start) a block move is several times more
 expensive (45, 700 and 6200 ms), because the walk crosses many more compensation kinks.
+
+**At 6-hourly resolution** (`scripts/mixing/wblock_cost6h.jl`, `complete40.toml` at α = 0: 40
+nodes × 6 h, adaptive kernel, all model terms; a state after 15 fine steps from the heuristic
+start; 4 threads): a fine step takes 19.9 s, its weather sweep 5.7 s. Block moves cost 0.43 s
+(B = 16, window 80 finest steps), 1.88 s (B = 64, 272 steps) and 35.1 s (B = 365, 1476 steps)
+per move, accepted 2/12, 2/6 and 0/3. With all three lengths the mixture costs 1.88 s per move
+(9.5 % of a fine step), two thirds of it in the rare 365-day moves, each of which makes its fine
+step almost three times longer. The lengths are therefore capped by their window at the finest
+level (`fine_weather_block_steps` = 600 finest steps: all three daily, 16 and 64 at 3 and 6 h,
+16 at 1 h); at 6 h the default then costs 0.72 s per move, 3.6 % of a fine step. Under the
+prior the mixture without B = 365 has about 30 % lower rates per move for the annual load mean
+(5.8e-4 against 8.4e-4), which at the daily costs gives the same rate per CPU second (1.4e-2)
+and at the 6-hourly costs a 1.8 times higher one.

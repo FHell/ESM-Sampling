@@ -88,6 +88,14 @@ function z0_block_span(W::WeatherModel, L::Int, B::Int)
 end
 
 """
+Block lengths (in level-0 steps) of `lengths` whose window at the finest level `ℓ` spans at
+most `maxspan` steps: the cost of a block move grows faster than linearly with its window, so
+the longest blocks are left out at fine time resolutions.
+"""
+z0_block_lengths(W::WeatherModel, ℓ::Int, lengths, maxspan::Int) =
+    Tuple(B for B in lengths if z0_block_span(W, ℓ, min(B, W.lays[1].T)) <= maxspan)
+
+"""
     z0_block_prepare!(bm, P, LM, LC, s, jac, a, b, v; comp) -> (ch, dz, quad) or nothing
 
 Prepare the block move of direction v on the level-0 steps a..b: the chain of windowed
@@ -139,18 +147,20 @@ function z0_block_move!(rng, P::Problem, LM::LocalModel, LC::LocalCost, s::State
 end
 
 """
-    z0_block_sweep!(rng, P, LM, s, nmoves; LC, BC, pool, lengths, comp) -> (s, stats)
+    z0_block_sweep!(rng, P, LM, s, nmoves; LC, BC, pool, lengths, maxspan, comp) -> (s, stats)
 
 `nmoves` joint block moves of the level-0 weather in sequence, each with a length B drawn
-from `lengths` with probabilities ∝ 1/B (about equal CPU time per length), a start uniform
+from those of `lengths` whose window spans at most `maxspan` finest-level steps
+(`z0_block_lengths`; none: no moves) with probabilities ∝ 1/B, a start uniform
 over the level-0 steps (the block clipped at the end of the year) and a direction drawn
 uniformly from `z0_block_directions(P.W)`. The caches `LC` and `BC` (built if not given)
 follow the accepted moves; the sums of `BC` are recomputed at the end. stats: (moves, moved).
 """
 function z0_block_sweep!(rng, P::Problem, LM::LocalModel, s::State, nmoves::Int; LC=nothing, BC=nothing, pool=nothing,
-                         lengths=(16, 64, 365), comp::Bool=true, V=nothing)
+                         lengths=(16, 64, 365), maxspan::Int=600, comp::Bool=true, V=nothing)
     W = P.W
-    nmoves > 0 || return s, (0, 0)
+    lengths = z0_block_lengths(W, s.ℓ, lengths, maxspan)
+    (nmoves > 0 && !isempty(lengths)) || return s, (0, 0)
     LC = LC === nothing ? LocalCost(P, LM, s) : LC
     BC = (P.use_bias && BC === nothing) ? BiasCache(P, s) : BC
     V = V === nothing ? z0_block_directions(W) : V

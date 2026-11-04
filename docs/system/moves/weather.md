@@ -59,12 +59,16 @@ directions in which block means fluctuate most.
 
 **Selection.** In sequence after the coordinate moves, `fine_weather_blocks` moves per sweep in
 expectation (the integer part, plus one with the probability of the remainder); per move a
-length $B\in\{16, 64, 365\}$ level-0 steps with probability $\propto 1/B$, a start uniform over
-the year (the block clipped at its end) and a direction uniform among the six: all independent
-of the state. **Cost.** As a coordinate move whose window spans the block; at 40 nodes daily
-about 24, 108 and 600 ms for $B$ = 16, 64 and 365 at an equilibrated state, 60 ms per move in
-the mixture, and several times more far from equilibrium. The window grows with the number of
-finest steps per level-0 step, so at hourly resolution the long blocks become expensive.
+length $B\in\{16, 64, 365\}$ level-0 steps with probability $\propto 1/B$ among the lengths
+whose window at the finest level (the block plus one coarse step on each side per level)
+spans at most `fine_weather_block_steps` = 600 finest steps (`z0_block_lengths`: all three at
+a daily finest level, 16 and 64 at 3 h and 6 h, 16 at 1 h), a start uniform over the year (the
+block clipped at its end) and a direction uniform among the six: all independent of the state.
+**Cost.** As a coordinate move whose window spans the block, growing faster than linearly with
+the window: at 40 nodes daily about 24, 108 and 600 ms for $B$ = 16, 64 and 365 at an
+equilibrated state (60 ms per move in the mixture, several times more far from equilibrium); at
+40 nodes × 6 h (`complete40.toml`, all model terms, after 15 fine steps) 0.43, 1.9 and 35 s, so
+that the default lengths 16 and 64 cost 0.7 s per move, 3.6 % of a 20 s fine step.
 
 **Use.** Under the weather prior alone, the block mixture moves the annual and seasonal load
 means 60–140 times faster per CPU second than the coordinate moves (which need at least about

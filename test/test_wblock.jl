@@ -26,6 +26,11 @@ if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
     @testset "z0 block moves: directions and VAR quadratic" begin
         @test size(V) == (MW.n0(W), 6)
         @test V' * V ≈ I
+        # lengths whose window at the finest level (6 h here) fits the cap
+        @test MW.z0_block_span(W, L, 365) == ((365 + 2) * W.trs[1].r + 2) * W.trs[2].r
+        @test MW.z0_block_lengths(W, L, (16, 64, 365), 600) == (16, 64)
+        @test MW.z0_block_lengths(W, L, (16, 64, 365), 10^6) == (16, 64, 365)
+        @test isempty(MW.z0_block_lengths(W, L, (16, 64, 365), 10))
         rng = MersenneTwister(51)
         s = MW.evaluate!(P1, copy(sL))
         for trial in 1:20

@@ -35,6 +35,7 @@ Base.@kwdef mutable struct Config
     uc::Vector{String} = String[]   # carriers with fleet unit commitment (e.g. ["gas", "coal", "lignite"])
     fine_weather::Float64 = 0.0     # fraction of the weather coordinates moved per fine-level step (0: weather fixed at the fine level)
     fine_weather_blocks::Float64 = 1.0  # with fine_weather > 0: joint z0 block moves (16, 64, 365 days) per fine step, in expectation
+    fine_weather_block_steps::Int = 600 # ... of the lengths whose window spans at most this many finest-level steps
     init::String = "lp"             # initial state: "lp" (reference LP) or "heuristic" (no LP)
     basis::String = "haar"          # spatial basis: "haar" (graph Haar, countries → nodes) or "flow" (Haar plus transport modes)
     use_bias::Bool = true           # α = 1 (learned bias) or α = 0
@@ -361,7 +362,8 @@ function new_sampler(P::Problem, s::State, cfg::Config)
     return ChainSampler(fill(1e-3, nkf), zeros(Int, nkf), zeros(Int, nkf), false, GibbsState(P),
                         LocalKernel(P; extra=cfg.local_extra, mode=Symbol(cfg.fine_kernel), weather=cfg.fine_weather,
                                     lmkw=(cell_power=cfg.cell_level_power, xr_partner=cfg.xloc_partner_hops,
-                                          xr_ball=cfg.xloc_ball_hops), kop=cfg.kop, wblocks=cfg.fine_weather_blocks))
+                                          xr_ball=cfg.xloc_ball_hops), kop=cfg.kop, wblocks=cfg.fine_weather_blocks,
+                                    wblockspan=cfg.fine_weather_block_steps))
 end
 
 """
