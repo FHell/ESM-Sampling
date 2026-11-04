@@ -1,7 +1,7 @@
 #!/bin/bash
 # CPU run with guaranteed runtime (QOS short, not preempted), for when preemption would hurt:
 #   sbatch [-c <cores>] hpc/jobs/cpu_short.sbatch <campaign> <config> [cpu|script <path> args...]
-#SBATCH --account=coen
+#SBATCH --account=icone
 #SBATCH --qos=short
 #SBATCH --job-name=esm-cpus
 #SBATCH --nodes=1

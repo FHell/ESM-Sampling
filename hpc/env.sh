@@ -5,7 +5,7 @@
 # --- who and where -------------------------------------------------------------------------
 export ESM_USER=${ESM_USER:-hellmann}
 export ESM_PROJECT=${ESM_PROJECT:-coen}
-export ESM_ACCOUNT=${ESM_ACCOUNT:-coen}                       # Slurm account (--account)
+export ESM_ACCOUNT=${ESM_ACCOUNT:-icone}                      # Slurm account (--account); the project directory is coen
 export ESM_PROJ=${ESM_PROJ:-/p/projects/$ESM_PROJECT/esm}      # permanent, backed up
 export ESM_SCRATCH=${ESM_SCRATCH:-/p/tmp/$ESM_USER/esm}       # fast, purged when inactive
 export ESM_CODE=${ESM_CODE:-$ESM_PROJ/ESM-Sampling}           # the git clone; results are committed here

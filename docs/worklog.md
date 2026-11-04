@@ -75,7 +75,7 @@ concrete next steps. Update it at the end of every work session.
 - Checkpoint and resume with SIGTERM handling in `run_chains` and `run_device`.
 - `hpc/` scripts built (env, prepare, campaigns, run wrapper, collection into git, job
   templates, H0 checks; wrapper mechanics tested locally); cluster values filled in (user
-  hellmann, project and account coen, julia/1.12.2, CUDA 13 → Reactant 13.1, ERA5 at
+  hellmann, project directory coen, Slurm account icone, julia/1.12.2, CUDA 13 → Reactant 13.1, ERA5 at
   /p/projects/climate_data_central/reanalysis/ERA5, clone at /p/projects/coen/esm/ESM-Sampling).
   Model files built on the cluster (`hpc/prepare_data.sh`, `hpc/jobs/data.sbatch`), no manual
   copy. Next on the cluster: pull, prepare_env.sh, data.sbatch small, H0; then H2 with

@@ -3,8 +3,8 @@
 How the sampler is run on the PIK cluster (HPC2024, Slurm): the environment, where code, data,
 caches and results live, the job types, checkpointing, how every run is recorded, and how
 results come back. The scripts are in `hpc/`; the campaigns are rows H0–H9 of the experiment
-ledger ([../experiments.md](../experiments.md)). User `hellmann`, project and Slurm account
-`coen`.
+ledger ([../experiments.md](../experiments.md)). User `hellmann`, project directory `coen`
+(`/p/projects/coen`), Slurm account `icone`.
 
 > **Status: deviation.** The scripts exist; the driver side is partly missing. The shared cache
 > (`cache_dir`), the state snapshots and resume of the CPU driver are being built (§4, §7);

@@ -4,7 +4,7 @@
 # Runs in standby on a shared node and is requeued automatically when preempted; it resumes from
 # the latest state snapshot. Threads follow the allocation (hpc/run.sh): Julia threads = cores,
 # BLAS/OpenMP 1. RESUBMIT=<n> sbatch ... chains continuations past the time limit.
-#SBATCH --account=coen
+#SBATCH --account=icone
 #SBATCH --partition=priority
 #SBATCH --qos=standby
 #SBATCH --requeue

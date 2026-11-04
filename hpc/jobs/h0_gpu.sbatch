@@ -2,7 +2,7 @@
 # Campaign H0, GPU part: Reactant finds the H100 with the CUDA runtime fetched on a login node,
 # offline; then a short family profile on the GPU.
 #   sbatch hpc/jobs/h0_gpu.sbatch H0
-#SBATCH --account=coen
+#SBATCH --account=icone
 #SBATCH --partition=gpu
 #SBATCH --qos=gpushort
 #SBATCH --gres=gpu:1

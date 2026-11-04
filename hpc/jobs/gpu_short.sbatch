@@ -2,7 +2,7 @@
 # Device run with guaranteed runtime (gpushort, not preempted):
 #   sbatch hpc/jobs/gpu_short.sbatch <campaign> <config> [device|script <path> args...]
 # One long-lived process batching chains and replicas (Reactant compiles 2–4 min per process).
-#SBATCH --account=coen
+#SBATCH --account=icone
 #SBATCH --partition=gpu
 #SBATCH --qos=gpushort
 #SBATCH --gres=gpu:1

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Environment preparation as a batch job on a login node (QOS io: internet, 4 cores):
 #   sbatch hpc/jobs/prepare.sbatch [<code dir>]
-#SBATCH --account=coen
+#SBATCH --account=icone
 #SBATCH --partition=io
 #SBATCH --qos=io
 #SBATCH --job-name=esm-prep

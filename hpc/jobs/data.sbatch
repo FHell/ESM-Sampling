@@ -2,7 +2,7 @@
 # Build the model files on the cluster (needs internet: QOS io on a login node, 4 cores, 3 days;
 # requeued if interrupted, resumes from the kept downloads and snakemake outputs):
 #   sbatch hpc/jobs/data.sbatch small|pypsa256|all
-#SBATCH --account=coen
+#SBATCH --account=icone
 #SBATCH --partition=io
 #SBATCH --qos=io
 #SBATCH --requeue

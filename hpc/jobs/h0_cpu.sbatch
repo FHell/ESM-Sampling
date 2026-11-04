@@ -2,7 +2,7 @@
 # Campaign H0, CPU part: the prepared environment works offline on a compute node.
 #   sbatch hpc/jobs/h0_cpu.sbatch H0
 # Runs the deterministic test suite offline, then a short CPU smoke run through the wrapper.
-#SBATCH --account=coen
+#SBATCH --account=icone
 #SBATCH --partition=priority
 #SBATCH --qos=priority
 #SBATCH --job-name=esm-h0cpu

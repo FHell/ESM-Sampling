@@ -3,7 +3,7 @@
 # solves); a preempted job is requeued and starts over (finished cache entries are kept):
 #   sbatch [-c <cores>] hpc/jobs/build.sbatch <campaign> <config> script <path> [args...]
 # HiGHS uses ESM_LP_THREADS = the allocated cores.
-#SBATCH --account=coen
+#SBATCH --account=icone
 #SBATCH --partition=priority
 #SBATCH --qos=standby
 #SBATCH --requeue

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Short analysis job (fast start in the priority QOS):
 #   sbatch hpc/jobs/analysis.sbatch <campaign> <config> script <path> [args...]
-#SBATCH --account=coen
+#SBATCH --account=icone
 #SBATCH --partition=priority
 #SBATCH --qos=priority
 #SBATCH --job-name=esm-ana
