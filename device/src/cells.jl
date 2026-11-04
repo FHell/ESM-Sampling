@@ -115,20 +115,25 @@ let fa = [(:cwa, :ω, true), (:cwa, :uc, true), (:cwam, :ω, false), (:cwam, :uc
     FOOT[:cellpair] = vcat(fa, fb, [(:crn, :r, true)])
 end
 
-"Gen and commitment terms (follow at τ) of one carrier over the node slots; slopes a[j]; returns a·ucq per slot."
-function carrier_terms!(gens, ucs, st, cp, sp, tab, r, uf, cm, c0, c1, onf, a, withuc=true)
-    au = Any[]
-    for j in 1:size(tab[uf], 2)
-        q = tab[uf][:, j, r]
-        on = m3(tab[onf][:, j, r])
-        cw, cwm, cw1 = tab[c0][:, j, r], tab[cm][:, j, r], tab[c1][:, j, r]
-        ucq = s3(sp.ucq, q) .* on
-        push!(gens, gent(st, cp, sp, q, cw, j; a=a[j]))
-        withuc && push!(ucs, uct(cp, sp, q; y0=g3(st.ω, cw), ay=a[j], u0=g3(st.uc, cw), au=a[j] .* ucq, u10=g3(st.uc, cw1), on=ucq),
-                             uct(cp, sp, q; y0=g3(st.ω, cwm), u0=g3(st.uc, cwm), u10=g3(st.uc, cw), au1=a[j] .* ucq, on=ucq))
-        push!(au, a[j] .* ucq .* (withuc ? 1.0 : 0.0))
-    end
-    return au
+"""
+Generator and commitment columns (follow at τ) of carriers over the node slots: unit tables `uf`,
+columns `cm`, `c0`, `c1` (τ−1, τ, τ+1), masks `onf`, slopes a (C|1, B, 1, Nc) per carrier (one entry of
+the tuple `parts` per carrier); node slot j is balance slot j. Returns (gen, uc, ucq per carrier).
+"""
+function carriers4(st, cp, sp, tab, r, z4, parts, withuc::Bool)
+    qs = reduce(hcat2, [tab[p.uf][:, :, r] for p in parts])
+    cws = reduce(hcat2, [tab[p.c0][:, :, r] for p in parts])
+    Nc = size(tab[parts[1].uf], 2)
+    a = cat((p.a for p in parts)...; dims=4)
+    gen = gen4(st, cp, sp, z4, qs, cws, repeat(collect(1:Nc), length(parts)); a=a)
+    withuc || return gen, nothing, nothing
+    ucq = cat((S4(sp.ucq, tab[p.uf][:, :, r]) .* M4(tab[p.onf][:, :, r]) for p in parts)...; dims=4)
+    cms = reduce(hcat2, [tab[p.cm][:, :, r] for p in parts])
+    c1s = reduce(hcat2, [tab[p.c1][:, :, r] for p in parts])
+    au = a .* ucq
+    sets = [(cy=cws, y=a, ky=nothing, cu=cws, u=au, ku=nothing, cu1=c1s, u1=nothing, ku1=nothing),
+            (cy=cms, y=nothing, ky=nothing, cu=cms, u=nothing, ku=nothing, cu1=cws, u1=au, ku1=nothing)]
+    return gen, uc4s(st, cp, sp, z4, qs, ucq, sets, false), ucq
 end
 
 build(::Val{:cell}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r, k::Consts) = build_cell(st, cp, sp, tab, r, k, Val(true))
@@ -136,51 +141,41 @@ build(::Val{:cellpair}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r
 
 function build_cell(st, cp, sp, tab, r, k, ::Val{withuc}) where {withuc}
     on = m3(tab.on[:, r])
-    Nc = size(tab.ua, 2)
-    a = [on .* m3(tab.aon[:, j, r]) for j in 1:Nc]
-    gens, ucs = Any[], Any[]
-    au = carrier_terms!(gens, ucs, st, cp, sp, tab, r, :ua, :cwam, :cwa, :cwa1, :aon, a, withuc)
-    tb = TermBatch(mkgen(gens), mkuc(ucs), nothing, nothing, nothing, Any[g3(st.r, tab.crn[:, j, r]) for j in 1:Nc])
-    return tb, (a, au, nothing, nothing, on)
+    z = 0.0 .* g3(st.r, tab.crn[:, 1, r])
+    z4 = c4(z)
+    a = c4(on .+ z) .* M4(tab.aon[:, :, r])
+    gen, uc, ucq = carriers4(st, cp, sp, tab, r, z4, ((uf=:ua, cm=:cwam, c0=:cwa, c1=:cwa1, onf=:aon, a=a),), withuc)
+    tb = TermBatchS(z; gen=gen, uc=uc, r0=G4(st.r, tab.crn[:, :, r]))
+    return tb, (a, ucq, (:cwa,), c4(on .+ z))
 end
 
 function build_cellpair(st, cp, sp, tab, r, k, ::Val{withuc}) where {withuc}
     on = m3(tab.on[:, r])
-    Nc = size(tab.ua, 2)
-    K1, K2 = on .* 0.0, on .* 0.0
-    for j in 1:Nc
-        K1 = K1 .+ m3(tab.aon[:, j, r]) .* g3(cp.κg, tab.ua[:, j, r])
-        K2 = K2 .+ m3(tab.bon[:, j, r]) .* g3(cp.κg, tab.ub[:, j, r])
-    end
-    ok = (on .> 0.0) .& (absd.(K1) .>= k.κmin) .& (absd.(K2) .>= k.κmin)
+    z = 0.0 .* g3(st.r, tab.crn[:, 1, r])
+    z4 = c4(z)
+    K1 = sum(M4(tab.aon[:, :, r]) .* G4(cp.κg, tab.ua[:, :, r]); dims=4)
+    K2 = sum(M4(tab.bon[:, :, r]) .* G4(cp.κg, tab.ub[:, :, r]); dims=4)
+    ok = (c4(on .+ z) .> 0.0) .& (absd.(K1) .>= k.κmin) .& (absd.(K2) .>= k.κmin)
     x1 = ifelse.(ok, 1.0 ./ ifelse.(ok, K1, 1.0), 0.0)
     x2 = ifelse.(ok, -1.0 ./ ifelse.(ok, K2, 1.0), 0.0)
-    a = [x1 .* m3(tab.aon[:, j, r]) for j in 1:Nc]
-    b = [x2 .* m3(tab.bon[:, j, r]) for j in 1:Nc]
-    gens, ucs = Any[], Any[]
-    au = carrier_terms!(gens, ucs, st, cp, sp, tab, r, :ua, :cwam, :cwa, :cwa1, :aon, a, withuc)
-    bu = carrier_terms!(gens, ucs, st, cp, sp, tab, r, :ub, :cwbm, :cwb, :cwb1, :bon, b, withuc)
-    tb = TermBatch(mkgen(gens), mkuc(ucs), nothing, nothing, nothing, Any[g3(st.r, tab.crn[:, j, r]) for j in 1:Nc])
-    return tb, (a, au, b, bu, ifelse.(ok, 1.0, 0.0))
+    a = x1 .* M4(tab.aon[:, :, r])
+    b = x2 .* M4(tab.bon[:, :, r])
+    gen, uc, ucq = carriers4(st, cp, sp, tab, r, z4, ((uf=:ua, cm=:cwam, c0=:cwa, c1=:cwa1, onf=:aon, a=a),
+                                                    (uf=:ub, cm=:cwbm, c0=:cwb, c1=:cwb1, onf=:bon, a=b)), withuc)
+    tb = TermBatchS(z; gen=gen, uc=uc, r0=G4(st.r, tab.crn[:, :, r]))
+    return tb, (cat(a, b; dims=4), ucq, (:cwa, :cwb), ifelse.(ok, 1.0, 0.0))
 end
 
 function commit_cells(st, tab, r, t, dr, aux)
-    a, au, b, bu, m = aux
-    ω, uc = st.ω, st.uc
-    for j in eachindex(a)
-        ω = scadd(ω, tab.cwa[:, j, r], flat(t .* a[j]))
-        uc = scadd(uc, tab.cwa[:, j, r], flat(t .* au[j]))
-        if b !== nothing
-            ω = scadd(ω, tab.cwb[:, j, r], flat(t .* b[j]))
-            uc = scadd(uc, tab.cwb[:, j, r], flat(t .* bu[j]))
-        end
-    end
-    rr = st.r
-    for j in eachindex(dr)
-        rr = scadd(rr, tab.crn[:, j, r], flat(msk(dr[j], m .* m3(tab.non[:, j, r]))))
-    end
+    a, ucq, cf, m = aux
+    cws = reduce(hcat2, [tab[c][:, :, r] for c in cf])
+    Δ = a .* c4(t)
+    ω = scadd4(st.ω, cws, Δ)
+    uc = ucq === nothing ? st.uc : scadd4(st.uc, cws, Δ .* ucq)
+    rr = scadd4(st.r, tab.crn[:, :, r], msk(dr4(dr), m .* M4(tab.non[:, :, r])))
     return FlatState(st.θ, ω, uc, st.e, st.u, rr)
 end
+
 commit(::Val{:cell}, st::FlatState, tab, r, t, dr, aux) = commit_cells(st, tab, r, t, dr, aux)
 commit(::Val{:cellpair}, st::FlatState, tab, r, t, dr, aux) = commit_cells(st, tab, r, t, dr, aux)
 

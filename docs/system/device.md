@@ -37,6 +37,13 @@ mode-coefficient vector. `pack` builds the static model (`DeviceModel`) of a com
 level, where every basis is orthonormal), and `cost_parts` evaluates the cost of every chain
 ($=$ `energy_cost` to round-off).
 
+**Float32 build.** `ESMDevice.F32` is the whole device program in Float32: state, caches, terms,
+line sampler, capacity pass and uniforms. It is the same source (`device/src/core.jl` and the files
+it includes) read a second time with every Float64 literal, `Float64`, `Inf`, `NaN` and the default
+element type of `zeros`/`ones` mapped to Float32 (`ft32`), and every device input converted at the
+upload (`ftconv`). FP64 (`ESMDevice`) stays the default and the reference of the tests; the Float32
+build is only checked to compile and run (`FLOAT=32` in the device scripts).
+
 ## 3. Moves and the exact line sampler
 
 A move is a set of **sites**, one per chain and site index, each a line move
@@ -46,15 +53,20 @@ terms, line terms with hinge knots, SoC terms, balance slots). A compensation si
 requirement change by one rule: none, unit, linear (learned coefficients) or share-preserving
 (kinked arguments $x_0 + at + a_k\varphi_k(t)$ plus the Jacobian step).
 
-**Term axis.** The builders list a site's terms; the `TermBatch` constructor stacks every field
-of a term type into one $(C, B, 1, n)$ array (`stack_terms`). Evaluation then works on
-$(C, B, K, n)$ for $K$ points and reduces over $n$, so the compiled program does not grow with
-the term count.
+**Term axis.** Every field of a term type is one $(C, B, 1, n)$ array. The compensated, block,
+cell and dense angle families build them directly (`device/src/stack.jl`): one gather of a
+$(B, n)$ index table per field (`G4`, `S4`), and one scatter-add per state array in the commit
+(`scadd4`). The plain families list their few terms and the `TermBatch` constructor stacks them
+(`stack_terms`). Evaluation then works on $(C, B, K, n)$ for $K$ points and reduces over $n$, so
+neither the trace nor the compiled program grows with the term count.
 
 Static per-column metadata is recorded at trace time:
 * the balance slot of every injection;
 * the kink id of every kinked argument;
-* whether an argument moves: a slope that is the literal `0.0` of the builder is static.
+* whether an argument moves: a slope that is the literal `0.0` of the builder (or `nothing` in a
+  stacked builder) is static;
+* which unit columns can hold a unit with fleet commitment (`UC_COLS`, from the schedule): the
+  commitment terms of the other columns are identically zero and are left out.
 
 The balance slots sum their columns with a static padded column table (an appended zero column,
 one gather and one sum; no 0/1 matmul, so a padded term cannot turn an infinity into NaN).
@@ -91,23 +103,41 @@ own points:
    own points), sorted;
 2. per column: the cost change at these points (and one beyond each end), the slope of every
    local segment, the slope jump at every point and the slope just right of 0;
-3. per balance slot: the points of every column injecting into it and 0, the residual there, its
-   roots, then the balance cost and its jumps in the same way;
+3. per balance slot: the points of every column injecting into it and 0, and the residual $r$
+   there (one evaluation). $r$ is linear between them, so the balance cost
+   $\Delta t\,(c_{shed} r_+ + c_{dump} r_-)$ bends only at those points and where $r$ crosses 0.
+   At a column's point $p$ its jump is $\Delta t\,w(r(p))$ × that column's injection jump,
+   $w = c_{shed}$ for $r \ge 0$ and $-c_{dump}$ below: it is added to the column's own entry. The
+   crossings are found on the slot's points sorted with $r$ as payload (a change of the side
+   $r \ge 0$ between the ends of a segment, or between a ray's end and infinity) and become
+   entries with the jump $\Delta t\,(w_{after} - w_{before})\,r'$ (`slot_cross`). The same side
+   convention in both makes the jumps add up to the cost's slopes also where $r$ vanishes at a
+   point. Slot points are therefore no entries of their own;
 4. the (point, jump) entries of a site: every entry at exactly 0 is folded into one, the rest
    sorted with the jumps as payload (one stable sort), and only the first `cap` kept
    (`JUMP_CAP`, set by `plan` from the sites of three rounds: 1.25 × the largest count + 8);
 5. the segment slopes from the slope right of 0 outwards, the potential integrated outwards from
    $c(0) = 0$; every partial sum accumulates from 0 outwards, so no value near 0 carries the
    round-off of far, large terms, and a slope within the round-off of its sum is 0 (a flat stretch
-   stays exactly flat). Then the dense form's inverse CDF (`sample_core`).
+   stays exactly flat). Then the dense form's inverse CDF (`sample_core1`).
+
+Steps 4 and 5 work with the entry axis first, $(N, C, B)$ (`jump_points1`, `jump_values1`,
+`sample_core1`): the entry axis is then the fastest in memory, so the payload sort and the scans
+need no transposes. Reactant lowers `cumsum` to a reduce-window over the whole axis ($N^2$ work);
+the scans of traced arrays run in two levels instead (`cumsum1`: blocks of `SCANBLK` = 32, then the
+block totals, joined by a shift, so a prefix of exact zeros stays exactly zero). Point lists of at
+most `SMALLSORT` = 8 entries per column are sorted by a compare-exchange network (`sort3`, min/max
+pairs that fuse into their producers) instead of a sort op.
 
 The cost per site is the sum of the columns' local points plus a sort of the entries.
 
-**Form choice.** The plain families use the dense form. A compensated, cell or block family uses
-the slope-jump form if its dense points × columns are at least `JUMP_RATIO` (4) × its
-slope-jump entries (`plan(...; jump=:auto)`; `:none`, `:all` or a list of families override).
-At 40 nodes daily: slope-jump for `:tsoc`, `:tpot`, all `:sblk…`, `:cell1`, `:cell2`,
-`:cellpair1`, `:cellpair2`; dense for `:spair0`, `:cell3`, `:cellpair3`.
+**Form choice.** The plain families use the dense form. A compensated, cell, block or dense
+angle family uses the slope-jump form if its dense points × columns are at least `JUMP_RATIO` ×
+its slope-jump entries (`plan(...; jump=:auto, backend)`; `:none`, `:all` or a list of families
+override). The ratio is per backend (`JUMP_RATIO`: 4 on the CPU, 10 on the GPU, where the payload
+sort costs relatively more; measured in [performance.md](performance.md) §7). At 40 nodes × 6 h
+on the GPU: slope-jump for `:tpot`, `:sblk4` … `:sblk32`, `:cell1`, `:cell2`, `:cellpair1`,
+`:cellpair2`, `:tdir`, `:tdir0`; dense for `:spair0`, `:tsoc`, `:sblk2`, `:cell3`, `:cellpair3`.
 
 **Guards.** A site stays at $t = 0$:
 * if some secondary quantity has more sign changes than kept;
@@ -139,17 +169,57 @@ and $r$.
 | `:tpot`, `:tpotL` | `tpot`, `tpotL` | share-preserving, linear |
 | `:cell{q}`, `:cellu{q}` | `cell` at partition level q (`u`: committable carriers) | additive |
 | `:cellpair{q}`, `:cellpairu{q}` | `cellpair` at level q | balanced |
-| `:sblk{L}`, `:sblkL{L}` ($L$ = 2, 4, 8, 16, 32) | storage plateau and shapes (`prep_storage_ms!`), one unit | share-preserving, linear |
+| `:sblk{L}`, `:sblkL{L}` ($L$ = 2, 4, 8, 16, 32) | storage plateau and shapes (`prep_storage_ms!`), one unit; learned shapes per season class | share-preserving, linear |
+| `:tdir`, `:tdirL`, `:tdir0` | `tmode`, `tline`, `amode` and their `…L` and `…0` variants (`prep_tdir!`, `prep_tline!`, `prep_amode!`): one dense angle direction per step | share-preserving, linear, none |
+| `:tcut`, `:tcutw`, `:tcutL`, `:tcutLw` | `tcut`, `acut`, `tcutL`, `acutL` (`prep_tsparse!`): one Haar atom, small (≤ `SPARSE_NS` node slots) or wide | share-preserving, linear |
+| `:xloc`, `:xlocc`, `:xpair` | `xloc`, `xlocc` (`prep_xloc!`), `xpair` (global re-routing): a generator pair at two nodes with re-routed flows | none, share-preserving (leak), none |
+| `:sblkg{L}`, `:sblkgL{L}` | storage blocks of a cell–class group (`prep_storage_ms!` with the group's units) | share-preserving, linear |
+| `:dshp{L}` | learned dispatch shapes of a generator pair at one node (`prep_adshape!`) | none (balanced) |
+| `:slong`, `:slongL` | `slong`, `slevel` (`prep_slong!`): a cyclic plateau of one unit, or its level | share-preserving, linear |
 
 **Choices made on the host.** Choices that do not depend on the state are drawn when the
 schedule is built: the unit pair of `:spair`, the carriers of the cell moves, and the block
-offset and profile.
+offset and profile. The directions of the dense angle families are drawn per site and chain by a
+host source (`TDIR_SOURCE`, `tdir_source`), as the CPU families of the rule with the CPU's relative
+rates: a transport mode projected onto the face of the step's predicted binding lines (`tmode`,
+the chain's frames; flow basis), the re-routed injection pair of a predicted binding line
+(`tline`), a learned mode projected onto the face (`amode`, once the host has learned modes). The
+table holds per site and chain the node direction $d$ and the requirement change $g$ of the nodes
+that compensate (`tdir_g`: $g = L_b d$, kept where $|g_n| > 10^{-9}\max|g|$, as `prep_tdir!`;
+`tline`: $\pm 1$ at the line's ends). They are refreshed between device calls with the same table
+shapes (`tdir_refresh`), so the program is not recompiled.
+
+**Dense angle families.** A site carries every line (static bus slots, so the balance sums stay
+static), every node's balance slot, G unit columns per node and one kink per node (share-preserving
+rule); one site per step and time class, one round per class: each step gets one dense move per
+family and sweep (the CPU draws about six `tmode` moves per step and sweep at 40 nodes, but at
+$O(N + n_{lines})$ per move the families run at a low rate in the design). The localized
+transport moves (`tcut`, `acut`: Haar atoms with sparse support) are not ported: their templates
+need per-site line lists (`Status`).
 
 **Cell families.** They are bucketed by level and padded to the level's largest cell. Level q
 gets rounds ∝ (cells)^(cell_power−1), which reproduces the CPU's level probabilities.
 
+**Sparse angle families** (`device/src/sparse.jl`). A site is one step with a sparse angle
+direction: its node slots (the nodes whose angle moves and the far ends of the lines that move; a
+pair's two nodes first), the angle change and the requirement change per slot, and the pair units.
+Every moving line is listed at both its ends (injection at the near end, half its overload cost at
+each, `sline(…; wc)`), so the balance slots are static. The sites come from a host source
+(`SPARSE_SOURCE`, `sparse_source`: atoms ∝ c² of the frames' and the learned pieces, `xloc`
+partners and units, `xpair` pairs) and are packed per step into rounds of disjoint node slots.
+
+**Long-range storage moves** (`device/src/slong.jl`). A site holds every step of the cycle in the
+order a, b, then the others: the SoC term of each step with the site's 0/1 profile of raised
+instants (host data), the node's balance slot at each step, and the G compensation columns at the
+two end steps with the nominal requirement (`soc_qadj4`). The level move uses the same template
+without compensation.
+
 **Block profiles.** The profile table holds the plateau and optional shapes with zero ends
-(`set_profiles!`).
+(`set_profiles!`), each with a season class (0: any). A site draws its profile among those of its
+block's season class and those of any season. With the host adaptation the table holds the
+plateau and per season class two learned state-of-charge shapes (`set_learned_profiles!`, from
+`AdaptiveModes.shapes`; the plateau stands in until they are learned), so it keeps its shape when
+the shapes are relearned.
 
 **Requirement tracking.** The share-preserving families refuse models with line losses or lossy
 links, whose compensation needs requirement tracking on the CPU (an event walk). With those
@@ -331,6 +401,11 @@ bound.
 4. `mlda_warmup + nsamples` checkpoints: sweeps and capacity pass, download, conversion to
    `State`s, online bias refits during the warmup (pooled over chains, frozen afterwards, the
    bias aggregates re-packed after a refit), monitored quantities, post-correction records;
+   with `adapt = true` the host adaptation (`HostAdapt`, `adapt_step!`): the chains are observed
+   by one `AdaptiveModes` (pooled over chains: transport modes, storage shapes per length and
+   season, response coefficients per node and proxy class, updated at observation counts $2^j$),
+   the chains' frames are refreshed (flow basis), and the static parameters (β1, β2), the tables
+   of the dense angle families and the block profiles are uploaded anew (same shapes);
 5. `chains_report`: the same diagnostics and HDF5 output as the CPU driver (without the
    additional outputs of `write_run_outputs`).
 
@@ -420,25 +495,29 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | compensated families `:spair`, `:spair0`, `:tsoc(L)`, `:tpot(L)` | verified on arrays and compiled (CPU backend); scheduled with `families = :all` |
 | cell templates (all partition levels) | verified on arrays; compiled except `:cellpairu1` (see §3); scheduled with `families = :all` except `:cellpairu1` |
 | storage blocks, one unit (plateau, shapes) | verified on arrays ($L$ = 2–32) and compiled; scheduled with `families = :all` |
-| nominal storage requirement of the share-preserving `:tsoc`, `:sblk{L}` (CPU `soc_qadj`, [moves/storage.md](moves/storage.md)) | deviation: the device uses the actual requirement; its comparisons against the CPU for these share-preserving families no longer hold until it adds the correction |
-| long-range storage moves `slong`, `slevel` | missing |
+| nominal storage requirement of the share-preserving `:tsoc`, `:sblk{L}` (CPU `soc_qadj`, [moves/storage.md](moves/storage.md)) | done (`soc_qadj4`); verified on arrays against the CPU |
+| long-range storage moves `slong`, `slevel` (`:slong`, `:slongL`) | verified on arrays against the CPU (`test_comp.jl` M, N); L drawn on 2 … T−1 (the CPU includes L = 1, the `tsoc` move) |
 | storage pairs `sxpair`, `sxlong` (re-routing templates, leak and loss compensation, footprint rounds) | missing |
 | memory cap of a round (`DENSE_BUDGET`) | done |
 | slope-jump form of the line sampler, per-family choice (`JUMP_RATIO`) | done; verified on arrays against the CPU and the dense form, Reactant (CPU backend) against arrays |
-| term axis (program size independent of the term count) | done |
+| term axis (program size independent of the term count); stacked builders (one gather per field) for the compensated, block, cell and dense angle families | done |
+| commitment columns of non-committable units left out (`UC_COLS`); balance jumps on the column entries; entry-axis-first global part; two-level scans; sort networks for short lists | done; verified on arrays against the CPU and the dense form |
 | one program per checkpoint (operation sweeps + capacity pass) | done (`sweep_program`, `merged = true`); not the default (compile time) |
 | capacity pass (`kren`, `kscale`, `kpeak` absorb) with the bias, host loop | done (retired with the bias) |
 | replica–Langevin capacity step: score, step in $w$, dispatch following (fixed output, kop curve), replica batch, weather upload with compensation | done; verified on arrays against the CPU and the prototype, compiled (CPU backend) against arrays |
 | replica driver on the CPU sampler (`replicas`, `replica_*`, `langevin_*`, `tilt_*`; weather process, gate, probe and adaptation, weights, snapshot layout) | done; verified on arrays against `run_replicas`; compiled check written (`test_replica_compiled.jl`), not run |
 | snapshots and resume of both drivers, exit code 75 | done; smoke-tested through `hpc/run.sh` (device mode, CPU backend) |
-| templates for Haar angle atoms and localized proxy and learned modes (`tcut`, `acut`) | missing |
-| local re-routing templates in place of `xpair`, `xloc(c)`, `tline` | missing |
-| block aggregates (cell–class groups), learned shapes | missing |
-| dense transport modes (`tmode`, `amode`) | missing; low rate, may be dropped |
-| adaptation on the host with table uploads (modes, shapes, response coefficients); learned `kpeak` | missing |
-| weather moves with compensation as a device family | missing |
+| sparse angle templates: Haar atoms of the proxy and learned modes (`:tcut`, `:tcutw`, `:tcutL`, `:tcutLw` for `tcut`, `acut`, `tcutL`, `acutL`) | verified on arrays against the CPU (`test_comp.jl` H, I) |
+| local re-routing templates (`:xloc`, `:xlocc`, `:xpair`; `tline` as `:tdir`) | verified on arrays against the CPU (`test_comp.jl` H, I); generator units only (the CPU draws any unit of `LM.units`, which are the generators) |
+| block aggregates (cell–class groups: `:sblkg{L}`, `:sblkgL{L}`) | verified on arrays against the CPU (`test_comp.jl` K, L) |
+| learned storage shapes (profile columns per season class) | done |
+| learned dispatch shapes (`adshape`: `:dshp{L}`) | verified on arrays against the CPU (`test_comp.jl` J) |
+| dense angle directions `:tdir`, `:tdirL`, `:tdir0` (`tmode`, `tline`, `amode` and variants) | verified on arrays against the CPU (`test_comp.jl` cases F, G); scheduled with `families = :all` and `adapt = true` |
+| adaptation on the host with table uploads (modes, shapes, response coefficients) | done (`adapt = true`); the learned `kpeak` variant missing |
+| weather moves with compensation as a device family | not planned: the weather moves to a prior-reversible pCN process on the host, the capacities to a Langevin step ([../worklog.md](../worklog.md)); `kop` and the device bias (`bias_dev.jl`, kept as it is until it is retired) are not extended |
+| Float32 build of the whole program (`ESMDevice.F32`) | done; compiles and runs (no exactness tests by design) |
 | replica–Langevin sampler ([sampler.md](sampler.md) §11): the weather process per replica (pCN, regime windows), the compensated initialisation, the capacity scores, the Langevin update, the dispatch-following maps (fixed output, kop curve), the gate and the probe; replicas as a batch dimension | missing; CPU reference `src/replicas.jl` with explicit-noise building blocks (`pcn_weather`, `regime_window`, `langevin_update`) |
-| fused kernels, FP32 intermediates, tiling, multi-GPU, full-Europe memory plan | missing |
+| fused kernels, tiling, multi-GPU, full-Europe memory plan | missing |
 
 **Reactant constraints met so far.** Inside `@trace for`, every captured scalar becomes
 traced, so structs captured by a loop are type-parametric in their scalars and static flags

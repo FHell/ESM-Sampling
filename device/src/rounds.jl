@@ -305,9 +305,9 @@ function host_table(fam::Symbol, tp::Topo, rounds; D=maximum(length.(tp.nodeline
     R = length(rounds)
     B = maximum(length.(rounds); init=1)
     proto = site_cols(fam, tp, rounds[1][1], D)
-    tab = Dict{Symbol,Array{Int}}()
-    for (nm, v) in pairs(proto)
-        tab[nm] = v isa Vector ? zeros(Int, B, length(v), R) : zeros(Int, B, R)
+    tab = Dict{Symbol,Array}()
+    for (nm, v) in pairs(proto)                          # Int index columns; Float data (directions) as Float64
+        tab[nm] = v isa Vector ? zeros(eltype(v), B, length(v), R) : zeros(typeof(v), B, R)
     end
     on = zeros(B, R)
     for (r, sites) in enumerate(rounds), (b, site) in enumerate(sites)
@@ -322,7 +322,7 @@ end
 
 "Device table: padding → index 1 (zero changes there); for :theta the per-line mask `lon`."
 function device_table(fam::Symbol, ht)
-    nt = NamedTuple{keys(ht)}(Tuple(k == :on ? copy(v) : max.(v, 1) for (k, v) in pairs(ht)))
+    nt = NamedTuple{keys(ht)}(Tuple(k == :on || !(eltype(v) <: Integer) ? copy(v) : max.(v, 1) for (k, v) in pairs(ht)))
     istheta(fam) && (nt = merge(nt, (lon=Float64.(ht.ln .> 0),)))
     return merge(nt, device_extra(Val(fam), ht))
 end
@@ -620,8 +620,15 @@ points × columns per site are at least `JUMP_RATIO` × the slope-jump entries (
 pays a payload sort of its entries; the plain families stay dense).
 """
 const JUMP_FAMILIES = Set{Symbol}()
-const JUMP_RATIO = 4
+const JUMP_RATIO = Dict("cpu" => 4.0, "gpu" => 10.0)      # per backend (GPU: the payload sort costs more)
 jumpform(::Val{f}) where {f} = f in JUMP_FAMILIES
+"""
+Committable unit columns of family f (set by `plan` from its schedule): column j of the unit table
+`gq` holds a unit with fleet commitment at some site. The commitment terms of the other columns are
+identically zero and are left out (static). Missing family: all columns.
+"""
+const UC_COLS = Dict{Symbol,Vector{Bool}}()
+ucon(f::Symbol, j::Int) = (v = get(UC_COLS, f, nothing); v === nothing || v[j])
 "Entries kept per site in the slope-jump form of family f (set by `plan`; 0: all)."
 const JUMP_CAP = Dict{Symbol,Int}()
 jumpcap(::Val{f}) where {f} = get(JUMP_CAP, f, 0)
@@ -649,12 +656,28 @@ function jump_cap(f::Symbol, tab, st, cp, sp, k)
     R = size(tab.on, 2)
     cmax, N = 0.0, 0
     for r in unique([1, cld(R, 2), R])
-        N, _, cnt = jump_size(build(Val(f), st, cp, sp, tab, r, k)[1], k; K=nroots(Val(f)))
-        on = tab.on[:, r] .> 0
+        sub = probe_rows(tab, r, PROBE_SITES)
+        N, _, cnt = jump_size(build(Val(f), st, cp, sp, sub, r, k)[1], k; K=nroots(Val(f)))
+        on = sub.on[:, r] .> 0
         any(on) && (cmax = max(cmax, maximum(cnt[:, on])))
     end
     cap = ceil(Int, 1.25 * cmax) + 8
     return cap >= N ? 0 : cap
+end
+
+"Sites of a round probed by `plan` for the slope-jump cap (spread over the round; memory of the probe)."
+const PROBE_SITES = 4096
+
+"""
+Rows of the host-side device table `tab` for probing round r: at most n of its real sites, evenly
+spread (every field whose first dimension is the site axis; the shapes per site are those of the
+whole table).
+"""
+function probe_rows(tab, r, n)
+    B = size(tab.on, 1)
+    real = findall(tab.on[:, r] .> 0)
+    rows = length(real) <= n ? (isempty(real) ? [1] : real) : real[round.(Int, range(1, length(real); length=n))]
+    return NamedTuple{keys(tab)}(Tuple(x isa AbstractArray && size(x, 1) == B ? copy(selectdim(x, 1, rows)) : x for x in values(tab)))
 end
 
 "Elements per site of the largest tensor of a round of family f (`dense_size`, `jump_size`)."
@@ -747,7 +770,8 @@ line-sampler form of the compensated, cell and block families: `:auto` (`JUMP_RA
 (dense), `:all` (slope-jump) or a collection of families drawn in the slope-jump form.
 """
 function plan(M::DeviceModel, S::DeviceState, β; κmin=1.0, families=FAMILIES, bmax=Dict{Symbol,Int}(), bdefault=1 << 15,
-              cpumap::Bool=false, cls=nothing, rng=MersenneTwister(1), cells=nothing, budget=DENSE_BUDGET[], jump=:auto)
+              cpumap::Bool=false, cls=nothing, rng=MersenneTwister(1), cells=nothing, budget=DENSE_BUDGET[], jump=:auto,
+              backend::AbstractString="cpu")
     tp = topo(M)
     cells === nothing || (CELLINFO[] = cells)            # cell structure of the partition levels (cells.jl)
     sch = schedule(tp, M; families=families, bmax=bmax, bdefault=bdefault, rng=rng)
@@ -755,14 +779,18 @@ function plan(M::DeviceModel, S::DeviceState, β; κmin=1.0, families=FAMILIES, 
     sp, cp, k, st = static_params(M), chain_params(M, S; cls=cls), consts(M, β; κmin=κmin, cpumap=cpumap), flat_state(M, S)
     C = size(st.θ, 1)
     ht = Dict(f => host_table(f, tp, sch[f]; D=family_degree(f, tp, sch[f])) for f in fams)
+    for f in fams
+        delete!(UC_COLS, f)
+        haskey(ht[f], :gq) && (UC_COLS[f] = [any(q -> q > 0 && M.guc[q] > 0, ht[f].gq[:, j, :]) for j in 1:size(ht[f].gq, 2)])
+    end
     for f in fams                                         # memory cap: even chunks of at most b sites
         (f in FAMILIES || f in FAMILIES_FAST) && continue # plain: ≤ 40 points × 7 columns per site, far below
         delete!(JUMP_CAP, f)
         tab = device_table(f, ht[f])
-        tb = build(Val(f), st, cp, sp, tab, 1, k)[1]
+        tb = build(Val(f), st, cp, sp, probe_rows(tab, 1, 64), 1, k)[1]     # shapes per site only
         usej = if jump === :auto
             np, nc = dense_size(tb, k; K=nroots(Val(f)))
-            np * nc >= JUMP_RATIO * jump_size(tb, k; K=nroots(Val(f)))[1]
+            np * nc >= get(JUMP_RATIO, backend, JUMP_RATIO["cpu"]) * jump_size(tb, k; K=nroots(Val(f)))[1]
         else
             jump === :all || (jump !== :none && f in jump)
         end

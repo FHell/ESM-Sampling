@@ -315,7 +315,7 @@ function eval_terms(tb::TermBatch, k::Consts, t; sec::Bool=true)
         u0 = absd.(ln.f0) ./ s
         dov = s .* (hinge(k.ψ, u1) .- hinge(k.ψ, u0))
         dloss = ln.α .* s .^ 2 .* (hinge(k.Lq, u1) .- hinge(k.Lq, u0))
-        c = c .+ (cv * Δt) .* red(dov)
+        c = c .+ (cv * Δt) .* red(linewc(ln, dov))
         df = f .- ln.f0
         inj = addinj(inj, slotsum(df .+ 0.5 .* dloss, ln.near, R, z4))
         inj = addinj(inj, slotsum(.-df .+ 0.5 .* dloss, ln.far, R, z4))
@@ -514,7 +514,7 @@ end
 "All kinks of βΔC per site, sorted (C, B, K): primaries, 0 and the roots of the secondary quantities; and the guard."
 function dense_points(tb::TermBatch, k::Consts, z0; K::Val{NR}=Val(2)) where {NR}
     P = primaries(tb, k)
-    p0 = sort(cat(z0, P...; dims=3); dims=3)
+    p0 = sort3(cat(z0, P...; dims=3))
     pe = extend(p0)
     _, Z, _ = eval_terms(tb, k, pe)
     C, B, n = size(pe, 1), size(pe, 2), size(pe, 3)
@@ -533,14 +533,14 @@ function dense_points(tb::TermBatch, k::Consts, z0; K::Val{NR}=Val(2)) where {NR
         over = over .| (rs(maximum(cnt; dims=4), C, B, 1) .> nr)
     end
     if twostage
-        p1 = isempty(R) ? p0 : sort(cat(p0, R...; dims=3); dims=3)
+        p1 = isempty(R) ? p0 : sort3(cat(p0, R...; dims=3))
         pe1 = extend(p1)
         _, Z1, _ = eval_terms(tb, k, pe1)
         rts, cnt = rootsK(Z1[end][1], rs(pe1, C, B, size(pe1, 3), 1), NR)
         over = over .| (rs(maximum(cnt; dims=4), C, B, 1) .> NR)
-        return sort(cat(p1, flat3(rts); dims=3); dims=3), over
+        return sort3(cat(p1, flat3(rts); dims=3)), over
     end
-    return (isempty(R) ? p0 : sort(cat(p0, R...; dims=3); dims=3)), over
+    return (isempty(R) ? p0 : sort3(cat(p0, R...; dims=3))), over
 end
 
 """
@@ -646,7 +646,7 @@ end
 "Diagnostics: the largest number of sign changes of any secondary quantity per site (C, B, 1)."
 function root_count(tb::TermBatch, k::Consts)
     P = primaries(tb, k)
-    p0 = sort(cat(P[1][:, :, 1:1] .* 0.0, P...; dims=3); dims=3)
+    p0 = sort3(cat(P[1][:, :, 1:1] .* 0.0, P...; dims=3))
     pe = extend(p0)
     _, Z, _ = eval_terms(tb, k, pe)
     C, B, n = size(pe, 1), size(pe, 2), size(pe, 3)

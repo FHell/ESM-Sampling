@@ -25,6 +25,10 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
     for L in D.BLOCK_LENGTHS                     # block profiles: the plateau and two shapes with zero ends
         D.set_profiles!(L, hcat([vcat(0.0, rand(MersenneTwister(L + j), L - 1) .- 0.3, 0.0) for j in 1:2]...))
     end
+    for L in D.DSHAPE_LENGTHS                    # dispatch shapes: three random shapes, mean removed
+        Φ = randn(MersenneTwister(100 + L), L, 3); Φ .-= sum(Φ; dims=1) ./ L
+        D.set_dshapes!(L, Φ)
+    end
     P, M, ix, S, ss = setup40(; C=C, losses=tracking_model, link_losses=tracking_model)
     E = P.E
     β = P.βv
@@ -44,6 +48,20 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
     ci = cells ? D.cell_info(P, LM, ix) : nothing
     fams == :cells && (fams = D.cell_families(ci))
     fams = Tuple(f for f in fams if !(string(f) in split(get(ENV, "SKIP", ""), ",")))   # SKIP=cellpairu1: leave out
+    # dense angle directions (tdir families): random node directions per chain, a third binding-line
+    # normals of random lines (the CPU reference compensates the same g, `cpu_move`)
+    D.TDIR_CHAINS[] = C
+    D.TDIR_SOURCE[] = (fam, τ, rng, c) -> begin
+        sys = E.sys
+        rand(rng) < 0.3 && return D.tline_dir(sys, LM, rand(rng, eachindex(sys.line_s)))
+        d = randn(rng, sys.N); d .-= sum(d) / sys.N; d ./= sqrt(sum(abs2, d))      # unit norm, as the modes
+        D.tdir_g(sys, d)
+    end
+    # sparse angle directions: Haar atoms of random modes (as `localize` of the proxy and learned modes)
+    Hθ = ML.haar_theta(E)
+    Dm = randn(MersenneTwister(5), E.sys.N, 4); Dm .-= sum(Dm; dims=1) ./ E.sys.N
+    D.SPARSE_SOURCE[] = D.sparse_source(P, LM, ix; atoms=() -> Any[(Hθ, ML.localize(Dm, Hθ))])
+    D.BLOCK_GROUPS[] = D.block_groups(P, ix)                   # cell–class groups of the aggregate blocks
     pl = D.plan(M, S, β; families=fams, cpumap=true, cls=cls, bmax=Dict(f => NSITE for f in fams), cells=ci)
     qof = Dict(ix.gidx[q] => q for q in eachindex(ix.gidx))
     for n in eachindex(AM.runits), (j, (f, i)) in enumerate(AM.runits[n])
@@ -59,12 +77,13 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
         B, R = size(tabs[f].on)
         x = reshape(weyl(C * B * 3 * R, off[]), C, B, 3, R); off[] += length(x); x
     end for f in pl.fams))
-    learnof(f, c) = (f in (:tsocL, :tpotL) || startswith(string(f), "sblkL")) ? (AM=AM, FF=FFs[c]) : nothing
+    learnof(f, c) = (f in (:tsocL, :tpotL, :tdirL, :tcutL, :tcutLw) || f == :slongL || startswith(string(f), "sblkL") || startswith(string(f), "sblkgL")) ? (AM=AM, FF=FFs[c]) : nothing
     cpumove(c, LC, f, site) = (jac = NTuple{5,Float64}[];
-                              bm = cpu_move(P, LM, LC, ix, f, site; jac=jac, learn=learnof(f, c)); (bm, jac))
+                              bm = cpu_move(P, LM, LC, ix, f, site; jac=jac, learn=learnof(f, c), chain=c); (bm, jac))
     ok_conf = all(D.check_conflicts(f, D.host_table(f, pl.tp, pl.sched[f]))[1] for f in pl.fams)
     # exactness of the dense form with kinked and LINEAR entries: ≤ 2 sign changes per secondary quantity
-    maxroots = Dict(f => maximum(maximum(D.root_count(D.build(Val(f), st0, pl.cp, pl.sp, tabs[f], r, pl.k)[1], pl.k))
+    maxroots = Dict(f => f in (:slong, :slongL) ? NaN :         # (a dense diagnostic: too large for the long-range moves)
+                         maximum(maximum(D.root_count(D.build(Val(f), st0, pl.cp, pl.sp, tabs[f], r, pl.k)[1], pl.k))
                                  for r in 1:size(tabs[f].on, 2)) for f in pl.fams)
     t0 = time()
     stJ, stats, scpu = mock_compare(pl, st0, LCs, ss, pl.fams, rounds, tabs, U, cpumove; P=P, β=β)
@@ -75,13 +94,14 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
                 stats[:guard], " of ", stats[:n])
         @test stats[:guard] <= 0.01 * stats[:n]
         @printf("  (a) device own points vs CPU: %d agree (max %.1e), %d differ (CPU ray splitting)\n", stats[:own_ok], stats[:worst_own], stats[:own_bad])
-        @printf("  (c) device sampler on the CPU points vs CPU: max %.1e, %d beyond 1e-9; CPU ray overshoot excluded: %d; improper mismatch %d\n",
-                stats[:worst_cpu], stats[:cpupts_bad], stats[:overshoot], stats[:improper_mismatch])
+        @printf("  (c) device sampler on the CPU points vs CPU: max %.1e, %d beyond 1e-9; CPU ray overshoot excluded: %d; CPU walk truncated (a deeper region beyond its 40-nat stop) excluded: %d; improper mismatch %d\n",
+                stats[:worst_cpu], stats[:cpupts_bad], stats[:overshoot], stats[:truncated], stats[:improper_mismatch])
         @printf("  Jacobian step: CPU rejections %d, decision mismatches on the same t %d\n", stats[:jac_rej], stats[:jac_mismatch])
         @test stats[:cpupts_bad] == 0
         @test stats[:improper_mismatch] == 0
         @test stats[:jac_mismatch] == 0
         @test stats[:overshoot] <= 1e-3 * stats[:n]
+        @test stats[:truncated] <= 1e-2 * stats[:n]
         stC = cpu_flat(P, ix, LCs)
         for fld in (:θ, :ω, :uc, :e, :u, :r)
             a, b = getfield(stJ, fld), getfield(stC, fld)
@@ -129,6 +149,33 @@ if get(ENV, "CASE", "ABC") in ("D", "ABC")
 end
 if get(ENV, "CASE", "ABC") in ("E", "ABC")
     comp_case("E (no losses; storage blocks, T2)"; tracking_model=false, fams=(:sblk2, :sblk4))
+end
+if get(ENV, "CASE", "ABC") in ("F",)
+    comp_case("F (no losses; dense angle directions, T2 and none)"; tracking_model=false, fams=(:tdir, :tdir0))
+end
+if get(ENV, "CASE", "ABC") in ("G",)
+    comp_case("G (all terms; dense angle directions, LINEAR and none)"; tracking_model=true, fams=(:tdirL, :tdir0))
+end
+if get(ENV, "CASE", "ABC") in ("M",)
+    comp_case("M (no losses; long-range storage moves, T2)"; tracking_model=false, fams=(:slong,))
+end
+if get(ENV, "CASE", "ABC") in ("N",)
+    comp_case("N (all terms; long-range storage moves, LINEAR)"; tracking_model=true, fams=(:slongL,))
+end
+if get(ENV, "CASE", "ABC") in ("K",)
+    comp_case("K (no losses; storage blocks and cell–class aggregates, T2)"; tracking_model=false, fams=(:sblk2, :sblkg2, :sblkg4))
+end
+if get(ENV, "CASE", "ABC") in ("L",)
+    comp_case("L (all terms; cell–class aggregates, LINEAR)"; tracking_model=true, fams=(:sblkgL2, :sblkgL8))
+end
+if get(ENV, "CASE", "ABC") in ("J",)
+    comp_case("J (all terms; dispatch shapes)"; tracking_model=true, fams=(:dshp2, :dshp8))
+end
+if get(ENV, "CASE", "ABC") in ("H",)
+    comp_case("H (no losses; sparse angle directions, T2 and none)"; tracking_model=false, fams=(:tcut, :tcutw, :xloc, :xlocc, :xpair))
+end
+if get(ENV, "CASE", "ABC") in ("I",)
+    comp_case("I (all terms; sparse angle directions, LINEAR and none)"; tracking_model=true, fams=(:tcutL, :tcutLw, :xloc, :xpair))
 end
 if get(ENV, "CASE", "ABC") in ("C", "ABC")
     # cell templates: every partition level, one round per level (cell_power = 1) and time class
