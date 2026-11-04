@@ -2150,10 +2150,11 @@ struct LocalKernel
     weather::Float64                 # fine-level weather moves: fraction of the weather coordinates per step (0: off)
     wpools::Vector{Any}
     lmkw::NamedTuple                 # LocalModel options (cell_power, xr_partner, xr_ball)
+    kop::Bool                        # capacity moves with their operation (kop.jl) after kscale and kpeak
 end
-LocalKernel(P::Problem; extra=4.0, mode::Symbol=:auto, weather::Float64=0.0, lmkw::NamedTuple=NamedTuple()) =
+LocalKernel(P::Problem; extra=4.0, mode::Symbol=:auto, weather::Float64=0.0, lmkw::NamedTuple=NamedTuple(), kop::Bool=false) =
     LocalKernel(Dict{Int,LocalModel}(), [MoveWS(P) for _ in 1:Threads.maxthreadid()], extra, ReentrantLock(), Dict{Int,Any}(), Any[],
-                mode == :auto ? (P.E.flow === nothing ? :local : :flow) : mode, Dict{Int,Any}(), weather, Any[], lmkw)
+                mode == :auto ? (P.E.flow === nothing ? :local : :flow) : mode, Dict{Int,Any}(), weather, Any[], lmkw, kop)
 
 "Fine-level weather moves of the local kernel (if enabled and the level is spatially complete)."
 function maybe_weather!(rng, P::Problem, K::LocalKernel, LM::LocalModel, s::State; BC=nothing)
@@ -2168,7 +2169,8 @@ local_model(K::LocalKernel, P::Problem, ℓ::Int) = lock(() -> get!(() -> LocalM
 One π_ℓ-invariant transition of the operation and (where complete) the
 capacities at the level of `s`: the operation sweep (local sweep, then with
 probability 1/2 the storage multiscale sweep; or the flow/adaptive sweep) and the
-capacity moves in random order, then the fine weather moves if enabled. At α = 1 one
+capacity moves (`kscale`, `kpeak`, and `kop` if enabled) in random order, then the fine
+weather moves if enabled. At α = 1 one
 bias cache serves the capacity and weather moves (the operation sweep changes neither
 k nor x).
 """
@@ -2177,6 +2179,7 @@ function fine_local_step(rng, P::Problem, s::State, S)
     LM = local_model(K, P, s.ℓ)
     s = copy(s)
     BC = BiasCache(P, s)
+    kopmoves! = x -> K.kop ? kop_sweep!(rng, P, LM, x; BC=BC)[1] : x      # capacity with its operation (kop.jl)
     if K.mode in (:flow, :adaptive) && P.E.flow !== nothing && LM.complete[P.E.fθ]   # flow design (docs/flow_hierarchy.md)
         FF = lock(() -> get!(() -> FlowFrames(P, s.ℓ, s), K.frames, s.ℓ), K.lk)
         isempty(K.pools) && append!(K.pools, [BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
@@ -2187,7 +2190,7 @@ function fine_local_step(rng, P::Problem, s::State, S)
             x -> flow_sweep!(rng, P, LM, FF, x; wsets=K.wsets, pools=K.pools, extra=K.extra)[1]
         end
         AMk = K.mode == :adaptive ? get(K.adapt, s.ℓ, nothing) : nothing
-        kmoves! = x -> kpeak_sweep!(rng, P, LM, kscale_sweep!(rng, P, LM, x; BC=BC)[1]; AM=AMk, BC=BC)[1]
+        kmoves! = x -> kopmoves!(kpeak_sweep!(rng, P, LM, kscale_sweep!(rng, P, LM, x; BC=BC)[1]; AM=AMk, BC=BC)[1])
         if rand(rng) < 0.5
             s = sweep!(s)
             s = kmoves!(s)
@@ -2197,7 +2200,7 @@ function fine_local_step(rng, P::Problem, s::State, S)
         end
         return maybe_weather!(rng, P, K, LM, s; BC=BC)
     end
-    kmoves! = x -> kpeak_sweep!(rng, P, LM, kscale_sweep!(rng, P, LM, x; BC=BC)[1]; BC=BC)[1]
+    kmoves! = x -> kopmoves!(kpeak_sweep!(rng, P, LM, kscale_sweep!(rng, P, LM, x; BC=BC)[1]; BC=BC)[1])
     # the plain sweep, then (SoC form, complete level) with probability 1/2 the storage multiscale
     # sweep as in the flow kernel: without it the seasonal state of charge does not relax
     # (docs/mixing_diagnosis.md §6.2); it needs no flow basis

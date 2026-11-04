@@ -102,5 +102,6 @@ end
 include("test_local.jl")
 include("test_flow.jl")
 include("test_bias.jl")
+include("test_kop.jl")
 include("test_model.jl")
 include("test_convergence.jl")

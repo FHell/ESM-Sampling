@@ -2,8 +2,8 @@
 
 Capacity moves change investments together with the operation they constrain, as group
 actions sampled from their generalized Gibbs conditionals. This document covers the
-fine-level scaling move `kscale` and the peak-set move `kpeak`, and the two capacity moves of
-the level-0 warmup chain. See [README.md](README.md), [../sampler.md](../sampler.md) §6, and
+fine-level scaling move `kscale`, the peak-set move `kpeak`, the move of a capacity with its
+operation `kop`, and the two capacity moves of the level-0 warmup chain. See [README.md](README.md), [../sampler.md](../sampler.md) §6, and
 [../ensemble.md](../ensemble.md) §5 for the reference measure that enters their Jacobians.
 
 ## `kscale`: the scaling group of one unit
@@ -70,6 +70,56 @@ only). **Use.** The capacity move of $\alpha = 1$; gas capacity moves by
 `kpeak_sigma` times the unit's initial capacity (at least 100 MW), peak sets recomputed on the
 device from the net load after the renewable moves (`peak_sets_dev`), with the bias at
 $\alpha = 1$.
+
+## `kop`: capacity with its operation
+
+**Direction.** `kscale` keeps the physical dispatch, so a store's capacity can only exceed its
+current use by about $1/(\beta_k c)$ per pass and the use can only grow into it, and a
+renewable capacity is confined by the balance of its node to a few MW. `kop` moves the
+capacity at fixed **utilization** coordinates instead, so that the unit's operation scales
+with it. For one investable renewable (treated as load) or storage unit, or for all units of
+one such carrier with a common $u$:
+$$
+k_i\to k_i e^{u},\qquad \text{utilizations and states of charge of the moved units fixed},
+$$
+so the output $A_{i,\tau}k_i$ of a renewable and the charge and discharge powers of a store
+(its stored energy $e\,k\,h$) scale with $k$. At the node of each moved unit and at every
+step the requirement $Q_\tau$ of the other dispatchable generators changes by
+$-\Delta{\rm inj}_\tau(u)$, and they follow share-preservingly as in the pro-rata rule
+([../sampler.md](../sampler.md) §5.2): $P_\tau(u) = (Q_\tau-\Delta{\rm inj}_\tau)_+ + e_\tau$,
+$p_i = \sigma_i P_\tau$ with $(\sigma, e)$ fixed; where the node is in surplus the residual
+absorbs the change. The curve is a coordinate line in $(\log k, \text{utilizations},
+\sigma, e)$.
+
+**Conditional.** $u$ is drawn from
+$$
+\propto \pi\big(k(u), v(u)\big)\;\prod_{i} \frac{k_i(u)}{k_i(0)}\;
+\prod_{n,\tau}\Big|\frac{P_{n,\tau}(u)}{P_{n,\tau}(0)}\Big|^{m_{n,\tau}-1},
+$$
+the group Jacobian of the scaling on the moved capacities and the Jacobian of the pro-rata
+coordinates ($m_{n,\tau}$ compensating generators), with capex and its box penalty, every
+operating cost term of the moved units and their compensators, the balance of their nodes,
+the measure term $T\log(k+\kappa_0)$ of a store under `measure = "physical"`, and the bias
+change at $\alpha = 1$. It is drawn by slice sampling in $u$ with the fixed width 0.3
+(stepping out, shrinkage; $u$ is a group parameter, so the interval rule is the same from
+every point of the curve), truncated to $k_i e^u\ge\kappa_{\min}$ for every moved unit.
+
+**Selection.** One move per investable renewable and storage unit and one per such carrier,
+in random order, at spatially complete levels; a unit enters with $k\ge\kappa_{\min}$ (kept by
+the truncation), a compensator with $|A k|\ge\kappa_{\min}$ at its fixed capacity, and a
+carrier move needs its units at distinct balance cells. **Cost.** $O(T)$ per unit for the unit,
+its compensators and its node's balance per evaluation of the line density; the bias change
+of a unit move comes from the incremental bias cache, that of a carrier move from the units in
+sequence on a copy of the cache. About 0.15 s per pass at 40 nodes daily.
+
+**Use.** Wide moves of storage and renewable capacities wherever the operation can follow: at
+$\alpha = 0$ it shortens the capacity transient 2–4-fold (docs/mixing_diagnosis.md §4). It
+does not help where no dispatchable generator is left at a node (then a renewable change
+falls on the residual alone), and at $\alpha = 1$ it follows any direction of the bias that
+is not confining immediately. Off by default (`kop = false`).
+
+> **Status: missing.** The device has no `kop` (planned: a Metropolis form with per-carrier
+> proposal scales in the capacity pass).
 
 ## Level-0 capacity moves
 

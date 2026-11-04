@@ -18,6 +18,7 @@ Base.@kwdef mutable struct Config
     cell_level_power::Float64 = 1.0 # partition level of cell moves drawn ∝ (number of cells)^power
     xloc_partner_hops::Int = 1      # partners of the localized pair moves (xloc, xlocc) within this many hops
     xloc_ball_hops::Int = 0         # ... flow re-routed on the nodes within this many hops of the pair (0: the pair only)
+    kop::Bool = false               # capacity moves with their operation (kop.jl) in the fine step; off until α = 1 is stable with them
     measure::String = "utilization" # reference measure of dispatchable units: "utilization" or "physical" (MW); open choice
     storage::String = "soc"         # storage form: "soc" (state-of-charge trajectory; the only form)
     renewables::String = "load"     # renewables: "load" (output A·k; curtailment = nodal dump; the only form)
@@ -359,7 +360,7 @@ function new_sampler(P::Problem, s::State, cfg::Config)
     return ChainSampler(fill(1e-3, nkf), zeros(Int, nkf), zeros(Int, nkf), false, GibbsState(P),
                         LocalKernel(P; extra=cfg.local_extra, mode=Symbol(cfg.fine_kernel), weather=cfg.fine_weather,
                                     lmkw=(cell_power=cfg.cell_level_power, xr_partner=cfg.xloc_partner_hops,
-                                          xr_ball=cfg.xloc_ball_hops)))
+                                          xr_ball=cfg.xloc_ball_hops), kop=cfg.kop))
 end
 
 """
