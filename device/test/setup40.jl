@@ -5,9 +5,10 @@ const ML = ESMSampling
 const D = ESMDevice
 
 function setup40(; C=3, data=joinpath(@__DIR__, "..", "..", "data", "processed", "model.h5"), seed=3, pert=0.02,
-                 losses=true, link_losses=true, uc=["gas", "nuclear"])
+                 losses=true, link_losses=true, uc=["gas", "nuclear"], levels=nothing)
     cfg = ML.load_config(joinpath(@__DIR__, "..", "..", "configs", "haar_poc.toml")); cfg.verbose = false
     cfg.data = data
+    levels === nothing || (cfg.levels = levels)            # e.g. [(10, 120), (40, 120)]: a short year for compile probes
     cfg.out = joinpath(@__DIR__, "..", "..", "results", "haar_poc.h5")
     cfg.storage = "soc"; cfg.renewables = "load"; cfg.measure = "physical"; cfg.init = "heuristic"
     cfg.losses = losses; cfg.thermal = "soft"; cfg.link_losses = link_losses; cfg.uc = uc; cfg.brownfield = true

@@ -176,6 +176,8 @@ and $r$.
 | `:sblkg{L}`, `:sblkgL{L}` | storage blocks of a cell–class group (`prep_storage_ms!` with the group's units) | share-preserving, linear |
 | `:dshp{L}` | learned dispatch shapes of a generator pair at one node (`prep_adshape!`) | none (balanced) |
 | `:slong`, `:slongL` | `slong`, `slevel` (`prep_slong!`): a cyclic plateau of one unit, or its level | share-preserving, linear |
+| `:sxpair`, `:sxpairn` | `sxpair` (`sxpair_move!`): two storage units at one instant, across nodes on the ball template or at one node | share-preserving (leak, `sx_qloss`) |
+| `:sxlong`, `:sxlongn` | `sxlong` (`prep_sxlong_random!`): the same over a cyclic interval | share-preserving (leak, `sx_qloss`) |
 
 **Choices made on the host.** Choices that do not depend on the state are drawn when the
 schedule is built: the unit pair of `:spair`, the carriers of the cell moves, and the block
@@ -189,13 +191,22 @@ that compensate (`tdir_g`: $g = L_b d$, kept where $|g_n| > 10^{-9}\max|g|$, as 
 `tline`: $\pm 1$ at the line's ends). They are refreshed between device calls with the same table
 shapes (`tdir_refresh`), so the program is not recompiled.
 
+**Host sources and redraws** (`device/src/sources.jl`). The sparse angle sites (`SPARSE_SOURCE`:
+the Haar pieces of the flow basis's transport modes and, with the host adaptation, the learned
+pieces), the cell–class groups (`BLOCK_GROUPS`) and the storage pairs (`SX_SOURCE`) are set by
+`set_sources!` in `device_setup`. Between device calls `redraw_tables` draws the sites of every
+family with random sites again (sparse angle, storage pairs, `:slong` instants and lengths, block
+offsets and profiles, dispatch shapes) into tables of the plan's shapes: every drawn round cut to
+the plan's B sites, the rest into spare rounds, sites beyond the shape dropped (well below 1 % at
+40 nodes); a redraw that does not fit keeps the old table. The commitment columns of these
+families are flagged by generator index (`uc_cols_any`), so a redraw never needs a column the
+plan left out.
+
 **Dense angle families.** A site carries every line (static bus slots, so the balance sums stay
 static), every node's balance slot, G unit columns per node and one kink per node (share-preserving
 rule); one site per step and time class, one round per class: each step gets one dense move per
 family and sweep (the CPU draws about six `tmode` moves per step and sweep at 40 nodes, but at
-$O(N + n_{lines})$ per move the families run at a low rate in the design). The localized
-transport moves (`tcut`, `acut`: Haar atoms with sparse support) are not ported: their templates
-need per-site line lists (`Status`).
+$O(N + n_{lines})$ per move the families run at a low rate in the design).
 
 **Cell families.** They are bucketed by level and padded to the level's largest cell. Level q
 gets rounds ∝ (cells)^(cell_power−1), which reproduces the CPU's level probabilities.
@@ -233,9 +244,6 @@ default), with the proxy class `ChainParams.cls` from `proxy_class`.
 > 8 GB peak on the CPU backend, also in the slope-jump form, and is left out of the run set. It is
 > verified on arrays (`test_jump.jl`) and compiled against arrays; the dense diagnostics of the CPU
 > comparison (`test_comp.jl`) exceed 10 GB for it.
-
-> **Status: deviation.** Cell–class aggregates of the block moves (one class in one cell) are not
-> ported.
 
 ## 4. Schedule
 
@@ -405,7 +413,8 @@ bound.
    by one `AdaptiveModes` (pooled over chains: transport modes, storage shapes per length and
    season, response coefficients per node and proxy class, updated at observation counts $2^j$),
    the chains' frames are refreshed (flow basis), and the static parameters (β1, β2), the tables
-   of the dense angle families and the block profiles are uploaded anew (same shapes);
+   of the dense angle families and the block profiles are uploaded anew (same shapes); then the
+   sites of the families with random sites are redrawn (`redraw_tables`, §3) and uploaded;
 5. `chains_report`: the same diagnostics and HDF5 output as the CPU driver (without the
    additional outputs of `write_run_outputs`).
 
@@ -497,7 +506,8 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | storage blocks, one unit (plateau, shapes) | verified on arrays ($L$ = 2–32) and compiled; scheduled with `families = :all` |
 | nominal storage requirement of the share-preserving `:tsoc`, `:sblk{L}` (CPU `soc_qadj`, [moves/storage.md](moves/storage.md)) | done (`soc_qadj4`); verified on arrays against the CPU |
 | long-range storage moves `slong`, `slevel` (`:slong`, `:slongL`) | verified on arrays against the CPU (`test_comp.jl` M, N); L drawn on 2 … T−1 (the CPU includes L = 1, the `tsoc` move) |
-| storage pairs `sxpair`, `sxlong` (re-routing templates, leak and loss compensation, footprint rounds) | missing |
+| storage pairs `sxpair`, `sxlong` (`:sxpair`, `:sxpairn`, `:sxlong`, `:sxlongn`: ball templates, leak and `sx_qloss` compensation, footprint rounds) | verified on arrays against the CPU (`test_comp.jl` O, with the CPU walk extended to 2000 nats: its 40-nat stop truncates 11 % of these lines, whose potential falls again further out); B uniform among the partner slot's units (the CPU: ∝ min(k_A, k_B)); share-preserving only |
+| host sources and redraw of the random sites between device calls (`set_sources!`, `redraw_tables`) | done; redrawn tables conflict-free and run on arrays |
 | memory cap of a round (`DENSE_BUDGET`) | done |
 | slope-jump form of the line sampler, per-family choice (`JUMP_RATIO`) | done; verified on arrays against the CPU and the dense form, Reactant (CPU backend) against arrays |
 | term axis (program size independent of the term count); stacked builders (one gather per field) for the compensated, block, cell and dense angle families | done |
@@ -517,7 +527,48 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | weather moves with compensation as a device family | not planned: the weather moves to a prior-reversible pCN process on the host, the capacities to a Langevin step ([../worklog.md](../worklog.md)); `kop` and the device bias (`bias_dev.jl`, kept as it is until it is retired) are not extended |
 | Float32 build of the whole program (`ESMDevice.F32`) | done; compiles and runs (no exactness tests by design) |
 | replica–Langevin sampler ([sampler.md](sampler.md) §11): the weather process per replica (pCN, regime windows), the compensated initialisation, the capacity scores, the Langevin update, the dispatch-following maps (fixed output, kop curve), the gate and the probe; replicas as a batch dimension | missing; CPU reference `src/replicas.jl` with explicit-noise building blocks (`pcn_weather`, `regime_window`, `langevin_update`) |
-| fused kernels, tiling, multi-GPU, full-Europe memory plan | missing |
+| fused kernels (planned option, below), tiling, multi-GPU, full-Europe memory plan | missing |
+
+**Fused kernels (planned option, not built).** XLA materializes the intermediates of a round
+(points × columns of every site, the sorted jump lists) in device memory, and the restructuring
+(§3) only shrinks them. Reactant can embed hand-written kernels: KernelAbstractions and CUDA.jl
+kernels run inside traced programs, and its `raise = true` pass turns them into HLO for the other
+backends. A per-round kernel (one thread block per site: gather, terms, the site's line in
+registers or shared memory, the draw, the scatter) would therefore fit into the same program; the
+sites of a round are disjoint by construction (footprint rounds), so no synchronisation between
+blocks is needed. On the test path, step 2 would compare the raised kernel on the CPU backend with
+the array reference, to round-off rather than bitwise (the summation order changes). The cost is a
+second implementation of the term builders, kept equal to the array code by that test.
+
+**Debugging compile time.** Put every compile under a time limit (`timeout --signal=KILL`;
+SIGTERM does not stop a Julia process inside the MLIR passes). Then:
+- *Where the time goes:* `Reactant.Profiler.@timed_compile f(args...)` (the options of
+  `@compile`) returns the program and the times of tracing, MLIR passes and XLA compile; plain
+  `@time` does not separate them. The first trace in a process is mostly Julia compilation of
+  the traced code (about 140 s for a template family at 40 nodes, independent of the sizes); a
+  second trace of the same program takes seconds.
+- *Unrolling:* `@code_hlo optimize = false f(args...)` prints the raw module. Its op count should
+  not grow with T or the number of sites; a program with traced loops has `stablehlo.while`.
+  Plain Julia `for`/`if` over traced data is unrolled or takes the trace-time branch; `@trace for`
+  takes only integer or float ranges, both branches of `@trace if` must have the same types.
+  Reactant also takes `all(f, v)` and `any(f, v)` over a `Vector` of traced arrays as traced
+  reductions (a `TracedRNumber{Bool}` in an `if`): use a plain loop (`allnothing`, `stk`).
+- *Constants:* untracked arrays and scalars become compile-time constants. Index tables go in as
+  `Reactant.to_rarray` arguments (the device tables are), scalars with `track_numbers = true`;
+  the compile option `max_constant_threshold` errors on a large embedded constant. Grep the
+  printout for large `dense<` constants and the sizes of gathers and scatters.
+- *Which pass:* compile with `optimize = :none` to see whether the passes are the cost; the
+  private options `disable_slice_to_batch_passes`, `disable_scatter_gather_optimization_passes`,
+  `disable_loop_raising_passes`, `disable_licm_optimization_passes`, `excluded_passes = […]` and
+  `inline` narrow it down (diagnosis only, not for production).
+- *Dumps:* `Reactant.MLIR.IR.DUMP_MLIR_ALWAYS[] = true` with `DUMP_MLIR_DIR[]`,
+  `JULIA_DEBUG=Reactant`, `XLA_FLAGS=--xla_dump_to=<dir>`.
+- *Kernels:* a KernelAbstractions `@kernel` launched inside the compiled function (CUDA.jl
+  loaded, also on the CPU) and `raise = true` lower it to HLO for the CPU backend; not every kernel
+  is raisable.
+
+The probe scripts used for `:slong` take a family, a site count and a coarser year
+(`setup40(; levels = [(10, h), (40, h)])`, T = 8760/h).
 
 **Reactant constraints met so far.** Inside `@trace for`, every captured scalar becomes
 traced, so structs captured by a loop are type-parametric in their scalars and static flags

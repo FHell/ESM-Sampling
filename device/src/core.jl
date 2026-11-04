@@ -329,6 +329,8 @@ include("tdir.jl")         # dense angle directions: tmode, tline, amode (and â€
 include("sparse.jl")       # sparse angle directions: tcut, acut, xloc, xlocc, xpair
 include("dshape.jl")       # learned dispatch shapes (adshape)
 include("slong.jl")        # long-range storage moves (slong, slevel)
+include("storagepair.jl")  # storage pairs (sxpair, sxlong)
+include("sources.jl")      # host sources of the site choices, their redraw between device calls
 export TermBatch, sample_dense, eval_terms, FlatState, plan, run_rounds, check_conflicts, unflat!
 
 include("ren.jl")           # renewable units: index, parameters, state, write-back

@@ -7,9 +7,35 @@ function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], 
     T = LM.T
     ws, wa = ML.MoveWS(P), ML.MoveWS(P); wa.follow = false
     fam == :spair0 && (fam = :spair)                          # the same CPU move (spair)
-    τ = fam == :spair ? site[2] : (fam in D.TDIR_FAMILIES || haskey(D.SPARSE_FAMILIES, fam)) ? site[1] : site[end]; τm = mod1(τ - 1, T)   # spair: (s, τ, q1, q2); tdir: (τ, d, g)
+    τ = fam == :spair ? site[2] : (fam in D.TDIR_FAMILIES || haskey(D.SPARSE_FAMILIES, fam)) ? site[1] :
+        haskey(D.SX_FAMILIES, fam) ? mod1(site[1] + 1, T) : site[end]; τm = mod1(τ - 1, T)   # spair: (s, τ, q1, q2); tdir: (τ, d, g)
     gi(q) = ix.gidx[q]
     sf = string(fam)
+    if haskey(D.SX_FAMILIES, fam)                              # storage pair with the given choices (`prep_sxpair!`, `prep_sxlong!`)
+        a, L, (sA, sB, _, _, _) = site
+        long, _ = D.SX_FAMILIES[fam]
+        (si, i), (sj, jj) = ix.sidx[sA], ix.sidx[sB]
+        n, mB = E.stors[si].bus[i], E.stors[sj].bus[jj]
+        j = findfirst(==(mB), LM.sxpart[n])
+        if long
+            m = ML.SXLong(ML.MoveWS(P), ML.MoveWS(P), ML.MoveWS(P), P, LM, LC)
+            ML.prep_sxlong!(m, si, i, sj, jj, j, a, L, jac; κmin=κmin) || return nothing
+            return m
+        end
+        τs, τm_ = mod1(a + 1, T), mod1(a, T)
+        s, sB = E.stors[si], E.stors[sj]
+        EA, EB = LC.kst[si][i] * s.hours[i], LC.kst[sj][jj] * sB.hours[jj]
+        (EA / LM.Δt < κmin || EB / LM.Δt < κmin) && return nothing
+        empty!(jac)
+        ML.prep_node!(ws, P, LM, s.fe, i, 1.0, τs)
+        ML.prep_node!(ws, P, LM, sB.fe, jj, -EA / EB, τs)
+        ML.sx_step!(ws, jac, P, LM, LC, (si, i, sj, jj), j, EA / LM.Δt, τs; κmin=κmin)
+        ML.sx_step!(wa, jac, P, LM, LC, (si, i, sj, jj), j, -EA / LM.Δt, τm_; κmin=κmin)
+        ML.finalize!(ws, P, LM, LC, τs); ML.finalize!(wa, P, LM, LC, τm_); ML.link_soc!(wa, ws, LM)
+        bm = ML.BlockMove([wa, ws], 2, [τm_, τs], P, LM, LC, Float64[], Float64[])
+        append!(bm.bps, wa.bps); append!(bm.bps, ws.bps)
+        return bm
+    end
     if fam in (:slong, :slongL)                                # long-range plateau or level move (`prep_slong!`)
         s, a, L = site
         si, i = ix.sidx[s]
@@ -172,7 +198,7 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
     C = size(st0.θ, 1)
     st = st0
     scpu = [copy(s) for s in ss]
-    stats = Dict(:n => 0, :guard => 0, :own_ok => 0, :own_bad => 0, :cpupts_bad => 0, :improper_mismatch => 0, :overshoot => 0, :truncated => 0,
+    stats = Dict(:n => 0, :guard => 0, :own_ok => 0, :own_bad => 0, :cpupts_bad => 0, :improper_mismatch => 0, :overshoot => 0, :truncated => 0, :flat => 0,
                  :jac_rej => 0, :jac_mismatch => 0, :worst_own => 0.0, :worst_cpu => 0.0)
     for f in fams, r in 1:size(tabs[f].on, 2)
         tb, _ = D.build(Val(f), st, pl.cp, pl.sp, tabs[f], r, pl.k)
@@ -184,19 +210,21 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
         tc = zeros(C, B); tcpre = zeros(C, B)
         pts = [Float64[0.0] for _ in 1:C, _ in 1:B]
         walked = falses(C, B)
+        cpucs = Dict{Tuple{Int,Int},Vector{Float64}}()
         for c in 1:C
             for (b, site) in enumerate(sites)
                 bm, jac = cpumove(c, LCs[c], f, site)
                 bm === nothing && continue
-                t = ML.sample_line!(MockRNG([u[c, b, 1], u[c, b, 2]]), bm, β, Float64[])
+                t = ML.sample_line!(MockRNG([u[c, b, 1], u[c, b, 2]]), bm, β, Float64[]; maxnats=CPU_MAXNATS[])
                 walked[c, b] = !isempty(bm.lb.pts)
-                walked[c, b] && (pts[c, b] = copy(bm.lb.pts))
+                walked[c, b] && (pts[c, b] = copy(bm.lb.pts); cpucs[(c, b)] = copy(bm.lb.cs))
                 tcpre[c, b] = t
                 if t != 0.0 && !isempty(jac) && u[c, b, 3] >= exp(min(0.0, ML.logjac(jac, t, bm)))
                     t = 0.0
                 end
                 tc[c, b] = t
-                bm isa ML.SLong ? ML.commit_slong!(bm, scpu[c].v, tfin[c, b, 1]) : ML.commit_block!(bm, scpu[c].v, tfin[c, b, 1])
+                bm isa ML.SLong ? ML.commit_slong!(bm, scpu[c].v, tfin[c, b, 1]) :
+                bm isa ML.SXLong ? ML.commit_sxlong!(bm, scpu[c].v, tfin[c, b, 1]) : ML.commit_block!(bm, scpu[c].v, tfin[c, b, 1])
             end
         end
         # the CPU's points inside the CPU walk's range, the device's own kinks outside it (the CPU walk
@@ -250,10 +278,28 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
                     continue
                 end
             end
+            # a segment flat to round-off (e.g. two units of one node swapping charge): the CPU and the device
+            # may see slopes of opposite sign there and sample it from opposite ends (t ↦ a + b − t)
+            if d2 > 1e-9
+                ps, cv = Pcs[(c, b)], cPc[(c, b)]
+                j = findlast(<=(tcpre[c, b]), ps)
+                if j !== nothing && j < length(ps) && abs(cv[j+1] - cv[j]) < 1e-6 &&
+                   abs(tcp[c, b] - (ps[j] + ps[j+1] - tcpre[c, b])) <= 1e-9 * max(1.0, abs(tcpre[c, b]))
+                    stats[:flat] += 1
+                    continue
+                end
+            end
             stats[:worst_cpu] = max(stats[:worst_cpu], d2)
             if d2 > 1e-9
                 stats[:cpupts_bad] += 1
                 stats[:cpupts_bad] <= 5 && println("  CPU-points draw differs: $f round $r site $site chain $c: device $(tcp[c, b]) CPU $(tcpre[c, b])")
+                if stats[:cpupts_bad] <= 5 && haskey(cpucs, (c, b))      # the potentials at the CPU points (relative to t = 0)
+                    pc, cc = pts[c, b], cpucs[(c, b)]
+                    dv = Dict(zip(Pcs[(c, b)], cPc[(c, b)])); d0 = dv[0.0]
+                    dif = [abs((dv[x] - d0) - y) for (x, y) in zip(pc, cc)]
+                    j = argmax(dif)
+                    println("    potentials at the CPU points: max |device − CPU| $(dif[j]) at t = $(pc[j]) (of $(length(pc)) points, CPU there $(cc[j]))")
+                end
             end
             (tcpf[c, b] == 0.0) != (tc[c, b] == 0.0) && (stats[:jac_mismatch] += 1)    # Jacobian decision on the same t
             (tcpre[c, b] != 0.0 && tc[c, b] == 0.0) && (stats[:jac_rej] += 1)
@@ -265,6 +311,9 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
     for c in 1:C; ML.evaluate!(P, scpu[c]); end
     return st, stats, scpu
 end
+
+"Stop of the CPU walk (nats above its running minimum) in `mock_compare`; the CPU default is 40."
+const CPU_MAXNATS = Ref(40.0)
 
 "RNG returning the given values in order (`rand(rng)`); errors if more are drawn than given."
 mutable struct MockRNG <: Random.AbstractRNG

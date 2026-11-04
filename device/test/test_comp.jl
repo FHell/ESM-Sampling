@@ -62,6 +62,7 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
     Dm = randn(MersenneTwister(5), E.sys.N, 4); Dm .-= sum(Dm; dims=1) ./ E.sys.N
     D.SPARSE_SOURCE[] = D.sparse_source(P, LM, ix; atoms=() -> Any[(Hθ, ML.localize(Dm, Hθ))])
     D.BLOCK_GROUPS[] = D.block_groups(P, ix)                   # cell–class groups of the aggregate blocks
+    D.SX_SOURCE[] = D.sx_source(P, LM, ix)                      # storage pairs
     pl = D.plan(M, S, β; families=fams, cpumap=true, cls=cls, bmax=Dict(f => NSITE for f in fams), cells=ci)
     qof = Dict(ix.gidx[q] => q for q in eachindex(ix.gidx))
     for n in eachindex(AM.runits), (j, (f, i)) in enumerate(AM.runits[n])
@@ -82,7 +83,7 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
                               bm = cpu_move(P, LM, LC, ix, f, site; jac=jac, learn=learnof(f, c), chain=c); (bm, jac))
     ok_conf = all(D.check_conflicts(f, D.host_table(f, pl.tp, pl.sched[f]))[1] for f in pl.fams)
     # exactness of the dense form with kinked and LINEAR entries: ≤ 2 sign changes per secondary quantity
-    maxroots = Dict(f => f in (:slong, :slongL) ? NaN :         # (a dense diagnostic: too large for the long-range moves)
+    maxroots = Dict(f => f in (:slong, :slongL, :sxlong, :sxlongn) ? NaN :         # (a dense diagnostic: too large for the long-range moves)
                          maximum(maximum(D.root_count(D.build(Val(f), st0, pl.cp, pl.sp, tabs[f], r, pl.k)[1], pl.k))
                                  for r in 1:size(tabs[f].on, 2)) for f in pl.fams)
     t0 = time()
@@ -94,14 +95,15 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
                 stats[:guard], " of ", stats[:n])
         @test stats[:guard] <= 0.01 * stats[:n]
         @printf("  (a) device own points vs CPU: %d agree (max %.1e), %d differ (CPU ray splitting)\n", stats[:own_ok], stats[:worst_own], stats[:own_bad])
-        @printf("  (c) device sampler on the CPU points vs CPU: max %.1e, %d beyond 1e-9; CPU ray overshoot excluded: %d; CPU walk truncated (a deeper region beyond its 40-nat stop) excluded: %d; improper mismatch %d\n",
-                stats[:worst_cpu], stats[:cpupts_bad], stats[:overshoot], stats[:truncated], stats[:improper_mismatch])
+        @printf("  (c) device sampler on the CPU points vs CPU: max %.1e, %d beyond 1e-9; CPU ray overshoot excluded: %d; CPU walk truncated (a deeper region beyond its %.0f-nat stop) excluded: %d; flat segment sampled from the other end: %d; improper mismatch %d\n",
+                stats[:worst_cpu], stats[:cpupts_bad], stats[:overshoot], CPU_MAXNATS[], stats[:truncated], stats[:flat], stats[:improper_mismatch])
         @printf("  Jacobian step: CPU rejections %d, decision mismatches on the same t %d\n", stats[:jac_rej], stats[:jac_mismatch])
         @test stats[:cpupts_bad] == 0
         @test stats[:improper_mismatch] == 0
         @test stats[:jac_mismatch] == 0
         @test stats[:overshoot] <= 1e-3 * stats[:n]
         @test stats[:truncated] <= 1e-2 * stats[:n]
+        @test stats[:flat] <= 1e-2 * stats[:n]
         stC = cpu_flat(P, ix, LCs)
         for fld in (:θ, :ω, :uc, :e, :u, :r)
             a, b = getfield(stJ, fld), getfield(stC, fld)
@@ -155,6 +157,12 @@ if get(ENV, "CASE", "ABC") in ("F",)
 end
 if get(ENV, "CASE", "ABC") in ("G",)
     comp_case("G (all terms; dense angle directions, LINEAR and none)"; tracking_model=true, fams=(:tdirL, :tdir0))
+end
+if get(ENV, "CASE", "ABC") in ("O",)
+    # the CPU walk reaches far beyond its 40-nat stop here: the pairs' potential falls again further out
+    CPU_MAXNATS[] = 2000.0
+    comp_case("O (no losses; storage pairs)"; tracking_model=false, fams=(:sxpair, :sxpairn, :sxlong, :sxlongn))
+    CPU_MAXNATS[] = 40.0
 end
 if get(ENV, "CASE", "ABC") in ("M",)
     comp_case("M (no losses; long-range storage moves, T2)"; tracking_model=false, fams=(:slong,))

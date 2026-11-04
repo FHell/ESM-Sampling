@@ -36,8 +36,8 @@ How to add a family, with its tests and its device port: [adding_a_move.md](addi
 | `tpotL`, `tmodeL`, `tlineL`, `tcutL`, `tsocL` | adaptive | `:tpotL`, `:tsocL`; `tmodeL`, `tlineL` as `:tdirL`; coefficients learned on the host (`run_device(…; adapt=true)`); `tcutL` as `:tcutL`, `:tcutLw` |
 | storage plateau and shape | all | `:sblk{L}`, `:sblkL{L}` (one unit), `:sblkg{L}`, `:sblkgL{L}` (cell–class groups) |
 | `slong`, `slevel` | all, with `storage_long > 0` (SoC form, complete level) | `:slong`, `:slongL` (L ≥ 2) |
-| `sxpair` | all, with `storage_xpair > 0` (SoC form, complete level) | missing |
-| `sxlong` | all, in the long-range storage sweep with `storage_xlong > 0` | missing |
+| `sxpair` | all, with `storage_xpair > 0` (SoC form, complete level) | `:sxpair` (cross-node), `:sxpairn` (same node); no requirement tracking |
+| `sxlong` | all, in the long-range storage sweep with `storage_xlong > 0` | `:sxlong`, `:sxlongn`; no requirement tracking |
 | `amode`, `amode0`, `amodeL` | adaptive | as `:tdir`, `:tdir0`, `:tdirL` (modes learned on the host) |
 | `acut`, `acutL` | adaptive | atoms of the learned pieces in `:tcut…` |
 | learned storage shapes | adaptive | profile columns of `:sblk{L}` per season class, learned on the host |
@@ -51,8 +51,10 @@ How to add a family, with its tests and its device port: [adding_a_move.md](addi
 
 The device driver schedules the compensated, block, cell and dense angle families with
 `families = :all` (`device_families`); the default is the plain families. The dense angle families
-have sites only with the host adaptation (`adapt = true`), which draws their directions
-([../device.md](../device.md) §3, §6).
+have sites only with the host adaptation (`adapt = true`), which draws their directions. The
+sparse angle, aggregate, dispatch-shape, long-range storage and storage-pair families run when
+listed (`families = (…)`); the driver sets their host sources and redraws their sites between
+device calls ([../device.md](../device.md) §3, §6).
 
 ## Common vocabulary
 

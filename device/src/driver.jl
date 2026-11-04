@@ -222,6 +222,7 @@ function device_setup(cfg::ML.Config; families=FAMILIES_FAST, budget=DENSE_BUDGE
     wsh = load_shares(P, chains)
     LM = ML.LocalModel(P, L)
     HA = adapt ? host_adapt(P, LM, ix, chains, L) : (TDIR_SOURCE[] = nothing; nothing)
+    set_sources!(P, LM, ix; HA=HA)                  # sparse atoms, cell–class groups, storage pairs (sources.jl)
     fams = families === :all ? device_families(M, cell_info(P, LM, ix)) : families
     # `only`: plan only these families (and the plain and :spair families, whose split rules read the list)
     only === nothing || (fams = Tuple(f for f in fams if f in only || f in FAMILIES_FAST || f in (:spair0, :spair)))
@@ -360,6 +361,8 @@ function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, 
                 tabs = merge(tabs, R(new[2]))       # same shapes: no recompilation
             end
         end
+        rd, _, _ = redraw_tables(pl, M, hr)           # new random sites (sources.jl): same shapes, an upload
+        isempty(rd) || (tabs = merge(tabs, R(rd)))
         if refit                                    # the target changed: re-pack the bias aggregates
             chains .= [ML.evaluate!(P, x) for x in chains]    # in place: `packb` reads this vector
             BD, BS, gitem, sitem, ritem = packb()

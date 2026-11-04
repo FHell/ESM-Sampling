@@ -82,7 +82,7 @@ function build_slong(st, cp, sp, tab, r, k, ::Val{lin}, fam::Symbol) where {lin}
     m4 = c4(ifelse.(okm, 1.0, 0.0))
     T = size(tab.ce0, 2)
     wa, wb = M4(tab.wa[:, :, r]) .* m4, M4(tab.wb[:, :, r]) .* m4
-    rep(x) = (y = c4(x); cat(fill(y, T)...; dims=4))
+    rep(x) = c4(x) .+ zeros(1, 1, 1, T)                          # a broadcast: a splat of T arguments takes minutes to trace
     soc = ssoc(z4, T; e0=G4(st.e, tab.ce0[:, :, r]), ae=wa, e10=G4(st.e, tab.ce1[:, :, r]), ae1=wb,
                k=rep(g3(cp.ks, s)), w=rep(g3(cp.ws, s)), h=rep(s3(sp.sh, s)), ηin=rep(s3(sp.sηin, s)), ηout=rep(s3(sp.sηout, s)),
                qt=rep(s3(sp.sqt, s)), mc=rep(s3(sp.smc, s)), slot=collect(1:T))

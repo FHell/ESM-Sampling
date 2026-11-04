@@ -31,6 +31,7 @@ Hθ = ML.haar_theta(P.E)                                      # sparse angle sit
 Dm = randn(MersenneTwister(5), P.E.sys.N, 4); Dm .-= sum(Dm; dims=1) ./ P.E.sys.N
 D.SPARSE_SOURCE[] = D.sparse_source(P, LM, ix; atoms=() -> Any[(Hθ, ML.localize(Dm, Hθ))])
 D.BLOCK_GROUPS[] = D.block_groups(P, ix)
+D.SX_SOURCE[] = D.sx_source(P, LM, ix)                       # storage pairs (CASE=B: T2 only)
 for L in D.BLOCK_LENGTHS
     D.set_profiles!(L, hcat([vcat(0.0, rand(MersenneTwister(L + j), L - 1) .- 0.3, 0.0) for j in 1:2]...))
 end
@@ -41,7 +42,8 @@ end
 deffams = CASE == "A" ? (:spair, :tsocL, :tpotL, :sblkL2, :sblkL8, :sblkgL2, :tdirL, :tdir0, :tcutL, :tcutLw, :xloc, :xpair, :dshp4, :slongL) :
           (:gen0, :pair0, :soc, :link, :theta3, :theta5, :theta, :gen, :uc, :pair, :spair0, :spair, :tsoc, :tpot, :sblk2, :sblk4, :sblk8,
            :sblk16, :sblk32, :sblkg2, :sblkg8, :tdir, :tdir0, :tcut, :tcutw, :xloc, :xlocc, :xpair, :dshp2, :dshp8, :slong,
-           :cell1, :cellu1, :cell2, :cellu2, :cell3, :cellpairu2, :cellpairu3, :cellpairu1)
+           :sxpair, :sxpairn, :sxlong, :sxlongn, :cell1, :cellu1, :cell2, :cellu2, :cell3, :cellpairu2, :cellpairu3)
+# :cellpairu1 (≈ 10 GB to compile, docs/system/device.md §3) only on request: FAMS=cellpairu1
 fams = haskey(ENV, "FAMS") ? Tuple(Symbol.(split(ENV["FAMS"], ","))) : deffams
 
 @testset "Reactant (CPU backend) = Julia arrays, case $CASE" begin
