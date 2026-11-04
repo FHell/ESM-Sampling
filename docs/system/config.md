@@ -45,7 +45,7 @@ the 256-node network.
 | `out` | `"results/run.h5"` | output file |
 | `cache_dir` | `""` | directory of the weather-model and LP caches; `""`: `<dirname(out)>/cache/`; the environment variable `ESM_CACHE_DIR`, if set and non-empty, overrides it ([hpc.md](hpc.md) §4) |
 | `cache_mirror` | `""` | read-only fallback of the caches: an entry missing in the cache but present here is copied in instead of recomputed; `""`: none; overridden by `ESM_CACHE_MIRROR` |
-| `checkpoint` | `""` | CPU driver: the state snapshot file, written at sweep boundaries and resumed from if it exists at start ([hpc.md](hpc.md) §7, layout in [data.md](data.md) §5); `""`: off |
+| `checkpoint` | `""` | CPU and device drivers: the state snapshot file, written at sweep boundaries and resumed from if it exists at start ([hpc.md](hpc.md) §7, layout in [data.md](data.md) §5); `""`: off |
 | `checkpoint_minutes` | 30.0 | ... a snapshot every this many minutes of wall time (and once after the level-0 warmup) |
 | `stop_file` | `""` | ... if this file exists at a sweep boundary: write a snapshot, remove the file, exit with code 75 |
 | `seed` | 1 | master seed (chains use derived seeds; after the r-th resume, re-seeded from seed and r) |
@@ -211,7 +211,8 @@ fine-weather keys are not used.
 | key | default | meaning |
 |---|---|---|
 | `device_backend` | `"gpu"` | Reactant backend, `"gpu"` or `"cpu"` |
-| `device_sweeps` | 10 | operation sweeps per device call (one capacity pass and one checkpoint after each) |
+| `device_sweeps` | 10 | `mh`: operation sweeps per device call (one capacity pass and one host checkpoint after each); `replicas`: replica steps per host checkpoint (monitored quantities, replica records and snapshot boundary; `mlda_warmup` and `nsamples` must be multiples of it) |
+| `device_sampler` | `"mh"` | capacity sampler of the device driver: `"mh"` (Metropolis capacity pass with the bias, [device.md](device.md) §5.1) or `"replicas"` (the replica–Langevin sampler with the batch on the device, §5.2, §6.2; its settings are the keys of the CPU sampler: `replicas`, `replica_*`, `langevin_*`, `tilt_*` above) |
 | `kmove_nprop` | 2 | Metropolis proposals per unit and capacity pass |
 | `kmove_sigma` | 0.3 | scaling-move proposal scale (log capacity) |
 | `kpeak_sigma` | 0.05 | peak-set proposal scale, fraction of the unit's start capacity (at least 100 MW) |

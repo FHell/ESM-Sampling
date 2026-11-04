@@ -2,23 +2,78 @@
 # `prep_node!`/`finalize!`/`link_soc!` and evaluated as in `local_sweep!` (BlockMove over τ−1, τ).
 
 "CPU move of family `fam` at `site` (device indices) on LocalCost LC; returns the BlockMove (or nothing if masked)."
-function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], learn=nothing)
+function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], learn=nothing, chain=1)
     E = P.E
     T = LM.T
     ws, wa = ML.MoveWS(P), ML.MoveWS(P); wa.follow = false
     fam == :spair0 && (fam = :spair)                          # the same CPU move (spair)
-    τ = fam == :spair ? site[2] : site[end]; τm = mod1(τ - 1, T)      # spair sites are (s, τ, q1, q2)
+    τ = fam == :spair ? site[2] : (fam in D.TDIR_FAMILIES || haskey(D.SPARSE_FAMILIES, fam)) ? site[1] : site[end]; τm = mod1(τ - 1, T)   # spair: (s, τ, q1, q2); tdir: (τ, d, g)
     gi(q) = ix.gidx[q]
     sf = string(fam)
-    if startswith(sf, "sblk")                                  # storage block (plateau or shape profile)
-        L = parse(Int, replace(sf, "sblkL" => "", "sblk" => ""))
-        s, b0, p = site
+    if fam in (:slong, :slongL)                                # long-range plateau or level move (`prep_slong!`)
+        s, a, L = site
         si, i = ix.sidx[s]
-        κs = LC.kst[si][i] * E.stors[si].hours[i] / LM.Δt
+        m = ML.SLong(ML.MoveWS(P), ML.MoveWS(P), ML.MoveWS(P), P, LM, LC)
+        ML.prep_slong!(m, si, i, a, L, jac; κmin=κmin, learn=learn) || return nothing
+        return m
+    end
+    if startswith(sf, "dshp")                                  # dispatch shape of a unit pair (`prep_adshape!`)
+        L = parse(Int, replace(sf, "dshp" => ""))
+        q1, q2, b0, p = site
+        bm = ML.BlockMove([ML.MoveWS(P) for _ in 1:L+2], 0, Int[], P, LM, LC, Float64[], Float64[])
+        (g1, i1), (g2, i2) = gi(q1), gi(q2)
+        ML.prep_adshape!(bm, P, LM, LC, (E.gens[g1].vf, i1), (E.gens[g2].vf, i2), D.dshapes(L)[:, p], b0, L; κmin=κmin) || return nothing
+        return bm
+    end
+    if startswith(sf, "sblk")                                  # storage block (plateau or shape profile)
+        L = parse(Int, replace(sf, "sblkgL" => "", "sblkg" => "", "sblkL" => "", "sblk" => ""))
+        s, b0, p = site
+        us = [ix.sidx[x] for x in (s isa Integer ? [s] : s)]     # one unit, or a cell–class group
         wss = [ML.MoveWS(P) for _ in 1:L+2]
         bm = ML.BlockMove(wss, 0, Int[], P, LM, LC, Float64[], Float64[])
         shape = p == 1 ? nothing : D.profiles(L)[:, p]
-        ML.prep_storage_ms!(bm, P, LM, LC, [(si, i)], b0, L, shape, jac; κmin=κmin, learn=learn) || return nothing
+        ML.prep_storage_ms!(bm, P, LM, LC, us, b0, L, shape, jac; κmin=κmin, learn=learn) || return nothing
+        return bm
+    end
+    if haskey(D.SPARSE_FAMILIES, fam)                         # sparse angle direction (τ, (nodes, d, g, pair))
+        τd, (nodes, d, g, pq) = site
+        rule, pair, _ = D.SPARSE_FAMILIES[fam]
+        if pair                                                # the pair units (as `prep_xloc!`, `prep_random!(:xpair)`)
+            (g1, i1), (g2, i2) = gi(pq[1]), gi(pq[2])
+            κ1 = LC.A[g1][i1, τd] * LC.kgen[g1][i1]; κ2 = LC.A[g2][i2, τd] * LC.kgen[g2][i2]
+            (abs(κ1) < κmin || abs(κ2) < κmin) && return nothing
+            ML.prep_node!(ws, P, LM, E.gens[g1].vf, i1, 1 / κ1, τd)
+            ML.prep_node!(ws, P, LM, E.gens[g2].vf, i2, -1 / κ2, τd)
+        end
+        for (n, a) in zip(nodes, d)
+            a != 0.0 && ML.prep_node!(ws, P, LM, E.fθ, n, a, τd)
+        end
+        if rule != :none
+            for (n, gg) in zip(nodes, g)
+                gg != 0.0 && ML.prorata!(ws, jac, P, LM, LC, n, gg, τd; κmin=κmin, learn=learn)
+            end
+        end
+        ML.finalize!(ws, P, LM, LC, τd)
+        bm = ML.BlockMove([wa, ws], 2, [mod1(τd - 1, T), τd], P, LM, LC, Float64[], Float64[])
+        ML.finalize!(wa, P, LM, LC, mod1(τd - 1, T)); ML.link_soc!(wa, ws, LM)
+        append!(bm.bps, wa.bps); append!(bm.bps, ws.bps)
+        return bm
+    end
+    if fam in D.TDIR_FAMILIES                                  # dense angle direction (τ, d, g) of chain `chain`
+        τd, dd, gg = site
+        d, g = dd[chain, :], gg[chain, :]
+        for i in eachindex(d)
+            d[i] != 0.0 && ML.prep_node!(ws, P, LM, E.fθ, i, d[i], τd)
+        end
+        if fam != :tdir0
+            for n in eachindex(g)
+                g[n] != 0.0 && ML.prorata!(ws, jac, P, LM, LC, n, g[n], τd; κmin=κmin, learn=learn)
+            end
+        end
+        ML.finalize!(ws, P, LM, LC, τd)
+        bm = ML.BlockMove([wa, ws], 2, [mod1(τd - 1, T), τd], P, LM, LC, Float64[], Float64[])
+        ML.finalize!(wa, P, LM, LC, mod1(τd - 1, T)); ML.link_soc!(wa, ws, LM)
+        append!(bm.bps, wa.bps); append!(bm.bps, ws.bps)
         return bm
     end
     fam = startswith(sf, "cellpair") ? :cellpair : startswith(sf, "cell") ? :cell : fam     # level buckets
@@ -54,8 +109,9 @@ function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], 
         κs < κmin && return nothing
         n = st.bus[i]
         ML.prep_node!(ws, P, LM, st.fe, i, 1.0, τ)
-        ML.prorata!(wa, jac, P, LM, LC, n, κs, τm; learn=learn)
-        ML.prorata!(ws, jac, P, LM, LC, n, -κs, τ; learn=learn)
+        u = ((si, i),)                                         # nominal storage requirement (CPU `soc_qadj`, as `prep_tsoc!`)
+        ML.prorata!(wa, jac, P, LM, LC, n, κs, τm; learn=learn, qadj=ML.soc_qadj(P, LM, LC, u, n, τm))
+        ML.prorata!(ws, jac, P, LM, LC, n, -κs, τ; learn=learn, qadj=ML.soc_qadj(P, LM, LC, u, n, τ))
     elseif fam == :tpot || fam == :tpotL
         ML.prep_tpot!(nothing, ws, P, LM, LC, τ, jac; n=site[1], learn=learn) || return nothing
     elseif fam == :cell
@@ -76,6 +132,17 @@ function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], 
     append!(bm.bps, wa.bps); append!(bm.bps, ws.bps)
     return bm
 end
+
+"The term batch of the sites `rows` (every stacked array sliced along its site axis 2)."
+function sub_tb(tb::D.TermBatch, rows)
+    B = size(tb.st.z, 2)
+    sl(x) = x isa AbstractArray && ndims(x) >= 2 && size(x, 2) == B ? copy(selectdim(x, 2, rows)) :
+            x isa NamedTuple ? map(sl, x) : x
+    return D.TermBatch(nothing, nothing, nothing, nothing, nothing, Any[], tb.kinks, map(sl, tb.st))
+end
+"Term columns of a batch (the largest column count of its term types)."
+ncolumns(tb) = sum(x -> x isa NamedTuple ? maximum((size(v, 4) for v in values(x) if v isa AbstractArray && ndims(v) == 4); init=0) : 0,
+                   (tb.st.gen, tb.st.uc, tb.st.line, tb.st.soc); init=0)
 
 "Device term batch of family `fam` for the given sites (one round), on the loop state st."
 function dev_tb(pl, fam, sites, st=pl.st)
@@ -105,7 +172,7 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
     C = size(st0.θ, 1)
     st = st0
     scpu = [copy(s) for s in ss]
-    stats = Dict(:n => 0, :guard => 0, :own_ok => 0, :own_bad => 0, :cpupts_bad => 0, :improper_mismatch => 0, :overshoot => 0,
+    stats = Dict(:n => 0, :guard => 0, :own_ok => 0, :own_bad => 0, :cpupts_bad => 0, :improper_mismatch => 0, :overshoot => 0, :truncated => 0,
                  :jac_rej => 0, :jac_mismatch => 0, :worst_own => 0.0, :worst_cpu => 0.0)
     for f in fams, r in 1:size(tabs[f].on, 2)
         tb, _ = D.build(Val(f), st, pl.cp, pl.sp, tabs[f], r, pl.k)
@@ -129,7 +196,7 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
                     t = 0.0
                 end
                 tc[c, b] = t
-                ML.commit_block!(bm, scpu[c].v, tfin[c, b, 1])
+                bm isa ML.SLong ? ML.commit_slong!(bm, scpu[c].v, tfin[c, b, 1]) : ML.commit_block!(bm, scpu[c].v, tfin[c, b, 1])
             end
         end
         # the CPU's points inside the CPU walk's range, the device's own kinks outside it (the CPU walk
@@ -139,12 +206,22 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
             lo, hi = extrema(pts[c, b]); o = own[c, b, :]
             vcat(pts[c, b], unique(o[(o .< lo) .| (o .> hi)]))
         end for c in 1:C, b in 1:B]
-        K = maximum(length.(merged))
-        Pc = zeros(C, B, K)
-        for c in 1:C, b in 1:B; Pc[c, b, :] .= sort(vcat(merged[c, b], zeros(K - length(merged[c, b])))); end
-        tcp = D.sample_points(tb, pl.k, Pc, u[:, :, 1:1], u[:, :, 2:2])
-        tcpf = D.jac_accept(tb, tcp, u[:, :, 3:3])[:, :, 1]
-        tcp = tcp[:, :, 1]
+        # the device sampler on the merged points, in chunks of sites (a dense evaluation: points × columns)
+        tcp, tcpf = zeros(C, B), zeros(C, B)
+        cPc = Dict{Tuple{Int,Int},Vector{Float64}}(); Pcs = Dict{Tuple{Int,Int},Vector{Float64}}()
+        nchunk = max(1, round(Int, 2e7 / (C * maximum(length.(merged)) * max(1, ncolumns(tb)))))
+        for bs in Iterators.partition(1:B, nchunk)
+            bs = collect(bs)
+            tbb = sub_tb(tb, bs)
+            K = maximum(length.(merged[:, bs]))
+            Pc = zeros(C, length(bs), K)
+            for c in 1:C, (jb, b) in enumerate(bs); Pc[c, jb, :] .= sort(vcat(merged[c, b], zeros(K - length(merged[c, b])))); end
+            tq = D.sample_points(tbb, pl.k, Pc, u[:, bs, 1:1], u[:, bs, 2:2])
+            cq = D.eval_terms(tbb, pl.k, Pc; sec=false)[1]          # potential at the merged points
+            tcpf[:, bs] .= D.jac_accept(tbb, tq, u[:, bs, 3:3])[:, :, 1]
+            tcp[:, bs] .= tq[:, :, 1]
+            for c in 1:C, (jb, b) in enumerate(bs); cPc[(c, b)] = cq[c, jb, :]; Pcs[(c, b)] = Pc[c, jb, :]; end
+        end
         for c in 1:C, (b, site) in enumerate(sites)
             stats[:n] += 1
             td, tdp = tfin[c, b, 1], tpre[c, b, 1]
@@ -160,6 +237,18 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
             if d2 > 1e-9 && maximum(abs.(pts[c, b])) > 1e12
                 stats[:overshoot] += 1
                 continue
+            end
+            # the CPU walk stops 40 nats above its running minimum; where the potential falls again
+            # beyond its range to within 40 nats of that minimum, the CPU draw is truncated (the device's
+            # points cover the whole line), so the draws differ by construction
+            if d2 > 1e-9
+                lo, hi = extrema(pts[c, b])
+                pin_ = [x for (x, p) in zip(cPc[(c, b)], Pcs[(c, b)]) if lo <= p <= hi]
+                pout = [x for (x, p) in zip(cPc[(c, b)], Pcs[(c, b)]) if !(lo <= p <= hi)]
+                if !isempty(pout) && !isempty(pin_) && minimum(pout) < minimum(pin_) + 40
+                    stats[:truncated] += 1
+                    continue
+                end
             end
             stats[:worst_cpu] = max(stats[:worst_cpu], d2)
             if d2 > 1e-9

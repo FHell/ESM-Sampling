@@ -16,9 +16,13 @@ constraints priced, with every model-completion term (losses and soft limits as 
 sums, lossy links, merged vintages, fleet unit commitment, the CO₂ price through the
 marginal costs). The measure enters only the Jacobians of the capacity moves.
 
-Everything else stays on the CPU host: setup, the weather model, the reference LP and the
-heuristic start, the level-0 warmup that learns the bias, adaptation and bias refits,
-checkpoints and I/O. Coarse levels are not ported.
+Two capacity samplers exist (`device_sampler`): the replica–Langevin sampler
+([../replica_sampler.md](../replica_sampler.md); §5.2, §6.2), which replaces the learned bias,
+and the Metropolis capacity pass with the bias (§5.1, §6.1), which is retired with the bias.
+
+Everything else stays on the CPU host: setup, the weather model and the replicas' weather
+process, the reference LP and the heuristic start, the level-0 warmup that learns the bias,
+adaptation and bias refits, snapshots and I/O. Coarse levels are not ported.
 
 ## 2. State
 
@@ -33,6 +37,13 @@ mode-coefficient vector. `pack` builds the static model (`DeviceModel`) of a com
 level, where every basis is orthonormal), and `cost_parts` evaluates the cost of every chain
 ($=$ `energy_cost` to round-off).
 
+**Float32 build.** `ESMDevice.F32` is the whole device program in Float32: state, caches, terms,
+line sampler, capacity pass and uniforms. It is the same source (`device/src/core.jl` and the files
+it includes) read a second time with every Float64 literal, `Float64`, `Inf`, `NaN` and the default
+element type of `zeros`/`ones` mapped to Float32 (`ft32`), and every device input converted at the
+upload (`ftconv`). FP64 (`ESMDevice`) stays the default and the reference of the tests; the Float32
+build is only checked to compile and run (`FLOAT=32` in the device scripts).
+
 ## 3. Moves and the exact line sampler
 
 A move is a set of **sites**, one per chain and site index, each a line move
@@ -42,15 +53,20 @@ terms, line terms with hinge knots, SoC terms, balance slots). A compensation si
 requirement change by one rule: none, unit, linear (learned coefficients) or share-preserving
 (kinked arguments $x_0 + at + a_k\varphi_k(t)$ plus the Jacobian step).
 
-**Term axis.** The builders list a site's terms; the `TermBatch` constructor stacks every field
-of a term type into one $(C, B, 1, n)$ array (`stack_terms`). Evaluation then works on
-$(C, B, K, n)$ for $K$ points and reduces over $n$, so the compiled program does not grow with
-the term count.
+**Term axis.** Every field of a term type is one $(C, B, 1, n)$ array. The compensated, block,
+cell and dense angle families build them directly (`device/src/stack.jl`): one gather of a
+$(B, n)$ index table per field (`G4`, `S4`), and one scatter-add per state array in the commit
+(`scadd4`). The plain families list their few terms and the `TermBatch` constructor stacks them
+(`stack_terms`). Evaluation then works on $(C, B, K, n)$ for $K$ points and reduces over $n$, so
+neither the trace nor the compiled program grows with the term count.
 
 Static per-column metadata is recorded at trace time:
 * the balance slot of every injection;
 * the kink id of every kinked argument;
-* whether an argument moves: a slope that is the literal `0.0` of the builder is static.
+* whether an argument moves: a slope that is the literal `0.0` of the builder (or `nothing` in a
+  stacked builder) is static;
+* which unit columns can hold a unit with fleet commitment (`UC_COLS`, from the schedule): the
+  commitment terms of the other columns are identically zero and are left out.
 
 The balance slots sum their columns with a static padded column table (an appended zero column,
 one gather and one sum; no 0/1 matmul, so a padded term cannot turn an infinity into NaN).
@@ -87,23 +103,41 @@ own points:
    own points), sorted;
 2. per column: the cost change at these points (and one beyond each end), the slope of every
    local segment, the slope jump at every point and the slope just right of 0;
-3. per balance slot: the points of every column injecting into it and 0, the residual there, its
-   roots, then the balance cost and its jumps in the same way;
+3. per balance slot: the points of every column injecting into it and 0, and the residual $r$
+   there (one evaluation). $r$ is linear between them, so the balance cost
+   $\Delta t\,(c_{shed} r_+ + c_{dump} r_-)$ bends only at those points and where $r$ crosses 0.
+   At a column's point $p$ its jump is $\Delta t\,w(r(p))$ × that column's injection jump,
+   $w = c_{shed}$ for $r \ge 0$ and $-c_{dump}$ below: it is added to the column's own entry. The
+   crossings are found on the slot's points sorted with $r$ as payload (a change of the side
+   $r \ge 0$ between the ends of a segment, or between a ray's end and infinity) and become
+   entries with the jump $\Delta t\,(w_{after} - w_{before})\,r'$ (`slot_cross`). The same side
+   convention in both makes the jumps add up to the cost's slopes also where $r$ vanishes at a
+   point. Slot points are therefore no entries of their own;
 4. the (point, jump) entries of a site: every entry at exactly 0 is folded into one, the rest
    sorted with the jumps as payload (one stable sort), and only the first `cap` kept
    (`JUMP_CAP`, set by `plan` from the sites of three rounds: 1.25 × the largest count + 8);
 5. the segment slopes from the slope right of 0 outwards, the potential integrated outwards from
    $c(0) = 0$; every partial sum accumulates from 0 outwards, so no value near 0 carries the
    round-off of far, large terms, and a slope within the round-off of its sum is 0 (a flat stretch
-   stays exactly flat). Then the dense form's inverse CDF (`sample_core`).
+   stays exactly flat). Then the dense form's inverse CDF (`sample_core1`).
+
+Steps 4 and 5 work with the entry axis first, $(N, C, B)$ (`jump_points1`, `jump_values1`,
+`sample_core1`): the entry axis is then the fastest in memory, so the payload sort and the scans
+need no transposes. Reactant lowers `cumsum` to a reduce-window over the whole axis ($N^2$ work);
+the scans of traced arrays run in two levels instead (`cumsum1`: blocks of `SCANBLK` = 32, then the
+block totals, joined by a shift, so a prefix of exact zeros stays exactly zero). Point lists of at
+most `SMALLSORT` = 8 entries per column are sorted by a compare-exchange network (`sort3`, min/max
+pairs that fuse into their producers) instead of a sort op.
 
 The cost per site is the sum of the columns' local points plus a sort of the entries.
 
-**Form choice.** The plain families use the dense form. A compensated, cell or block family uses
-the slope-jump form if its dense points × columns are at least `JUMP_RATIO` (4) × its
-slope-jump entries (`plan(...; jump=:auto)`; `:none`, `:all` or a list of families override).
-At 40 nodes daily: slope-jump for `:tsoc`, `:tpot`, all `:sblk…`, `:cell1`, `:cell2`,
-`:cellpair1`, `:cellpair2`; dense for `:spair0`, `:cell3`, `:cellpair3`.
+**Form choice.** The plain families use the dense form. A compensated, cell, block or dense
+angle family uses the slope-jump form if its dense points × columns are at least `JUMP_RATIO` ×
+its slope-jump entries (`plan(...; jump=:auto, backend)`; `:none`, `:all` or a list of families
+override). The ratio is per backend (`JUMP_RATIO`: 4 on the CPU, 10 on the GPU, where the payload
+sort costs relatively more; measured in [performance.md](performance.md) §7). At 40 nodes × 6 h
+on the GPU: slope-jump for `:tpot`, `:sblk4` … `:sblk32`, `:cell1`, `:cell2`, `:cellpair1`,
+`:cellpair2`, `:tdir`, `:tdir0`; dense for `:spair0`, `:tsoc`, `:sblk2`, `:cell3`, `:cellpair3`.
 
 **Guards.** A site stays at $t = 0$:
 * if some secondary quantity has more sign changes than kept;
@@ -135,17 +169,57 @@ and $r$.
 | `:tpot`, `:tpotL` | `tpot`, `tpotL` | share-preserving, linear |
 | `:cell{q}`, `:cellu{q}` | `cell` at partition level q (`u`: committable carriers) | additive |
 | `:cellpair{q}`, `:cellpairu{q}` | `cellpair` at level q | balanced |
-| `:sblk{L}`, `:sblkL{L}` ($L$ = 2, 4, 8, 16, 32) | storage plateau and shapes (`prep_storage_ms!`), one unit | share-preserving, linear |
+| `:sblk{L}`, `:sblkL{L}` ($L$ = 2, 4, 8, 16, 32) | storage plateau and shapes (`prep_storage_ms!`), one unit; learned shapes per season class | share-preserving, linear |
+| `:tdir`, `:tdirL`, `:tdir0` | `tmode`, `tline`, `amode` and their `…L` and `…0` variants (`prep_tdir!`, `prep_tline!`, `prep_amode!`): one dense angle direction per step | share-preserving, linear, none |
+| `:tcut`, `:tcutw`, `:tcutL`, `:tcutLw` | `tcut`, `acut`, `tcutL`, `acutL` (`prep_tsparse!`): one Haar atom, small (≤ `SPARSE_NS` node slots) or wide | share-preserving, linear |
+| `:xloc`, `:xlocc`, `:xpair` | `xloc`, `xlocc` (`prep_xloc!`), `xpair` (global re-routing): a generator pair at two nodes with re-routed flows | none, share-preserving (leak), none |
+| `:sblkg{L}`, `:sblkgL{L}` | storage blocks of a cell–class group (`prep_storage_ms!` with the group's units) | share-preserving, linear |
+| `:dshp{L}` | learned dispatch shapes of a generator pair at one node (`prep_adshape!`) | none (balanced) |
+| `:slong`, `:slongL` | `slong`, `slevel` (`prep_slong!`): a cyclic plateau of one unit, or its level | share-preserving, linear |
 
 **Choices made on the host.** Choices that do not depend on the state are drawn when the
 schedule is built: the unit pair of `:spair`, the carriers of the cell moves, and the block
-offset and profile.
+offset and profile. The directions of the dense angle families are drawn per site and chain by a
+host source (`TDIR_SOURCE`, `tdir_source`), as the CPU families of the rule with the CPU's relative
+rates: a transport mode projected onto the face of the step's predicted binding lines (`tmode`,
+the chain's frames; flow basis), the re-routed injection pair of a predicted binding line
+(`tline`), a learned mode projected onto the face (`amode`, once the host has learned modes). The
+table holds per site and chain the node direction $d$ and the requirement change $g$ of the nodes
+that compensate (`tdir_g`: $g = L_b d$, kept where $|g_n| > 10^{-9}\max|g|$, as `prep_tdir!`;
+`tline`: $\pm 1$ at the line's ends). They are refreshed between device calls with the same table
+shapes (`tdir_refresh`), so the program is not recompiled.
+
+**Dense angle families.** A site carries every line (static bus slots, so the balance sums stay
+static), every node's balance slot, G unit columns per node and one kink per node (share-preserving
+rule); one site per step and time class, one round per class: each step gets one dense move per
+family and sweep (the CPU draws about six `tmode` moves per step and sweep at 40 nodes, but at
+$O(N + n_{lines})$ per move the families run at a low rate in the design). The localized
+transport moves (`tcut`, `acut`: Haar atoms with sparse support) are not ported: their templates
+need per-site line lists (`Status`).
 
 **Cell families.** They are bucketed by level and padded to the level's largest cell. Level q
 gets rounds ∝ (cells)^(cell_power−1), which reproduces the CPU's level probabilities.
 
+**Sparse angle families** (`device/src/sparse.jl`). A site is one step with a sparse angle
+direction: its node slots (the nodes whose angle moves and the far ends of the lines that move; a
+pair's two nodes first), the angle change and the requirement change per slot, and the pair units.
+Every moving line is listed at both its ends (injection at the near end, half its overload cost at
+each, `sline(…; wc)`), so the balance slots are static. The sites come from a host source
+(`SPARSE_SOURCE`, `sparse_source`: atoms ∝ c² of the frames' and the learned pieces, `xloc`
+partners and units, `xpair` pairs) and are packed per step into rounds of disjoint node slots.
+
+**Long-range storage moves** (`device/src/slong.jl`). A site holds every step of the cycle in the
+order a, b, then the others: the SoC term of each step with the site's 0/1 profile of raised
+instants (host data), the node's balance slot at each step, and the G compensation columns at the
+two end steps with the nominal requirement (`soc_qadj4`). The level move uses the same template
+without compensation.
+
 **Block profiles.** The profile table holds the plateau and optional shapes with zero ends
-(`set_profiles!`).
+(`set_profiles!`), each with a season class (0: any). A site draws its profile among those of its
+block's season class and those of any season. With the host adaptation the table holds the
+plateau and per season class two learned state-of-charge shapes (`set_learned_profiles!`, from
+`AdaptiveModes.shapes`; the plateau stands in until they are learned), so it keeps its shape when
+the shapes are relearned.
 
 **Requirement tracking.** The share-preserving families refuse models with line losses or lossy
 links, whose compensation needs requirement tracking on the CPU (an event walk). With those
@@ -213,7 +287,9 @@ The slope-jump families are not split at this size. The plain families stay belo
 > **Status: deviation.** Parallel lines are not supported by the angle family (none exist in
 > the 40- and 256-node networks).
 
-## 5. Capacity pass
+## 5. Capacity moves
+
+### 5.1 Metropolis capacity pass (`device_sampler = "mh"`)
 
 After every `device_sweeps` operation sweeps, one compiled capacity pass runs, in order:
 renewable scaling moves (`kren_mh_loop`), the peak sets recomputed from the net load
@@ -235,7 +311,81 @@ $F_1$, $F_2$ come from the CPU's tables, evaluated by a gather of two table entr
 tables are re-packed and uploaded (same shapes, no recompile). The capacity-dependent chain
 parameters are then recomputed on the device.
 
+### 5.2 Replica–Langevin step (`device_sampler = "replicas"`)
+
+The sampler of [sampler.md](sampler.md) §11 (CPU: `src/replicas.jl`): M weather replicas per chain
+share the capacities; the capacities take a Langevin step on the replica-averaged sampled score.
+Code: `device/src/score.jl`, `device/src/langevin_dev.jl`, the renewable units in `device/src/ren.jl`.
+
+**Replica batch.** The batch dimension is $C$ = chains × M, the replicas of a chain contiguous
+($c = j + (\text{chain}-1)M$). Every replica has its own net load, dispatch, states of charge and
+residual; the capacities `kg`, `ks`, `RS.kr` are stored per replica and equal within a chain.
+Reductions over a chain's replicas are reshapes $(C,U)\to(M,C/M,U)$ and sums (`rep_sum`); a
+chain's new capacities go back to its replicas by a broadcast (`rep_bcast`).
+
+**Score** (`cap_score`). Per replica and investable unit, at fixed utilizations,
+$s_k = -\beta_v\,\partial_k C(k,v) + \partial_k\log J(k)$ in node coordinates, and the capex force
+$\beta_k\,\partial_k K$ (with the box penalty $\gamma_k$). The terms are those of the CPU's capacity
+gradient (`energy_cost(…; grad=true)`: `gen_grad` with the vintage kink, `uc_grad`, `soc_grad`,
+renewables at $y = 1$; the balance through its subgradient
+$\Delta t\,(c_{\rm shed}[r>0] - c_{\rm dump}[r<0])$ at the unit's node, from the residual cache)
+plus `log_measure_grad`; a unit outside its box gets a zero operation score. Elementwise maps, sums
+over the steps and one-hot contractions only. `score_acc` adds the score of every replica after
+each of the `inner` operation sweeps of a step (weight 1/`inner`). In the Langevin coordinates
+the score is $(k+\kappa_s)\,s_k$ (`wscore`).
+
+**Step** (`lgv_w`, `lgv_pass`). Per chain and unit, $w = \log(k+\kappa_s)$ ($\kappa_s$ per carrier,
+$\eta_w$ per chain and carrier, `LgvParams`):
+$$
+w' = w + \mathrm{clip}\big(\eta_w((k+\kappa_s)g + 1)\big) + \sqrt{2\eta_w}\,\xi,\qquad
+g = -\beta_k\partial K + r\,\bar s_k,\quad r = \beta_k/\beta_v,
+$$
+$\bar s_k = \sum_j \omega_j s_k^{(j)}$ with the replica weights $\omega$ (`W`, uploaded per step: the
+CPU's `drift_weights` over the replicas active by their gate, with the tilt). Reflection at
+$k = \kappa_{\min}$ and, with `langevin_box`, at the upper bound of the box (`langevin_update`);
+$\eta_w = 0$ freezes a unit (fixed capacities always). The noise $\xi$ is drawn
+by Reactant's RNG in runs (`lgv_pass_rng`) and passed in for the tests.
+
+**Dispatch following** (`lgv_commit`), in every replica, in the order of `follow_capacities!`:
+1. dispatchable units at fixed output: utilizations and commitment scaled by $c(k_0)/c(k_1)$ (the
+   commit map of `kscale`); the residual takes the output lost where the scaled utilization
+   leaves $[0,1]$;
+2. renewables (one carrier at a time; its units sit at distinct nodes, so a carrier is one
+   vectorized update) and then storage, at fixed utilization (output $A k$; the state-of-charge
+   fractions), the node's dispatchable generators following on the kop curve
+   ([moves/capacity.md](moves/capacity.md)): with $P$, $Q$ the compensators' output and
+   requirement and $e = P - Q_+$, the new output $P_1 = (Q-\Delta\mathrm{inj})_+ + e$ is shared as
+   $y_i = \sigma_i P_1/\kappa_i$, $\sigma_i = \kappa_i y_i/P$, for the compensators with
+   $|Ak|\ge\kappa_{\min}$ (`kop_follow`); a unit with $k_0 < \kappa_{\min}$ moves alone. The renewable
+   output change moves the net load, the renewable running cost and its capex.
+
+The chain parameters are then recomputed with the proxy class of the new net load.
+
+**Weather upload** (`weather_arrays`, `weather_update`). After the host's weather step of some
+replicas, their load less the fixed renewables' output $D_0$ $(C,T,N)$, its running cost and the
+clamped availability $A$ $(C,T,U_r)$ are uploaded with a 0/1 mask of the changed replicas. The device
+sets the net load $D_0 - H(A\,c(k_r))$ and the renewable running cost from the current renewable
+capacities, shifts the residual by the change of the net load and (`comp`) re-initialises the
+dispatch compensated (`compensate_weather!`: at every node and step the dispatchable
+generators take up the change, increases in proportion to headroom, decreases in proportion to
+output).
+
+**Verification** (`device/test/test_langevin_dev.jl`, 40 nodes × 6 h, all model terms, 2 chains ×
+2 replicas): on arrays against the CPU, the scores to $7\cdot10^{-13}$ (relative) and the forces to
+$10^{-15}$; the step with the same normals against `langevin_capacities`/`follow_capacities!`
+(capacities to $2\cdot10^{-14}$, utilizations $2\cdot10^{-14}$, residual $4\cdot10^{-11}$ MW, net load,
+running cost and capex to round-off); the weather upload against `compensate_weather!` (utilizations
+$2\cdot10^{-15}$, residual $2\cdot10^{-11}$ MW, proxy classes equal). Compiled by Reactant on the CPU
+backend, the same comparisons hold, and compiled and array outputs agree to round-off.
+
+A capacity exactly on its box bound (the clamped chain starts) can be inside the box for the
+device's node values and outside for the CPU's coefficients (one round trip apart), so the
+scores of such a unit differ in the first step; the Langevin step moves the capacity off the
+bound.
+
 ## 6. Host loop
+
+### 6.1 Metropolis driver (`device_sampler = "mh"`)
 
 `run_device(cfg)` (script `device/scripts/run_device.jl`, configuration e.g.
 `configs/device40.toml`; `run_device(cfg; merged=false, families=…)`):
@@ -251,11 +401,83 @@ parameters are then recomputed on the device.
 4. `mlda_warmup + nsamples` checkpoints: sweeps and capacity pass, download, conversion to
    `State`s, online bias refits during the warmup (pooled over chains, frozen afterwards, the
    bias aggregates re-packed after a refit), monitored quantities, post-correction records;
+   with `adapt = true` the host adaptation (`HostAdapt`, `adapt_step!`): the chains are observed
+   by one `AdaptiveModes` (pooled over chains: transport modes, storage shapes per length and
+   season, response coefficients per node and proxy class, updated at observation counts $2^j$),
+   the chains' frames are refreshed (flow basis), and the static parameters (β1, β2), the tables
+   of the dense angle families and the block profiles are uploaded anew (same shapes);
 5. `chains_report`: the same diagnostics and HDF5 output as the CPU driver (without the
    additional outputs of `write_run_outputs`).
 
 The loop times every part per call (operation sweeps, capacity pass, host draws, download,
 host work) and writes them to `device_profile/*` in the output file, with the compile times.
+### 6.2 Replica driver (`device_sampler = "replicas"`)
+
+`run_device(cfg)` with `device_sampler = "replicas"` calls `run_replicas_device`
+(`device/src/replica_run.jl`, configuration e.g. `configs/device40_replica.toml`): the driver of
+`run_replicas` (src/replicas.jl, [sampler.md](sampler.md) §11) with the replica batch on the device,
+and its settings (`replicas`, `replica_*`, `langevin_*`, `tilt_*`; [config.md](config.md)):
+
+1. `replica_device_setup`: `setup` (the bias is not used); per chain its start and `init_replicas`
+   without its sweeps (fresh weather draws from the replicas' own streams, the compensated
+   initialisation, `ReplicaSet`), or the replicas of the snapshot; `pack`, `plan`, the device arrays
+   and four programs (operation sweeps, score accumulation, Langevin step with the dispatch
+   following, weather upload), compiled, or with `compile = false` the same functions on Julia
+   arrays; then `replica_init_sweeps` operation sweeps on the device;
+2. per step (`replica_device_step!`):
+   - `replica_device_weather!`: per replica the CPU's `replica_weather!` without its compensation
+     (the schedule, the window and FFBS, the gate reset at a burst; `weather_process_step`), the
+     upload of the changed replicas and the compensation on the device;
+   - `replica_device_operation!`: `replica_inner` × (operation sweep, scores) on the device;
+   - `replica_device_capacity!`: the scores downloaded into the CPU's per-field layout
+     (`unit_map`), the gates (`update_gate!`), the probe windows and `drift_weights` on the host,
+     the Langevin step on the device; every `replica_probe_every` steps per chain `lag_probe` on the
+     host CPU (the candidate replica downloaded, the chain's probe stream) and in the warmup
+     `adapt_step!`, the new steps uploaded;
+3. a host checkpoint every `device_sweeps` steps: download, `State`s, `replica_monitor` and
+   `replica_record`, the snapshot boundary (§6.3);
+4. `chains_report` over the chains, `write_replica_outputs`, `write_replica_summary`, the timings.
+
+The random streams are those of `run_replicas` for the weather (bitwise the same weather paths
+from the same configuration) and the probes; the operation sweeps and the Langevin noise use two
+device streams.
+
+> **Status: deviation.** The monitored quantities and the replica records are taken at the host
+> checkpoints only (every `device_sweeps` steps), not every step as on the CPU. The lag probe runs
+> on the host CPU (`replica_probe_len` sweeps of one replica per chain), synchronously.
+
+**Verification.** `device/test/test_replica_driver.jl` (arrays, against the CPU): the weather paths
+and gate schedules of a run equal those of `run_replicas` bitwise; per step after the operation
+sweeps, the downloaded scores equal `capacity_scores` ($6\cdot10^{-13}$), the gates and weights those
+of `update_gate!` and `drift_weights`, and the Langevin step with the same normals plus the
+dispatch following those of `langevin_capacities` and `follow_capacities!` (capacities $7\cdot10^{-13}$,
+utilizations $2\cdot10^{-10}$, residual $2\cdot10^{-10}$ MW); a probe step adapts and uploads the
+per-chain steps; stop (exit 75) and resume in the CPU layout.
+`device/test/test_replica_compiled.jl` compares the four programs compiled by Reactant with the
+arrays (and runs the compiled driver) when `ESM_DEVICE_COMPILE=1`.
+
+### 6.3 Snapshots and resume
+
+Both drivers follow the CPU driver's contract ([hpc.md](hpc.md) §7): at a host checkpoint, every
+`checkpoint_minutes` and when `stop_file` exists, a snapshot is written atomically. The Metropolis
+driver writes the chains layout ([data.md](data.md) §5) plus a group `device/`
+(`device/src/snapshot_dev.jl`); the replica driver writes the layout of the CPU replica driver
+(`write_replica_snapshot`, `boundary!`; also once after the initialisation), so each replica
+driver resumes from the other's snapshots. With the stop file the driver
+removes it and returns exit code 75 (`device/scripts/run_device.jl` exits with it and ignores
+SIGTERM with `ESM_IGNORE_SIGTERM=1`). If
+the snapshot exists at start, the driver resumes from its states: the device arrays, plan and
+programs are rebuilt from them (the residual cache recomputed), the counters continue, Reactant's
+RNG and the host streams (proposal draws, every replica's weather) are re-seeded from `seed` and
+the restart count; the output records `run/restarts` and `run/resumed_at_checkpoint`
+(Metropolis) or `run/resumed_at_sweep` (replicas, the step). A
+resumed Metropolis run with the bias lifts the set-up bias (as the CPU driver). The grace time
+of a preemption must cover one host checkpoint interval (`device_sweeps` steps) plus the write.
+The device driver builds no caches of its own: `setup` uses `cache_dir` and `cache_mirror` as on
+the CPU.
+
+### 6.4 Setup and profilers
+
 `device_setup(cfg)` builds everything up to the compile and is shared with the profilers:
 `device/scripts/profile_device.jl` (Reactant's profiler on both programs: compile time split
 into tracing, MLIR passes and XLA; run time; kernel and framework-op statistics; xplane traces
@@ -273,22 +495,29 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | compensated families `:spair`, `:spair0`, `:tsoc(L)`, `:tpot(L)` | verified on arrays and compiled (CPU backend); scheduled with `families = :all` |
 | cell templates (all partition levels) | verified on arrays; compiled except `:cellpairu1` (see §3); scheduled with `families = :all` except `:cellpairu1` |
 | storage blocks, one unit (plateau, shapes) | verified on arrays ($L$ = 2–32) and compiled; scheduled with `families = :all` |
-| nominal storage requirement of the share-preserving `:tsoc`, `:sblk{L}` (CPU `soc_qadj`, [moves/storage.md](moves/storage.md)) | deviation: the device uses the actual requirement; its comparisons against the CPU for these share-preserving families no longer hold until it adds the correction |
-| long-range storage moves `slong`, `slevel` | missing |
+| nominal storage requirement of the share-preserving `:tsoc`, `:sblk{L}` (CPU `soc_qadj`, [moves/storage.md](moves/storage.md)) | done (`soc_qadj4`); verified on arrays against the CPU |
+| long-range storage moves `slong`, `slevel` (`:slong`, `:slongL`) | verified on arrays against the CPU (`test_comp.jl` M, N); L drawn on 2 … T−1 (the CPU includes L = 1, the `tsoc` move) |
 | storage pairs `sxpair`, `sxlong` (re-routing templates, leak and loss compensation, footprint rounds) | missing |
 | memory cap of a round (`DENSE_BUDGET`) | done |
 | slope-jump form of the line sampler, per-family choice (`JUMP_RATIO`) | done; verified on arrays against the CPU and the dense form, Reactant (CPU backend) against arrays |
-| term axis (program size independent of the term count) | done |
+| term axis (program size independent of the term count); stacked builders (one gather per field) for the compensated, block, cell and dense angle families | done |
+| commitment columns of non-committable units left out (`UC_COLS`); balance jumps on the column entries; entry-axis-first global part; two-level scans; sort networks for short lists | done; verified on arrays against the CPU and the dense form |
 | one program per checkpoint (operation sweeps + capacity pass) | done (`sweep_program`, `merged = true`); not the default (compile time) |
-| capacity pass (`kren`, `kscale`, `kpeak` absorb) with the bias, host loop | done |
-| templates for Haar angle atoms and localized proxy and learned modes (`tcut`, `acut`) | missing |
-| local re-routing templates in place of `xpair`, `xloc(c)`, `tline` | missing |
-| block aggregates (cell–class groups), learned shapes | missing |
-| dense transport modes (`tmode`, `amode`) | missing; low rate, may be dropped |
-| adaptation on the host with table uploads (modes, shapes, response coefficients); learned `kpeak` | missing |
-| weather moves with compensation as a device family | missing |
+| capacity pass (`kren`, `kscale`, `kpeak` absorb) with the bias, host loop | done (retired with the bias) |
+| replica–Langevin capacity step: score, step in $w$, dispatch following (fixed output, kop curve), replica batch, weather upload with compensation | done; verified on arrays against the CPU and the prototype, compiled (CPU backend) against arrays |
+| replica driver on the CPU sampler (`replicas`, `replica_*`, `langevin_*`, `tilt_*`; weather process, gate, probe and adaptation, weights, snapshot layout) | done; verified on arrays against `run_replicas`; compiled check written (`test_replica_compiled.jl`), not run |
+| snapshots and resume of both drivers, exit code 75 | done; smoke-tested through `hpc/run.sh` (device mode, CPU backend) |
+| sparse angle templates: Haar atoms of the proxy and learned modes (`:tcut`, `:tcutw`, `:tcutL`, `:tcutLw` for `tcut`, `acut`, `tcutL`, `acutL`) | verified on arrays against the CPU (`test_comp.jl` H, I) |
+| local re-routing templates (`:xloc`, `:xlocc`, `:xpair`; `tline` as `:tdir`) | verified on arrays against the CPU (`test_comp.jl` H, I); generator units only (the CPU draws any unit of `LM.units`, which are the generators) |
+| block aggregates (cell–class groups: `:sblkg{L}`, `:sblkgL{L}`) | verified on arrays against the CPU (`test_comp.jl` K, L) |
+| learned storage shapes (profile columns per season class) | done |
+| learned dispatch shapes (`adshape`: `:dshp{L}`) | verified on arrays against the CPU (`test_comp.jl` J) |
+| dense angle directions `:tdir`, `:tdirL`, `:tdir0` (`tmode`, `tline`, `amode` and variants) | verified on arrays against the CPU (`test_comp.jl` cases F, G); scheduled with `families = :all` and `adapt = true` |
+| adaptation on the host with table uploads (modes, shapes, response coefficients) | done (`adapt = true`); the learned `kpeak` variant missing |
+| weather moves with compensation as a device family | not planned: the weather moves to a prior-reversible pCN process on the host, the capacities to a Langevin step ([../worklog.md](../worklog.md)); `kop` and the device bias (`bias_dev.jl`, kept as it is until it is retired) are not extended |
+| Float32 build of the whole program (`ESMDevice.F32`) | done; compiles and runs (no exactness tests by design) |
 | replica–Langevin sampler ([sampler.md](sampler.md) §11): the weather process per replica (pCN, regime windows), the compensated initialisation, the capacity scores, the Langevin update, the dispatch-following maps (fixed output, kop curve), the gate and the probe; replicas as a batch dimension | missing; CPU reference `src/replicas.jl` with explicit-noise building blocks (`pcn_weather`, `regime_window`, `langevin_update`) |
-| fused kernels, FP32 intermediates, tiling, multi-GPU, full-Europe memory plan | missing |
+| fused kernels, tiling, multi-GPU, full-Europe memory plan | missing |
 
 **Reactant constraints met so far.** Inside `@trace for`, every captured scalar becomes
 traced, so structs captured by a loop are type-parametric in their scalars and static flags

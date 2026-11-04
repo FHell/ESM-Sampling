@@ -59,8 +59,11 @@ In include order (`src/ESMSampling.jl`):
 `device/src/`: `ESMDevice.jl` (device model, state, exact cost), `terms.jl` (term batch,
 dense sampler), `rounds.jl` (plain families, schedule, device loop), `comp.jl` (compensated
 families), `cells.jl` (cell templates), `kmove.jl` (`kscale`/`kpeak` Metropolis), `kren.jl`
-(renewable capacity moves, peak sets), `bias_dev.jl` (device bias), `driver.jl`
-(`run_device`).
+(renewable capacity moves, peak sets), `ren.jl` (renewable units: index, parameters, state),
+`bias_dev.jl` (device bias), `driver.jl` (`run_device`), `score.jl` (capacity score),
+`langevin_dev.jl` (Langevin step, dispatch following, replica batch, weather upload),
+`snapshot_dev.jl` (snapshots of the Metropolis driver), `replica_run.jl` (the replica driver,
+`run_replicas_device`).
 
 ## 3. Main types
 

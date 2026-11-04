@@ -1,11 +1,12 @@
-# Shared part of opmix.jl and opmix_hpc.jl (ledger E17, E21, E27): the set-up from a chains file
-# and the recorded quantities. Expects `cfg`, `chainsfile` and `ci` to be defined.
+# Shared part of opmix.jl and opmix_hpc.jl (ledger E17, E21, E27): the set-up, the start state and
+# the recorded quantities. Expects `cfg`, `ci` (the index of the start, for the random stream and
+# the record) and `opmix_start(P, sL)` (the start state from the problem and the set-up's state) to
+# be defined.
 import ESMSampling as ML
 using Random, Statistics, LinearAlgebra, Printf, Serialization
 
 P, sL, info = ML.setup(cfg; rng=MersenneTwister(cfg.seed))
-chains = deserialize(chainsfile)
-s = ML.evaluate!(P, copy(chains[ci]))
+s = ML.evaluate!(P, copy(opmix_start(P, sL)))
 L = ML.nlevels(P) - 1
 @assert s.ℓ == L
 S = ML.new_sampler(P, s, cfg)

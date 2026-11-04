@@ -9,7 +9,7 @@ list ([../campaigns.md](../campaigns.md)). User `hellmann`, project directory `c
 > **Status: partial.** The scripts exist and have run: the environment (H0: offline CPU and
 > GPU jobs), the model files and the ERA5 file. Open: the SIGTERM and snapshot-resume tests on
 > a compute node (H0b), the rebuild of the POWER model files with the corrected calibration
-> (§8.3), and snapshots of the device driver (§7).
+> (§8.3).
 
 ## 1. The cluster in brief
 
@@ -274,12 +274,19 @@ a full-fidelity checkpoint: plain HDF5 data that survives code and Julia version
   creates the stop file, and the driver writes the snapshot at the next sweep boundary and
   exits with 75. The grace time must cover one sweep plus the write.
 
+**Device driver** (`run_device`, both samplers; [device.md](device.md) §6.3): the same keys, stop
+file, exit code 75 and `ESM_IGNORE_SIGTERM` (`device/scripts/run_device.jl`); the Metropolis
+driver writes the chains layout plus a group `device/`, the replica driver the layout of the CPU
+replica driver (so either replica driver resumes from the other's snapshot). The boundaries are
+the host checkpoints (every `device_sweeps` operation sweeps or replica steps), so the grace time
+must cover one of them plus the write. On resume the device arrays and programs are rebuilt
+from the saved states (the compile is repeated: 2–6 minutes) and the streams are re-seeded. Tested locally on 2026-11-04 through
+`hpc/run.sh` in `device` mode on the CPU backend (`hpc/configs/device_smoke.toml`, the
+simulated layout of §5).
+
 The replica driver (`sampler = "replicas"`) follows the same contract with its own layout
 (every replica's state, the Langevin steps and the gates; [data.md](data.md) §5,
 [sampler.md](sampler.md) §11.5).
-
-> **Status: missing (device).** `run_device` writes no snapshot yet. On the device the state is
-> downloaded at each host checkpoint already; the snapshot adds the file write.
 
 Snapshots are also outputs: a later experiment can start from them. They stay in the run
 directory and are not archived (their size grows with the model).
@@ -347,7 +354,7 @@ current ones, with what each needs:
 |---|---|---|
 | H0b (SIGTERM and snapshot tests) | D1: the snapshot test is skipped without `model.h5` | `bash hpc/new_campaign.sh H0b`; `sbatch hpc/jobs/h0_cpu.sbatch H0b` |
 | H4 (replica sampler, far-apart starts) | D1 rebuilt with the corrected wind calibration | `bash hpc/new_campaign.sh H4`; `sbatch --time=2-00:00:00 --array=1-6%6 hpc/jobs/cpu_array.sbatch H4 campaigns/H4/list.txt` (6-hourly lines estimated 12–20 h); `bash hpc/collect.sh H4` |
-| H10 (storage pairs) | D1 (rebuilt); being redesigned to make its start states on the cluster | as in its row, once prepared again |
+| H10 (storage pairs) | D1 (rebuilt); the HiGHS scheduler reset for `ESM_LP_THREADS` (f2d09a3, LP-baseline branch) on main, else stage 1 fails; its start states and the reference LP are made by the campaign | `bash hpc/new_campaign.sh H10`; `sbatch --time=02:00:00 hpc/jobs/build.sbatch H10 configs/chains40.toml script scripts/lp_reference.jl` (stage 1, the LP into the cache); `sbatch --time=12:00:00 --dependency=afterok:<stage 1 job id> --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt`; `bash hpc/collect.sh H10 'summary*'` |
 | H2 (our LP baselines) | D1 (40 nodes) and D2 (256 nodes), rebuilt with the corrected wind calibration | as in its row |
 | H2b (PyPSA's optimum and MGA) | the esm256 PyPSA-Eur build (`composed_2050.nc`) | as in its row; independent of H2 |
 | the full-resolution run | D3 | not yet a campaign ([roadmap.md](roadmap.md) §6) |
