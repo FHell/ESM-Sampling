@@ -493,25 +493,26 @@ function weather_fingerprint(path::String)
 end
 
 """
-    weather_model_cached(E, levels; K, seed, cachedir) -> WeatherModel
+    weather_model_cached(E, levels; K, seed, cachedir, mirror, datafile) -> WeatherModel
 
 Fit the weather model with its own random stream (seed-derived, so that cached and
-fresh fits agree) or load the fitted parameters from `cachedir`, keyed by the data,
-the weather bases, the levels, K and the seed.
+fresh fits agree) or load the fitted parameters from `cachedir` (or the read-only
+`mirror`, copied in), keyed by the data, the weather bases, the levels, K and the seed.
+The entry is written atomically (`atomic_open`).
 """
-function weather_model_cached(E::EnergyModel, levels; K::Int=4, seed::Int=1, cachedir::String="results/cache", datafile::String="")
+function weather_model_cached(E::EnergyModel, levels; K::Int=4, seed::Int=1, cachedir::String="results/cache", mirror::String="",
+                              datafile::String="")
     specs = E.wspecs
     key = hash((isempty(datafile) ? 0.0 : weather_fingerprint(datafile), levels, K, seed, [hash((s.B.U, s.B.support)) for s in specs], :weather_v2))
     path = joinpath(cachedir, "weather_$(string(key; base=16)).jls")
     lays = [Layout(specs, M, h) for (M, h) in levels]
     trs = [Transfer(specs, lays[j], lays[j+1]) for j in 1:length(lays)-1]
-    if isfile(path)
-        f = deserialize(path)
-        return WeatherModel(specs, lays, trs, f...)
-    end
+    f = cache_read(deserialize, path, mirror)
+    f === nothing || return WeatherModel(specs, lays, trs, f...)
     W = fit_weather_model(MersenneTwister(seed + 7919), E, levels; K=K)
-    mkpath(cachedir)
-    serialize(path, (W.scale, W.xbar, W.K, W.Ptr, W.π0, W.Bm, W.Σinv, W.logdetΣ, W.Σ0inv, W.logdetΣ0, W.details, W.data, W.γ, W.loglik))
+    atomic_open(path) do io
+        serialize(io, (W.scale, W.xbar, W.K, W.Ptr, W.π0, W.Bm, W.Σinv, W.logdetΣ, W.Σ0inv, W.logdetΣ0, W.details, W.data, W.γ, W.loglik))
+    end
     return W
 end
 

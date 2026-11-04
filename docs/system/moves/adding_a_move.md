@@ -71,21 +71,27 @@ walk's points.
 
 ## 4. Test it (CPU)
 
-In `test/test_local.jl`, `test/test_flow.jl` or `test/test_model.jl`, following the existing
-loops, with all model terms switched on where they apply and in both storage forms if the move
-touches storage:
+**The gate is the move-consistency suite** `test/test_moves.jl` (see
+[../testing.md](../testing.md) §1): add one entry for the family to its family table (prepare
+with seeded discrete choices, the line, the commit, the Jacobian), and the suite checks, in
+seconds and without statistics:
 
-1. **Incremental cost**: for many random moves, the cost change from `eval_move!`/`mv_eval!` at
-   a random $t$ equals the global change from `evaluate!` after the commit.
-2. **Caches**: after a sweep with the family, `LocalCost` rebuilt from the state equals the
-   incrementally updated one (node values, residuals, flows, cell sums).
-3. **Invariants** of a reparametrized curve (shares and excess across the kink, residuals that
-   must stay fixed), to round-off.
-4. **Line draws against quadrature** (Kolmogorov–Smirnov) if the family brings a new kind of
-   term, kink or prior.
-5. **Recorded-term evaluation** bitwise equal to the plain evaluation, if the move uses it.
-6. If the family joins the adaptive mixture, `test/test_exact.jl` exercises it end to end; run
-   it.
+1. **Walk linearity:** the potential is linear between consecutive walk points, so every kink
+   is a point (this is what found the misplaced balance roots of storage lines).
+2. **Incremental cost:** the cost change of the move at a drawn $t$ equals the global change
+   from `evaluate!` after the commit.
+3. **Reversibility of the curve:** prepared again at the new state with the same seed, the move
+   makes the same discrete choices (selection depends only on $(k,x)$ and fixed probabilities),
+   $-t$ returns to the start, the reverse line density is the forward one shifted, the
+   Jacobians are inverse, slice widths are equal in the slice coordinate, Metropolis proposals
+   are symmetric (this is what found the `kpeak` width and the storage compensation bugs).
+4. **Caches** after a threaded sweep of the family equal a rebuild.
+
+Family-specific deterministic checks stay where they are (`test/test_local.jl`,
+`test/test_flow.jl`, `test/test_model.jl`): invariants of a reparametrized curve (shares and
+excess across the kink), recorded-term evaluation bitwise equal to the plain one. No new
+statistical tests (KS against quadrature, end-to-end chains) for now; `test/test_exact.jl` is an
+optional diagnostic, not a gate.
 
 ## 5. Document it
 

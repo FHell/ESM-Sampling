@@ -110,7 +110,7 @@ step.
 
 ## 7. Experiments
 
-The experiments run and planned are listed in the ledger [../experiments.md](../experiments.md).
+The experiments run and planned are listed in [../experiments.md](../experiments.md), the measurement campaigns in [../campaigns.md](../campaigns.md).
 After the items above: sweeps to equilibrium against network size (40, 256, then 512 and
 1024 nodes); capacity mixing at $\alpha = 1$ with peak-set moves in a full run; wall time to
 stationarity against the finest step (24, 12, 6, 3, 1 h); a memory estimate for full Europe

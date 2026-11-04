@@ -51,6 +51,7 @@ In include order (`src/ESMSampling.jl`):
 | `diagnostics.jl` | single-chain ESS (`ess`), `PriceAcc`, `RegionPriceAcc` |
 | `convergence.jl` | multi-chain diagnostics (rank-normalized $\hat R$, bulk/tail ESS, MCSE, warmup detection) |
 | `run.jl` | `Config`, `load_config`, `setup`, `heuristic_start`, the level-0 chain `run_level0!`, `predescend`, `new_sampler`, `run` |
+| `checkpoint.jl` | durable files: `atomic_write`/`atomic_open` (temporary name, rename), the cache location and mirror (`cache_dir`, `cache_mirror`, `cache_lookup`, `cache_read`), the state snapshots of the CPU driver (`Checkpointer`, `boundary!`, `write_snapshot`, `read_snapshot`, `restart_seed`, exit code `EXIT_CHECKPOINTED` = 75), `ignore_sigterm` |
 | `chains.jl` | the CPU driver `run_chains`, `chain_start`, `monitor_quantities`, `chains_report`, `write_run_outputs` |
 
 `device/src/`: `ESMDevice.jl` (device model, state, exact cost), `terms.jl` (term batch,
@@ -112,8 +113,9 @@ families), `cells.jl` (cell templates), `kmove.jl` (`kscale`/`kpeak` Metropolis)
 
 ## 4. Call graph of a run
 
-**Entry.** `scripts/run.jl <config.toml>` → `load_config` (with `check_config`) → `run(cfg)`,
-which is `run_chains(cfg)`. Device runs start from `device/scripts/run_device.jl` →
+**Entry.** `scripts/run.jl <config.toml>` → (`ignore_sigterm` with `ESM_IGNORE_SIGTERM=1`) →
+`load_config` (with `check_config`) → `run(cfg)`, which is `run_chains(cfg)`; the script exits
+with `results.exitcode` (0 finished, 75 stopped after a snapshot). Device runs start from `device/scripts/run_device.jl` →
 `ESMDevice.run_device(cfg)`.
 
 **Setup** (`setup`, shared by all drivers): `load_system` → `build_energy_model` (with
@@ -130,14 +132,21 @@ reference level (`make_state`).
 slice updates, FFBS, carrier scaling, in random order), with bias observations and refits →
 `bias.active = false` → `lift_bias!` to the finest level (both drivers).
 
-**CPU driver** (`run_chains`): `setup` → level-0 warmup → `chain_start` per chain →
+**CPU driver** (`run_chains`): `setup` → `read_snapshot` (resume if the `checkpoint` file
+exists: phase, sweep counter and chain states from it, streams re-seeded by `restart_seed`) →
+level-0 warmup (or its rest; skipped when resuming in the fine phase) → `chain_start` per chain
+(or the saved states) →
 `new_sampler` per chain → per sweep and chain `fine_local_step`, during the warmup
 `online_bias_step!` (all chains re-evaluated after a refit) and, with `co2_cap > 0`, the CO₂
 price update on the chain mean (all chains re-evaluated); `monitor_quantities`; in
 production `post_record!` and the sampled prices (`accumulate_prices!`,
 `accumulate_region_prices!`) → `chains_report` (diagnostics, post-correction, HDF5) →
 `write_run_outputs` (prices, bias, CO₂ price, learned quantities, weather model,
-calibration).
+calibration). At every sweep boundary (after each level-0 iteration, through the `at_sweep`
+callback of `run_level0!`, and after each fine sweep) `boundary!` writes a snapshot when
+`checkpoint_minutes` have passed, once before the first fine sweep, and when the stop file
+exists; then it throws `CheckpointStop`, which `run_chains` turns into the result with
+`exitcode = 75` ([hpc.md](hpc.md) §7).
 
 **Fine step** (`fine_local_step`): `local_model` → for the flow and adaptive kernels
 `FlowFrames` (refreshed) and `AdaptiveModes` → in random order the operation sweep
@@ -159,9 +168,15 @@ bias re-packed after a refit), `monitor_quantities`, `post_record!` → `chains_
 
 ## 5. Caches
 
-- **Weather model**: `<dirname(out)>/cache/weather_<hash>.jls`, keyed by a content fingerprint of
+All file caches live in one directory, `ESM_CACHE_DIR`, else `cache_dir`, else
+`<dirname(out)>/cache` (`cache_dir(cfg)`); a miss is looked up in the read-only mirror
+(`ESM_CACHE_MIRROR`, `cache_mirror`) and copied in (`cache_lookup`) before it is computed, and
+every entry is written atomically (`atomic_write`: temporary name in the same directory, then
+rename), so that concurrent jobs share the directory safely.
+
+- **Weather model**: `<cache>/weather_<hash>.jls`, keyed by a content fingerprint of
   the weather tensors, the levels, `K`, the seed and the bases.
-- **Reference LP**: `<dirname(out)>/cache/lp_<hash>.h5`, keyed by a fingerprint of the network,
+- **Reference LP**: `<cache>/lp_<hash>.h5`, keyed by a fingerprint of the network,
   units and weather, the reference level, seed, `K`, prices, levels, storage and renewable forms,
   basis, and the model options that change the LP.
 - **In memory**: `LocalModel` per level (lazy), `LocalCost` per sweep (rebuilt from the state;
@@ -191,6 +206,6 @@ Costs per move and per sweep, scaling and device throughput are in
 
 See [testing.md](testing.md) for the strategy. CPU: `test/runtests.jl` (level transfers,
 FFBS, cost gradients, the Haar basis, and the included files `test_local.jl`, `test_flow.jl`,
-`test_bias.jl`, `test_model.jl`, `test_convergence.jl`), plus `test/test_exact.jl` (end-to-end
+`test_bias.jl`, `test_model.jl`, `test_convergence.jl`, `test_hpc.jl`), plus `test/test_exact.jl` (end-to-end
 exactness, run separately). Device: the files in `device/test/`, each run on its own. A new move family
 follows the checklist in [moves/adding_a_move.md](moves/adding_a_move.md).

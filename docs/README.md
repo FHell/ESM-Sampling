@@ -39,6 +39,8 @@ The other files are working notes, not a description of the system; where they a
 
 - [worklog.md](worklog.md): the work log by date and the open to-dos not yet tackled.
 - [retired.md](retired.md): approaches tried and retired, each with the reason.
+- [campaigns.md](campaigns.md): the measurement campaigns (validation, baselines, scaling,
+  production runs on the cluster), with how to run them and their results.
 - [experiments.md](experiments.md): the ledger of experiments run and planned, with the
   question, setup, result and record of each.
 - [archive/](archive/README.md): development notes superseded by `docs/system/` (designs,

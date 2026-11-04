@@ -28,8 +28,9 @@ The other files in `docs/` are development notes, not a description of the syste
 - Keep the work log [docs/worklog.md](docs/worklog.md) current: add what was done (with
   commits) at the end of a work session, and keep its list of open to-dos up to date.
 - Record every experiment (planned, running, done) in the ledger
-  [docs/experiments.md](docs/experiments.md): question, setup, one-line result, where the
-  record lives.
+  [docs/experiments.md](docs/experiments.md), and every measurement campaign (runs that produce
+  results, mostly on the cluster) in [docs/campaigns.md](docs/campaigns.md): question, setup,
+  one-line result, where the record lives.
 - Personal or session notes (memory files, scratch notes, final reports) do not replace these
   documents.
 - Code wins over documents. If you find a disagreement, fix the document (or the code, if the
@@ -42,15 +43,28 @@ The other files in `docs/` are development notes, not a description of the syste
   below about 6 cores; do not run several heavy jobs at once.
 - Kill processes carefully: select PIDs with `ps -eo pid,args | grep "[p]attern"`; never use
   `pkill -f` or `pgrep -f` with a pattern that also matches your own shell command.
+- Long measurements (more than about 15 minutes of compute: convergence and mixing runs, scans,
+  LP batches) do not run on this machine. Prepare them as a campaign for the PIK cluster
+  (docs/system/hpc.md: configs, a script for `hpc/run.sh`, a list file for the array template,
+  a ledger row), smoke-test them locally for a few minutes, and commit; the user runs them
+  there.
 - Keep everything inside the project folder (data in `data/`, outputs in `results/`, scratch in
   your scratchpad or `results/`). Install no new external binaries.
 
 ## Testing rules
 
-- CPU: exactness tests (`test/runtests.jl`, `test/test_exact.jl`): deterministic consistency
-  checks (incremental against global cost, caches, gradients, invariants) and line draws
-  against quadrature. A new move family needs at least the incremental-cost and cache checks
-  and, if it is not a plain fixed-direction move, an invariance check of its curve.
+- CPU: deterministic checks only (`test/runtests.jl`). The gate for every new or changed move
+  family is the move-consistency suite `test/test_moves.jl` (about 10 s after its setups): the
+  potential linear between the walk's points, incremental = global cost, reversibility of the
+  curve (the same discrete choices at the new state, −t returns to the start, inverse
+  Jacobians, equal slice widths), caches after a threaded sweep. A new family adds its entry to
+  the suite's family table.
+- No new statistical tests (KS, z-tests, many-chain runs) until the performance work is much
+  further. `test/test_exact.jl` is an optional diagnostic, not a gate: its capacity part depends
+  on the seed. The sampler does not target one exact density (docs/system/ensemble.md §3.1); it
+  is validated against LP-based results, the optimum and LP-generated near-optimal
+  alternatives (docs/system/validation.md). Diagnosing mixing and running chains from far-apart
+  starts are the way to judge a change of the sampler.
 - Device work, in this order: (1) the device code on plain Julia arrays against the CPU
   reference, with the same prepared moves and the same mock random numbers on both sides
   (`MockRNG` on the CPU, input arrays on the device), compared exactly or to round-off;

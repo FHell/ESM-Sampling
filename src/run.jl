@@ -7,6 +7,11 @@
 Base.@kwdef mutable struct Config
     data::String = "data/processed/model.h5"
     out::String = "results/run.h5"
+    cache_dir::String = ""          # caches (weather model, reference LP); "": <dirname(out)>/cache; env ESM_CACHE_DIR overrides
+    cache_mirror::String = ""       # read-only fallback of the caches (copied in on a miss); env ESM_CACHE_MIRROR overrides
+    checkpoint::String = ""         # CPU driver: state snapshot file (HDF5; resumed from if it exists); "": off
+    checkpoint_minutes::Float64 = 30.0  # ... a snapshot every this many minutes of wall time, at a sweep boundary
+    stop_file::String = ""          # ... if this file exists at a sweep boundary: snapshot, remove it, stop (exit code 75)
     levels::Vector{Tuple{Int,Int}} = [(10, 24), (40, 24)]
     seed::Int = 1
     K::Int = 4                      # weather regimes
@@ -151,7 +156,8 @@ function setup(cfg::Config; rng=MersenneTwister(cfg.seed))
     L = length(cfg.levels) - 1
     logmsg(cfg, "system: $(sys.N) nodes, $(length(sys.line_s)) lines, $(length(sys.link_cap)) DC links, ",
            "$(length(sys.years)) weather years; levels $(cfg.levels), LP/reference level $ref")
-    W = weather_model_cached(E, cfg.levels; K=cfg.K, seed=cfg.seed, cachedir=joinpath(dirname(cfg.out), "cache"), datafile=cfg.data)
+    cdir, mirror = cache_dir(cfg), cache_mirror(cfg)
+    W = weather_model_cached(E, cfg.levels; K=cfg.K, seed=cfg.seed, cachedir=cdir, mirror=mirror, datafile=cfg.data)
     logmsg(cfg, @sprintf("weather model: %d regimes, coarse dim %d per step, EM loglik %.1f (%d its)  [%.0fs]",
                          W.K, n0(W), W.loglik[end], length(W.loglik), time() - t0))
 
@@ -170,7 +176,7 @@ function setup(cfg::Config; rng=MersenneTwister(cfg.seed))
         lp = heuristic_start(E, lkr, lvr, Wd)
         logmsg(cfg, "no reference LP: heuristic capacities (proxy renewables, gas at nodal peak load), interior dispatch")
     else
-        lp = solve_lp_cached(E, lkr, lvr, Wd, joinpath(dirname(cfg.out), "cache", "lp_$(string(key; base=16)).h5"))
+        lp = solve_lp_cached(E, lkr, lvr, Wd, joinpath(cdir, "lp_$(string(key; base=16)).h5"); mirror=mirror)
     end
     T_L, T_ref = 8760 ÷ cfg.levels[end][2], lvr.T
     # equipartition: one unit of β×cost per cost-confined direction; interior
@@ -179,8 +185,13 @@ function setup(cfg::Config; rng=MersenneTwister(cfg.seed))
     n_k = (lp.n_k_total - lp.n_k_free) + 0.5 * lp.n_k_free
     βv = cfg.calibrate_beta ? n_v / (cfg.eps_v * lp.objective) : cfg.beta_v
     βk = cfg.calibrate_beta ? n_k / (cfg.eps_k * lp.objective) : cfg.beta_k
-    logmsg(cfg, @sprintf("LP: total %.3e €/a (capex %.3e), confined n_v*≈%.0f (finest), n_k=%.1f → β_v=%.3e, β_k=%.3e  [%.0fs]",
-                         lp.objective, lp.capex, n_v, n_k, βv, βk, time() - t0))
+    if cfg.init == "heuristic"      # no LP solved: objective and capex are NaN by construction, β fixed
+        logmsg(cfg, @sprintf("heuristic start (no LP): confined n_v*≈%.0f (finest), n_k=%.1f, fixed β_v=%.3e, β_k=%.3e  [%.0fs]",
+                             n_v, n_k, βv, βk, time() - t0))
+    else
+        logmsg(cfg, @sprintf("LP: total %.3e €/a (capex %.3e), confined n_v*≈%.0f (finest), n_k=%.1f → β_v=%.3e, β_k=%.3e  [%.0fs]",
+                             lp.objective, lp.capex, n_v, n_k, βv, βk, time() - t0))
+    end
 
     bias = init_bias(E, W, Layout(E.kspecs, cfg.levels[1]...), βk / βv; rng=rng, nsamples=cfg.bias_samples,
                      nsteps=cfg.bias_sample_steps, res=cfg.bias_table_res)
@@ -259,13 +270,17 @@ function lift_bias!(P::Problem, cfg::Config)
 end
 
 """
-    run_level0!(rng, P, s, S, n, cfg; learn, label) -> (state, Q trace, weather diagnostics trace, mean k)
+    run_level0!(rng, P, s, S, n, cfg; learn, label, start, at_sweep) -> (state, Q trace, weather diagnostics trace, mean k)
 
 Level-0 chain with the level-0 kernel (`base_step`). With `learn = true` (the bias
 warmup) the slice widths and step sizes adapt and the bias is learned from the
-chain's scores (from iteration `bias_start`, refit every `bias_every`).
+chain's scores (from iteration `bias_start`, refit every `bias_every`). Iterations
+`start+1 … n` are run (a resumed warmup; the traces and the mean cover those);
+`at_sweep(it, s)`, if given, is called after every iteration (the snapshots of the
+CPU driver).
 """
-function run_level0!(rng, P::Problem, s::State, S::ChainSampler, n::Int, cfg::Config; learn=false, label="level 0")
+function run_level0!(rng, P::Problem, s::State, S::ChainSampler, n::Int, cfg::Config; learn=false, label="level 0",
+                     start::Int=0, at_sweep=nothing)
     Q = Vector{Vector{Float64}}()
     D = Vector{Vector{Float64}}()
     ksum = zeros(length(s.k))
@@ -273,7 +288,7 @@ function run_level0!(rng, P::Problem, s::State, S::ChainSampler, n::Int, cfg::Co
     S.adapt = learn
     S.gibbs.adapt = learn
     P.use_bias && P.bias.ℓb != 0 && error("the level-0 chain needs the bias at level 0 (it has been lifted to level $(P.bias.ℓb))")
-    for it in 1:n
+    for it in start+1:n
         s = base_step(rng, P, s, S)
         if learn
             if it >= cfg.bias_start && P.use_bias && P.bias.active
@@ -290,10 +305,11 @@ function run_level0!(rng, P::Problem, s::State, S::ChainSampler, n::Int, cfg::Co
             logmsg(cfg, @sprintf("  %s %5d/%d  %s  total %.4e  [%.0fs]", label, it, n, ktxt,
                                  Q[end][length(P.E.kspecs)+3], time() - t0))
         end
+        at_sweep === nothing || at_sweep(it, s)
     end
     S.adapt = false
     S.gibbs.adapt = false
-    return s, Q, D, ksum ./ n
+    return s, Q, D, ksum ./ max(n - start, 1)
 end
 
 "Seasonal means of the first (system-mean) mode per weather field, and regime frequencies."
@@ -375,9 +391,10 @@ end
 """
     run(cfg) -> results
 
-The CPU driver: the multi-chain run of `run_chains` (chains.jl).
+The CPU driver: the multi-chain run of `run_chains` (chains.jl). `results.exitcode` is 0
+for a finished run and 75 for a run stopped by the stop file after a snapshot.
 """
-run(cfg::Config) = run_chains(cfg)
+run(cfg::Config; kw...) = run_chains(cfg; kw...)
 
 "Content fingerprint of the model data used by the LP (network, units, weather)."
 data_fingerprint(sys::System, path::String) =

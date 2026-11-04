@@ -122,9 +122,13 @@ attributes `weather_source` and `weather_base`.
 | file | network | weather | years | build |
 |---|---|---|---|---|
 | `model.h5` | example network, 10 countries | NASA POWER, calibrated on 1–21 May 2013 | 2001–2022 | `download_data.sh`, `prepare_data.py`, `--augment` |
-| `model76.h5` | example network, 27 countries | NASA POWER, as above | 2001–2022 | `prepare_data.py --countries …` |
+| `model76.h5` | example network, 27 countries | NASA POWER, as above | 2001–2022 | `prepare_data.py --countries AT,BE,BG,CH,CZ,DE,DK,EE,ES,FI,FR,GR,HR,HU,IE,IT,LT,LU,LV,NL,NO,PL,PT,RO,SE,SI,SK` (the example network's 34 countries without AL, BA, GB, ME, MK, RS and the pseudo-country EU; the list is the file's `countries` attribute) |
 | `model256.h5` | PyPSA-Eur build `esm256` | NASA POWER, calibrated on 2013 | 2001–2022 | `prepare_data.py --network composed_2050.nc` |
-| `model256_era5.h5` (not built) | as `model256.h5` | ERA5, calibrated on 2013 | the fetched years | `fetch_era5.sh`, `prepare_era5.py` |
+| `model256_era5.h5` (not built) | as `model256.h5` | ERA5, calibrated on 2013 | the fetched years | locally `fetch_era5.sh` (copies over the sftp mount), `prepare_era5.py`; on the cluster `hpc/prepare_data.sh era5`, reading the ERA5 folder in place |
+
+On the cluster the same builds are scripted (`hpc/prepare_data.sh`, [hpc.md](hpc.md) §4), with
+the PyPSA-Eur environment recreated from `configs/pypsa-eur/requirements.txt` (frozen from the
+local build), and each file recorded in `data/processed/PROVENANCE.toml`.
 
 Common to all: CO₂ price 150 €/t in the marginal costs (attribute `co2_price`), battery 6 h and
 H₂ 168 h energy-to-power ratios, constant availabilities of nuclear 0.9 and run-of-river 0.5,

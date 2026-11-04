@@ -2,7 +2,7 @@
 
 What was done, by date, with the commits, and the open to-dos that have not been tackled yet.
 Design-level open problems are in [system/roadmap.md](system/roadmap.md), experiments in
-[experiments.md](experiments.md); this file is the running record of the work and its
+[experiments.md](experiments.md) and campaigns in [campaigns.md](campaigns.md); this file is the running record of the work and its
 concrete next steps. Update it at the end of every work session.
 
 ## Open to-dos
@@ -62,7 +62,7 @@ concrete next steps. Update it at the end of every work session.
 - Remaining device families: the localized transport moves `tcut`/`acut` (Haar atoms: per-site
   line lists, sparse templates), learned dispatch shapes (`adshape`), block aggregates
   (cell–class groups), the re-routing templates (`xpair`, `xloc(c)`), `slong`/`slevel`.
-- Next device restructuring steps (ledger E26): the slot-point sort of the slope-jump form (a
+- Next device restructuring steps (ledger E27): the slot-point sort of the slope-jump form (a
   payload sort per balance slot, now one of the larger kernels), the per-column evaluation at the
   slot points (columns × slot points), the dense form of the plain families (unchanged).
 - Whether Float32 (`ESMDevice.F32`) is usable: to be tested empirically (user).
@@ -76,14 +76,23 @@ concrete next steps. Update it at the end of every work session.
 - `cache_dir` key or `ESM_CACHE_DIR`: one shared, content-addressed cache with atomic writes
   (now per run directory).
 - Checkpoint and resume with SIGTERM handling in `run_chains` and `run_device`.
-- `hpc/` scripts: environment preparation on a login node, the run wrapper, job templates, the
-  run record and the runs index.
-- Julia 1.12 on the cluster (the guide lists 1.11.7; the Manifests need 1.12); the Reactant CUDA
-  artifact fetched on a login node without a GPU; the ERA5 folder's path (the user will look it
-  up).
-- Request `/p/projects` space; fill in the project and account names in hpc.md.
+- `hpc/` scripts built (env, prepare, campaigns, run wrapper, collection into git, job
+  templates, H0 checks; wrapper mechanics tested locally); cluster values filled in (user
+  hellmann, project directory coen, Slurm account icone, julia/1.12.2, CUDA 13 → Reactant 13.1, ERA5 at
+  /p/projects/climate_data_central/reanalysis/ERA5, clone at /p/projects/coen/esm/ESM-Sampling).
+  Model files built on the cluster (`hpc/prepare_data.sh`, `hpc/jobs/data.sbatch`), no manual
+  copy. Next on the cluster: pull, prepare_env.sh, data.sbatch small, H0; then H2 with
+  `scripts/lp_reference.jl` (MGA alternatives still to be scripted).
+- Device driver checkpoint (after the device agent's work).
 
 **Tests and validation:**
+- Move-consistency suite `test/test_moves.jl` built and merged (2026-11-04); it replaces
+  `test_exact.jl` as the gate (CLAUDE.md, testing.md, adding_a_move.md). No new statistical tests until the
+  performance work is much further (user, 2026-11-04).
+- The event walk of requirement-tracking moves places kinks about 1e-7 of the segment off (up
+  to ~1e-5 nats between walk points on weather moves; `test_moves.jl` reports it as broken);
+  an iterated secant made other lines worse. Needs a root placement that is exact where a
+  quantity bends at its own root.
 - Exactness tests do not detect small invariance violations (missed the `kpeak` width and the
   storage walk bug): longer reference runs (ledger P6).
 - Sweeps to equilibrium against network size and resolution; 256-node ERA5 run (ledger P7, P8).
@@ -91,8 +100,9 @@ concrete next steps. Update it at the end of every work session.
 **Housekeeping:**
 - `CLAUDE.md` still says many `Config` defaults are legacy values; check and update.
 - `docs/reactant_design.md` mentions archived notes by bare file name in its text.
-- Worktrees to remove when done: `.claude/worktrees/gpu-timing`,
-  `.claude/worktrees/agent-af45abb1d0d9c1d90` (review scripts, branch 72e12c2, to merge or drop).
+- Worktrees to remove when done: `.claude/worktrees/gpu-timing` (GPU timing copy), and the
+  locked worktrees of finished agents whose branches are merged (review 72e12c2, storage
+  09790f6; their outputs are copied to `results/review/` and `results/smix/`).
 - Julia MCP sessions of agents restart at nice 0 with 16 threads unless every call passes the
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 
@@ -108,7 +118,7 @@ concrete next steps. Update it at the end of every work session.
   reduce-window over the whole axis); sort networks for short point lists.
 - Stacked term builders (one gather per field, one scatter per state array) for `tsoc`, `tpot`,
   the blocks and the cells; compile of the large families 5–15 s.
-- GPU, full run set at 40 × 6 h with 4 chains: about 24 → 8.7 s per sweep (ledger E26).
+- GPU, full run set at 40 × 6 h with 4 chains: about 24 → 8.7 s per sweep (ledger E27).
 - `soc_qadj` ported to the device (`soc_qadj4`), blocks compensate every moved unit (CPU
   4a5a4ea); main merged; `test_comp.jl` A, B, D, E pass against the new CPU reference.
 - `ESMDevice.F32`: the whole device program in Float32 (same sources, literals mapped).
@@ -116,6 +126,28 @@ concrete next steps. Update it at the end of every work session.
   directions per site and chain from the host; learned block profiles per season class; host
   adaptation in `run_device(…; adapt=true)` (`HostAdapt`: modes, shapes, β; uploads of the same
   shapes).
+
+### 2026-11-04 (deterministic move checks)
+
+- `test/test_moves.jl`: one table-driven harness of single-move exactness checks for every
+  family (walk linearity, incremental = global, reversibility with the same choices, excess,
+  round trip, shifted density and inverse Jacobians, slice width and bound, Metropolis
+  negation, caches after a sweep), on `haar_poc` level 1 and a 5-node all-terms sub-network;
+  about 10 s after the setups (ledger E26, testing.md §5). Test hooks: `probe`/`fix` and more
+  `rec` fields in `kscale_sweep!`/`kpeak_sweep!`, `weather_coord_prepare!`/`_commit!`,
+  `prep_adshape!`.
+- Found and fixed: `kop` without the commitment walls of its compensators (`kop_uc`); the walk's
+  storage mask with commitment walls before the storage secondaries (`MoveWS.soff`). Open: the
+  event walk's root placement (up to ~1e-5 nats, sampler.md §3.3).
+
+### 2026-11-04 (HPC: shared cache and state snapshots)
+
+- CPU driver for the cluster (`src/checkpoint.jl`, [system/hpc.md](system/hpc.md) §4, §7):
+  shared cache (`cache_dir`/`ESM_CACHE_DIR`, read-only mirror `cache_mirror`/`ESM_CACHE_MIRROR`,
+  atomic writes of every entry); HDF5 state snapshots in `run_chains` (`checkpoint`,
+  `checkpoint_minutes`, `stop_file`; resume from the saved states with re-seeded streams;
+  exit code 75 after a stop; `ESM_IGNORE_SIGTERM` in `scripts/run.jl`); `ESM_LP_THREADS` for
+  HiGHS; tests in `test/test_hpc.jl`. The device driver's snapshot is still missing.
 
 ### 2026-11-04 (seasonal storage)
 

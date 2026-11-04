@@ -7,6 +7,8 @@
 # density), the local and bias caches after the moves and after a sweep, and that one
 # kscale and one kpeak sweep bring the raw capacities above the box toward it.
 # Run after test_kop.jl (reuses its problem P1, LM and start sL) or on its own.
+# The density, reverse-move and cache checks inside the box are also made by test_moves.jl
+# (slice and Metropolis forms of kscale and kpeak); this file keeps the states above the box.
 using Test, Random, LinearAlgebra, Statistics
 using ESMSampling
 const MQ = ESMSampling

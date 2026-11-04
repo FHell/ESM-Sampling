@@ -77,7 +77,7 @@ function chain_start(rng, P::Problem, sL::State, kind::String, newweather::Bool)
 end
 
 """
-    run_chains(cfg) -> results
+    run_chains(cfg; hook=nothing) -> results
 
 The CPU driver (`run`): level-0 warmup for the bias (α = 1) and its lift to the
 finest level, then `nchains` finest-level chains for `mlda_warmup + nsamples` sweeps each. During the warmup the
@@ -87,78 +87,152 @@ fine kernel, are frozen for production. Production
 records the monitored quantities, the post-correction samples and the sampled
 prices. Output: diagnostics and traces (`chains_report`) plus prices, the learned
 quantities and the calibration (`write_run_outputs`).
+
+**Snapshots and resume** (`checkpoint` ≠ "", checkpoint.jl; docs/system/hpc.md §7): at
+sweep boundaries the chain states are written every `checkpoint_minutes`, once after the
+level-0 warmup, and when `stop_file` exists (then the run stops: `results.exitcode = 75`,
+`results.states` the saved states). If the snapshot file exists at the start, the run
+resumes from it: the phase and the sweep counter continue, the chains restart from the
+saved states (`results.resume_states`), the random streams are re-seeded from the seed and
+the restart count, and the kernels are rebuilt (fresh adaptation in the rest of the
+warmup, none in production). Not restored: the bias learned in the level-0 warmup (a
+resume after it lifts the set-up fit), the online-bias observations, the learned modes, and
+the post-correction and price accumulators (they cover the production sweeps since the last
+start). `hook(phase, it)` is called at every sweep boundary when snapshots are on (tests).
 """
-function run_chains(cfg::Config)
+function run_chains(cfg::Config; hook=nothing)
+    C = Checkpointer(cfg; hook=hook)
     rng = MersenneTwister(cfg.seed)
     P, sL, info = setup(cfg; rng=rng)
     L = nlevels(P) - 1
     t0 = time()
-    if P.use_bias                                  # level-0 warmup and bias learning
-        S0 = new_sampler(P, sL, cfg)
-        s0 = predescend(P, restrict_state(P, sL, 0), cfg)
-        logmsg(cfg, "level-0 warmup and bias learning ($(cfg.warmup0) its)")
-        s0, _, _, _ = run_level0!(rng, P, s0, S0, cfg.warmup0, cfg; learn=true, label="warmup")
-        P.bias.active = false
-        lift_bias!(P, cfg)                         # the fine chains evaluate and refit the bias at their level
-        sL = evaluate!(P, sL)
+    snap = read_snapshot(cfg.checkpoint, cfg, P)
+    r = snap === nothing ? 0 : snap.restarts + 1          # resumes of this run so far
+    C.restarts = r
+    resume_states = nothing
+    if snap !== nothing
+        logmsg(cfg, "resuming from snapshot $(cfg.checkpoint) (restart $r, written ",
+               Libc.strftime("%Y-%m-%d %H:%M:%S", snap.written), "): $(snap.where_)")
+        snap.co2 === P.E.co2[] || set_co2_price!(P.E, snap.co2)
+        copy!(rng, MersenneTwister(restart_seed(cfg, r)))
     end
-    K = cfg.nchains
-    @assert K >= 1 "nchains must be at least 1"
-    kinds = [cfg.chain_starts[mod1(c, length(cfg.chain_starts))] for c in 1:K]
-    newweather = cfg.fine_weather > 0
-    newweather || logmsg(cfg, "fine_weather = 0: all chains share the weather of the set-up state")
-    chains = [chain_start(MersenneTwister(cfg.seed + 7 * c), P, sL, kinds[c], newweather) for c in 1:K]
-    samplers = [new_sampler(P, chains[c], cfg) for c in 1:K]
-    rngs = [MersenneTwister(cfg.seed + 1000 * c) for c in 1:K]
-    nwarm, nprod = cfg.mlda_warmup, cfg.nsamples
-    online = P.use_bias && cfg.bias_online
-    OB = OnlineBias(; every=cfg.bias_online_every, freeze=K * nwarm, nmin=cfg.bias_online_min, trust=cfg.bias_trust)   # refits during the warmup only
-    PB = (P.use_bias && cfg.bias_post) ? PostBias() : nothing
-    names = monitor_names(P)
-    LM = LocalModel(P, L)
-    pacc = PriceAcc(P.E.sys.N, P.lv[L+1].T)
-    raccs = Dict("country" => RegionPriceAcc(P.E.sys.country), "system" => RegionPriceAcc(fill("all", P.E.sys.N)))
-    μs = Float64[]
-    traces = [Vector{Vector{Float64}}() for _ in 1:K]
-    logmsg(cfg, "$K chains (starts: $(join(kinds, ", "))), $nwarm warmup + $nprod sweeps each")
-    for it in 1:nwarm+nprod
-        for c in 1:K
-            chains[c] = fine_local_step(rngs[c], P, chains[c], samplers[c])
-            if online && it <= nwarm
-                chains[c], upd = online_bias_step!(P, chains[c], OB; monotone=bias_monotone_args(P, cfg))
-                upd && (chains = [evaluate!(P, x) for x in chains])   # a refit changes the target of every chain
+    C.last = time()
+    try
+        if P.use_bias                                  # level-0 warmup and bias learning
+            if snap === nothing || snap.phase == :level0
+                S0 = new_sampler(P, sL, cfg)
+                if snap === nothing
+                    s0, it0 = predescend(P, restrict_state(P, sL, 0), cfg), 0
+                else
+                    s0, it0 = snap.states[1], snap.it
+                    s0.ℓ == 0 || error("snapshot $(cfg.checkpoint): the level-0 state is at level $(s0.ℓ)")
+                    resume_states = [copy(s0)]
+                    snap.sigma_scale === nothing || (S0.σscale .= snap.sigma_scale)
+                    if snap.gibbs !== nothing
+                        S0.gibbs.wv .= snap.gibbs.wv; S0.gibbs.wz .= snap.gibbs.wz; S0.gibbs.wk .= snap.gibbs.wk
+                    end
+                end
+                logmsg(cfg, "level-0 warmup and bias learning ($(cfg.warmup0) its", it0 > 0 ? ", from $it0)" : ")")
+                level0_data = s -> (; states=[s], sigma_scale=S0.σscale, gibbs=(wv=S0.gibbs.wv, wz=S0.gibbs.wz, wk=S0.gibbs.wk))
+                s0, _, _, _ = run_level0!(rng, P, s0, S0, cfg.warmup0, cfg; learn=true, label="warmup", start=it0,
+                                          at_sweep=(it, s) -> boundary!(C, cfg, P, :level0, it, () -> level0_data(s)))
+            else
+                @warn "resumed after the level-0 warmup: the bias is the set-up fit, not the one learned in the warmup"
             end
-            q = monitor_quantities(P, chains[c]; LM=LM)
-            push!(traces[c], q)
-            if it > nwarm
-                PB === nothing || post_record!(PB, P, chains[c], q)
-                LC = LocalCost(P, LM, chains[c])
-                accumulate_prices!(pacc, P, LM, LC)
-                foreach(a -> accumulate_region_prices!(a, P, LM, LC, chains[c]), values(raccs))
+            P.bias.active = false
+            lift_bias!(P, cfg)                         # the fine chains evaluate and refit the bias at their level
+            sL = evaluate!(P, sL)
+        elseif snap !== nothing && snap.phase == :level0
+            error("snapshot $(cfg.checkpoint) is in the level-0 warmup, but use_bias = false")
+        end
+        K = cfg.nchains
+        @assert K >= 1 "nchains must be at least 1"
+        nwarm, nprod = cfg.mlda_warmup, cfg.nsamples
+        names = monitor_names(P)
+        if snap !== nothing && snap.phase == :fine
+            length(snap.states) == K || error("snapshot $(cfg.checkpoint) has $(length(snap.states)) chains, nchains = $K")
+            kinds = length(snap.kinds) == K ? snap.kinds : [cfg.chain_starts[mod1(c, length(cfg.chain_starts))] for c in 1:K]
+            chains = [evaluate!(P, s) for s in snap.states]          # under the lifted bias
+            resume_states = [copy(s) for s in chains]
+            it0 = snap.it
+            traces = [tr[1:min(length(tr), it0)] for tr in snap.traces]
+            all(tr -> length(tr) == it0, traces) || @warn "snapshot traces cover $(length.(traces)) sweeps, the counter is $it0"
+            μs = copy(snap.co2_trace)
+        else
+            kinds = [cfg.chain_starts[mod1(c, length(cfg.chain_starts))] for c in 1:K]
+            newweather = cfg.fine_weather > 0
+            newweather || logmsg(cfg, "fine_weather = 0: all chains share the weather of the set-up state")
+            chains = [chain_start(MersenneTwister(restart_seed(cfg, r, 7 * c)), P, sL, kinds[c], newweather) for c in 1:K]
+            it0 = 0
+            traces = [Vector{Vector{Float64}}() for _ in 1:K]
+            μs = Float64[]
+        end
+        samplers = [new_sampler(P, chains[c], cfg) for c in 1:K]
+        rngs = [MersenneTwister(restart_seed(cfg, r, 1000 * c)) for c in 1:K]
+        if it0 >= nwarm                                # resumed in production: no adaptation of the rebuilt kernels
+            for S in samplers
+                S.loc.mode == :adaptive && (S.loc.adapt[L] = AdaptiveModes(P, L; freeze=-1))
             end
         end
-        if it == nwarm                              # adaptation of the fine kernels ends with the warmup
-            for S in samplers, AM in values(S.loc.adapt)
-                AM.freeze = min(AM.freeze, AM.nobs)
+        online = P.use_bias && cfg.bias_online
+        OB = OnlineBias(; every=cfg.bias_online_every, freeze=K * (nwarm - min(it0, nwarm)), nmin=cfg.bias_online_min,
+                        trust=cfg.bias_trust)          # refits during the (rest of the) warmup only
+        PB = (P.use_bias && cfg.bias_post) ? PostBias() : nothing
+        LM = LocalModel(P, L)
+        pacc = PriceAcc(P.E.sys.N, P.lv[L+1].T)
+        raccs = Dict("country" => RegionPriceAcc(P.E.sys.country), "system" => RegionPriceAcc(fill("all", P.E.sys.N)))
+        fine_data = () -> (; states=chains, kinds, traces, co2_trace=μs)
+        logmsg(cfg, "$K chains (starts: $(join(kinds, ", "))), $nwarm warmup + $nprod sweeps each",
+               it0 > 0 ? ", from sweep $it0" : "")
+        it0 == 0 && boundary!(C, cfg, P, :fine, 0, fine_data; force=true)   # at least one snapshot after the level-0 warmup
+        for it in it0+1:nwarm+nprod
+            for c in 1:K
+                chains[c] = fine_local_step(rngs[c], P, chains[c], samplers[c])
+                if online && it <= nwarm
+                    chains[c], upd = online_bias_step!(P, chains[c], OB; monotone=bias_monotone_args(P, cfg))
+                    upd && (chains = [evaluate!(P, x) for x in chains])   # a refit changes the target of every chain
+                end
+                q = monitor_quantities(P, chains[c]; LM=LM)
+                push!(traces[c], q)
+                if it > nwarm
+                    PB === nothing || post_record!(PB, P, chains[c], q)
+                    LC = LocalCost(P, LM, chains[c])
+                    accumulate_prices!(pacc, P, LM, LC)
+                    foreach(a -> accumulate_region_prices!(a, P, LM, LC, chains[c]), values(raccs))
+                end
             end
+            if it == nwarm                              # adaptation of the fine kernels ends with the warmup
+                for S in samplers, AM in values(S.loc.adapt)
+                    AM.freeze = min(AM.freeze, AM.nobs)
+                end
+            end
+            if cfg.co2_cap > 0 && it <= nwarm           # canonical price tuned to the cap (Robbins–Monro on the chain mean)
+                em = mean(x.parts.co2 for x in chains)
+                μ = P.E.co2[] * exp(0.5 / it^0.6 * clamp(em / cfg.co2_cap - 1, -1.0, 1.0))
+                set_co2_price!(P.E, μ)
+                chains = [evaluate!(P, x) for x in chains]
+                push!(μs, μ)
+                it == nwarm && logmsg(cfg, @sprintf("CO₂ price tuned to the cap: μ = %.1f €/t (mean emissions %.3g t)", μ, em))
+            end
+            if it % max(1, (nwarm + nprod) ÷ 10) == 0
+                tot = [tr[end][length(P.E.kspecs)+3] for tr in traces]
+                logmsg(cfg, @sprintf("  sweep %4d/%d  total per chain %s  [%.0fs]", it, nwarm + nprod,
+                                     join((@sprintf("%.4e", x) for x in tot), " "), time() - t0))
+            end
+            it < nwarm + nprod && boundary!(C, cfg, P, :fine, it, fine_data)
         end
-        if cfg.co2_cap > 0 && it <= nwarm           # canonical price tuned to the cap (Robbins–Monro on the chain mean)
-            em = mean(x.parts.co2 for x in chains)
-            μ = P.E.co2[] * exp(0.5 / it^0.6 * clamp(em / cfg.co2_cap - 1, -1.0, 1.0))
-            set_co2_price!(P.E, μ)
-            chains = [evaluate!(P, x) for x in chains]
-            push!(μs, μ)
-            it == nwarm && logmsg(cfg, @sprintf("CO₂ price tuned to the cap: μ = %.1f €/t (mean emissions %.3g t)", μ, em))
+        res = chains_report(cfg, P, names, traces, kinds, PB, nwarm, nprod, t0)
+        write_run_outputs(cfg, P, info, samplers, pacc, raccs, online ? OB : nothing, μs)
+        h5open(cfg.out, "r+") do f
+            f["run/restarts"] = r
+            f["run/resumed_at_sweep"] = (snap !== nothing && snap.phase == :fine) ? snap.it : -1
         end
-        if it % max(1, (nwarm + nprod) ÷ 10) == 0
-            tot = [tr[end][length(P.E.kspecs)+3] for tr in traces]
-            logmsg(cfg, @sprintf("  sweep %4d/%d  total per chain %s  [%.0fs]", it, nwarm + nprod,
-                                 join((@sprintf("%.4e", x) for x in tot), " "), time() - t0))
-        end
+        return (; res..., P, chains, samplers, info, status=:finished, exitcode=0, resume_states, restarts=r)
+    catch e
+        e isa CheckpointStop || rethrow()
+        logmsg(cfg, "stop file $(cfg.stop_file): stopped after the snapshot $(e.path) ($(e.where_)); exit code $EXIT_CHECKPOINTED")
+        return (; status=:stopped, exitcode=EXIT_CHECKPOINTED, states=e.states, resume_states, restarts=r, P, info)
     end
-    res = chains_report(cfg, P, names, traces, kinds, PB, nwarm, nprod, t0)
-    write_run_outputs(cfg, P, info, samplers, pacc, raccs, online ? OB : nothing, μs)
-    return (; res..., P, chains, samplers, info)
 end
 
 """
