@@ -278,8 +278,13 @@ of $\log J$ alone. The global `evaluate!` equals the incremental sums to round-o
 
 > **Status: missing.** Stabilization of the bias early in an $\alpha = 1$ run (a long enough
 > level-0 warmup before fine-level refits, damping or a trust region for the refits,
-> regularization of $\hat h$'s slopes). Without it a refit can move $\hat b$ by many nats at
-> states far from the fitted ones.
+> regularization of $\hat h$). Without it a refit can move $\hat b$ by many nats at states far
+> from the fitted ones. Two mechanisms are known. The separable quadratic $\hat h$, fitted from
+> scores of chains that start far apart, takes negative curvature with its maximum inside the
+> capacity box; beyond the maximum $e^{-\hat h}$ grows with the capacity, and storage runs to its
+> bound. And the weather scores do not separate the linear coefficients of $u_1$ and $u_2$ (their
+> design columns are equal), so the ridge splits them equally and the firm-capacity dependence
+> of $\hat g$ in surplus is not identified by the weather data.
 
 ### 7.2 Weather moves at the fine level
 
