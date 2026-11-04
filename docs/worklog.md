@@ -80,8 +80,10 @@ concrete next steps. Update it at the end of every work session.
 - The POWER model files carry the old wind calibration (scale 4, deep in cut-out, at 9 of 19
   offwind nodes of `model.h5`, 49 of 64 of `model256.h5`; [system/data_sources.md](system/data_sources.md)
   §2). Fixed in `prepare_data.py` (`smallest_root`, shared with the ERA5 build); a fixed
-  build of `model.h5` changes exactly the 10 affected columns, all of them now rising with the
-  wind. To do: replace the local files
+  build of `model.h5` changes exactly the 10 affected columns; the fixed builds of all three
+  files (in the session scratchpad) have no scale at 4, every wind series rising with its wind
+  speed, and every generator within 0.005 of its target (`model256.h5` offwind mean 0.436,
+  ERA5 0.418). To do: replace the local files
   once the running agents are done (they read `data/` through their worktree links), and
   rebuild on the cluster
   (hpc.md §8.3, D1 and D2). Then recheck the physical conclusions of the experiments (the
@@ -115,6 +117,16 @@ concrete next steps. Update it at the end of every work session.
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 
 ## Log
+
+### 2026-11-04 (job continuations past the time limit)
+
+- The time-limit signal (`--signal=B:USR1@900`) went to the templates' batch shell, which ran
+  `run.sh` as a child: no stop file, the batch shell killed by the unhandled signal, no
+  snapshot; and the continuation lost the mode and script arguments and did not work for
+  arrays. The templates now `exec` `run.sh` and export `ESM_JOB_SCRIPT`/`ESM_JOB_ARGS`/
+  `ESM_JOB_ARRAY`; `run.sh` tells SIGTERM (requeue by Slurm) from SIGUSR1 (continuation,
+  automatic, at most 10 in a row) and records the signal; simulated locally with Slurm stubs.
+  CLAUDE.md: the sampler described as weather replicas with a Langevin capacity step.
 
 ### 2026-11-04 (ERA5 built; wind calibration fixed)
 

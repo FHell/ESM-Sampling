@@ -12,4 +12,5 @@
 #SBATCH --chdir=/p/tmp/hellmann/esm
 #SBATCH --output=/p/tmp/hellmann/esm/logs/%x-%j.out
 ESM_PROJ=${ESM_PROJ:-/p/projects/coen/esm}
-bash "$ESM_PROJ/campaigns/$1/code/hpc/run.sh" "$@"
+export ESM_JOB_SCRIPT="$ESM_PROJ/campaigns/$1/code/hpc/jobs/analysis.sbatch" ESM_JOB_ARGS="$*"   # continuations (run.sh)
+exec bash "$ESM_PROJ/campaigns/$1/code/hpc/run.sh" "$@"

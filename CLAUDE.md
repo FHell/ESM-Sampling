@@ -1,9 +1,10 @@
 # Working notes for agents and sessions
 
 ESM-Sampling is a near-optimal MCMC sampler for an energy-system model built from PyPSA-Eur:
-weather, capacities and dispatch are sampled jointly from a two-temperature ensemble with a
-learned bias. `src/` is the Julia package `ESMSampling` (CPU reference), `device/` the GPU port
-`ESMDevice` (Reactant.jl).
+weather, capacities and dispatch are sampled jointly from a two-temperature ensemble, by
+weather replicas sharing a Langevin capacity step (the learned bias is being retired). `src/`
+is the Julia package `ESMSampling` (CPU reference), `device/` the GPU port `ESMDevice`
+(Reactant.jl).
 
 ## Read first
 

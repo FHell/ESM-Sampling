@@ -11,7 +11,12 @@
 #   which a Slurm requeue keeps, so a requeued job resumes from its checkpoint;
 # - SIGTERM (preemption, scancel) and SIGUSR1 (#SBATCH --signal=B:USR1@<lead>, before the time
 #   limit) create the stop file; the driver then checkpoints at a sweep boundary and exits with
-#   75; with RESUBMIT=<n> > 0 the wrapper submits a continuation job (afterany dependency);
+#   75. After SIGTERM nothing more is done (a preempted standby job is requeued by Slurm and
+#   resumes; a cancelled one stays stopped). After SIGUSR1 the wrapper submits a continuation:
+#   the same job template with the same arguments, array index, cores and memory, the same run
+#   id, an afterany dependency on this job; at most RESUBMIT (default ESM_MAX_CONTINUATIONS = 10)
+#   in a row. The templates `exec` this script, so that the batch-shell signal reaches it, and
+#   export ESM_JOB_SCRIPT, ESM_JOB_ARGS (whitespace-separated) and, for arrays, ESM_JOB_ARRAY;
 # - at the end: the run record (run.toml), sacct figures, archive copy without checkpoints,
 #   and one line in the runs index ($ESM_PROJ/ledger/runs.jsonl and the campaign's runs.jsonl).
 set -uo pipefail
@@ -109,8 +114,9 @@ restarts="${SLURM_RESTART_COUNT:-0}"
 } >> "$rundir/run.toml"
 
 # --- run, with the stop-file trap ------------------------------------------------------------
-signalled=0
-trap 'touch "$rundir/STOP"; signalled=1' TERM USR1
+signalled=""
+trap 'touch "$rundir/STOP"; signalled=TERM' TERM
+trap 'touch "$rundir/STOP"; signalled=USR1' USR1
 if [ -n "${SLURM_JOB_ID:-}" ]; then
     srun --ntasks=1 --cpus-per-task="${SLURM_CPUS_PER_TASK:-$threads}" --export=ALL "${cmd[@]}" >> "$rundir/run.log" 2>&1 &
 else
@@ -128,7 +134,7 @@ trap - TERM USR1
 # requeues it, or it resumes from an earlier snapshot); failed
 if   [ "$code_exit" -eq 0 ];  then status=finished
 elif [ "$code_exit" -eq 75 ]; then status=checkpointed
-elif [ "$signalled" -eq 1 ];  then status=preempted
+elif [ -n "$signalled" ];     then status=preempted
 else status=failed
 fi
 end=$(date -Iseconds)
@@ -143,6 +149,7 @@ IFS='|' read -r _ a_elapsed a_maxrss a_cpu a_energy <<< "${acct:-||||}"
     echo "end = \"$end\""
     echo "exit = $code_exit"
     echo "status = \"$status\""
+    echo "signal = \"$signalled\""
     echo "elapsed = \"$a_elapsed\""
     echo "max_rss = \"$a_maxrss\""
     echo "total_cpu = \"$a_cpu\""
@@ -166,12 +173,22 @@ if [ "$status" = finished ] || [ "$status" = failed ]; then
     rsync -a --exclude 'snapshot*' --exclude '.snapshot*' --exclude STOP "$rundir/" "$ESM_PROJ/archive/$campaign/$run_id/"
 fi
 
-# --- continuation ------------------------------------------------------------------------------
-if [ "$status" = checkpointed ] && [ "${RESUBMIT:-0}" -gt 0 ] && [ -n "${SLURM_JOB_ID:-}" ]; then
-    script="${ESM_JOB_SCRIPT:-$(scontrol show job "$SLURM_JOB_ID" | sed -n 's/^ *Command=//p')}"
-    sbatch --dependency=afterany:"$SLURM_JOB_ID" \
-           --export=ALL,RUN_ID="$run_id",RESUBMIT=$(( RESUBMIT - 1 )) "$script" "$campaign" "$config" \
-        && echo "run.sh: continuation of $run_id submitted ($(( RESUBMIT - 1 )) left)"
+# --- continuation past the time limit (SIGUSR1); a preempted job (SIGTERM) is requeued by Slurm -
+left="${RESUBMIT:-${ESM_MAX_CONTINUATIONS:-10}}"
+if [ "$status" = checkpointed ] && [ "$signalled" = USR1 ] && [ -n "${SLURM_JOB_ID:-}" ]; then
+    if [ "$left" -le 0 ]; then
+        echo "run.sh: $run_id stopped at the time limit; no continuations left (RESUBMIT=0)" >&2
+    elif [ -z "${ESM_JOB_SCRIPT:-}" ]; then
+        echo "run.sh: ESM_JOB_SCRIPT not set by the job template; no continuation submitted" >&2
+    else
+        read -r -a jargs <<< "${ESM_JOB_ARGS:-}"
+        sbatch --dependency=afterany:"$SLURM_JOB_ID" ${ESM_JOB_ARRAY:+--array="$ESM_JOB_ARRAY"} \
+               ${SLURM_CPUS_PER_TASK:+--cpus-per-task="$SLURM_CPUS_PER_TASK"} \
+               ${SLURM_MEM_PER_NODE:+--mem="$SLURM_MEM_PER_NODE"} ${SLURM_MEM_PER_CPU:+--mem-per-cpu="$SLURM_MEM_PER_CPU"} \
+               --export=ALL,RUN_ID="$run_id",RESUBMIT=$(( left - 1 )) "$ESM_JOB_SCRIPT" "${jargs[@]}" \
+            && echo "run.sh: continuation of $run_id submitted ($(( left - 1 )) left)"
+    fi
 fi
+[ "${ESM_TMPDIR_CLEANUP:-}" = 1 ] && [ -n "${TMPDIR:-}" ] && rm -rf "$TMPDIR"
 echo "run.sh: $run_id $status (exit $code_exit); record $rundir/run.toml"
 exit $code_exit

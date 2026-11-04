@@ -176,20 +176,30 @@ sbatch hpc/jobs/cpu.sbatch <campaign> <config> [cpu | device | script <path> [ar
    restart count, start;
 5. sets the threads from the allocation (§5) and runs the driver under `srun`; SIGTERM
    (preemption, `scancel`) and SIGUSR1 (the templates' `--signal=B:USR1@⟨lead⟩` before the time
-   limit) create the stop file;
+   limit) create the stop file. `B:` sends the signal to the batch shell only, so the templates
+   `exec` the wrapper: it is the batch shell;
 6. at the end completes the attempt: exit code, status (`finished`, `checkpointed` = exit 75 after a
-   snapshot, `preempted` = signalled without a snapshot, `failed`), the `sacct` figures (elapsed, MaxRSS, CPU time, energy) and the output files;
+   snapshot, `preempted` = signalled without a snapshot, `failed`), the signal (`TERM`, `USR1`
+   or none), the `sacct` figures (elapsed, MaxRSS, CPU time, energy) and the output files;
    appends one line to the runs indexes (global and the campaign's, under a lock); archives
    finished and failed runs without checkpoints;
-7. a run stopped by the time limit (exit 75) with `RESUBMIT=n > 0` submits its own
-   continuation (afterany dependency, same run id, `n−1` left); a preempted run is requeued by
-   Slurm instead. Runs longer than 24 hours are such chains, not `medium`/`long` jobs (`long`
-   allows only 32 cores per job).
+7. a run stopped by the time limit (SIGUSR1, exit 75) submits its own continuation
+   automatically: the same template (`ESM_JOB_SCRIPT`, the campaign worktree's copy) with the
+   same arguments (`ESM_JOB_ARGS`), array index (`ESM_JOB_ARRAY`), cores and memory, the same
+   run id, an afterany dependency on the stopped job; at most `RESUBMIT` in a row (default
+   `ESM_MAX_CONTINUATIONS` = 10; `RESUBMIT=0 sbatch …` for none). A preempted run (SIGTERM) is
+   requeued by Slurm instead, and a cancelled one stays stopped; a run stopped by its stop file
+   alone (no signal) is not continued. Runs longer than 24 hours are such chains, not
+   `medium`/`long` jobs (`long` allows only 32 cores per job).
 
 The wrapper was tested locally on 2026-11-04 with the CPU driver on `hpc/configs/h0_smoke.toml`:
 a SIGTERM to the wrapper during the fine warmup gave a snapshot, exit 75 and the status
 `checkpointed`; the same run id started again resumed from the snapshot (fine warmup, sweep 1
-of 4) and finished with exit 0.
+of 4) and finished with exit 0. The signal path through the templates was simulated locally
+with Slurm stubs (`cpu_array.sbatch`, a script-mode line): SIGUSR1 to the batch shell gave the
+snapshot exit, status `checkpointed`, signal `USR1` and one `sbatch` of the same template with
+`--array=⟨task⟩`, the cores, memory, run id and `RESUBMIT` − 1; the continuation, sent
+SIGTERM, reused the run directory (a second attempt in `run.toml`) and submitted nothing.
 
 ## 6. Records, the ledger, and results through git
 
@@ -301,8 +311,8 @@ D1 and D2 can be submitted together. Files built without the corrected wind cali
 in `scripts/prepare_data.py`) need D1 and D2 again; a rerun of
 D2 reuses the PyPSA-Eur build and only redoes `model256.h5`. D3 does not depend on the POWER
 weather and need not be rerun. Check a build's log for the line per carrier
-`… miss their window target by more than 0.005` (zero for POWER wind is not guaranteed: some
-targets have no root on [0.2, 4]). D3 reads the cluster's ERA5 folder in place on a compute
+`… miss their window target by more than 0.005` (zero in the local builds of all three POWER
+files). D3 reads the cluster's ERA5 folder in place on a compute
 node (§4); its years are a choice: the default 2003, 2010, 2013, 2017 is enough for a first
 full-resolution test, while the weather model is fitted on all years of the file
 (`src/weather.jl`), so a production run wants more years (2013 must always be among
