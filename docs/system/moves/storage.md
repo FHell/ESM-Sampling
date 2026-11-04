@@ -116,10 +116,12 @@ On `chains40` the sweep adds 11–16 % to an operation sweep and brings the inte
 autocorrelation times of the hydro level and totals from 60–90 sweeps to 1–3 and of the H₂
 totals and patterns from 20–90 to 5–15 (ledger E21).
 
-> **Status: missing.** The hydro seasonal shape and the large PHS units still relax over about
-> 100 sweeps (ledger E21): the end steps of `slong` stop where the node's own dispatchable
-> units reach their capacity. Carrying the change to a neighbour through the `xlocc`
-> templates gave smaller steps and was not kept.
+> **Status: missing.** The seasonal shape of the large hydro units and the PHS units still
+> relaxes over 100–300 sweeps, and opex drifts over 3000 sweeps (ledger E21, E27): the end steps
+> of `slong` stop where a reservoir's discharge reaches zero or the node's own dispatchable units
+> reach a clamp. The storage pairs below halve the per-unit times at equal CPU but leave the
+> zero-discharge wall, which is intrinsic to a two-step move. Carrying the change to a
+> neighbour's generators through the `xlocc` templates gave smaller steps and was not kept.
 
 **Device.** Missing.
 
@@ -187,6 +189,13 @@ for two units, about 0.1 ms per move at 40 nodes daily. At the defaults (`storag
 the plain-family scale, about 60 moves per unit and sweep; `storage_xlong` 8) the two add about
 6 % and 9 % to an operation sweep of `chains40`.
 
-**Use.** See ledger E27.
+**Use.** On `chains40` from the heuristic E15 end state (ledger E27; 3000 sweeps, equal CPU
+against the E21 kernel), the seasonal shape Q1 − Q3 per hydro unit relaxes in a median of 117
+instead of 205 sweeps with half the drift, the PHS units in 150 instead of 288; H₂, batteries,
+the scores and opex do not change (opex still drifts, τ ≈ 250). A hydro–hydro interval pair
+moves 950 MWh per draw against 625 for `slong` and stops at the zero discharge of one of the
+two reservoirs at an end step (57 % of the walk sides), at the nuclear or run-of-river units of
+the loss compensation (17 %) or at leak-node generators (12 %); line limits do not bind. The
+longer runs, also from the low start, are campaign H10.
 
 **Device.** Missing.
