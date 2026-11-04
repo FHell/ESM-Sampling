@@ -43,29 +43,3 @@ campaigns/H2/configs/lp256_24h.toml script scripts/lp_baseline.jl years=2020
 campaigns/H2/configs/lp256_24h.toml script scripts/lp_baseline.jl years=2021
 campaigns/H2/configs/lp256_24h.toml script scripts/lp_baseline.jl years=2022
 campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2004-2013
-campaigns/H2/configs/lp40_6h.toml script scripts/lp_baseline.jl years=2013 eps=0.02
-campaigns/H2/configs/lp40_6h.toml script scripts/lp_baseline.jl years=2013 eps=0.05
-campaigns/H2/configs/lp256_24h.toml script scripts/lp_baseline.jl years=2013 eps=0.02 carriers=onwind
-campaigns/H2/configs/lp256_24h.toml script scripts/lp_baseline.jl years=2013 eps=0.02 carriers=solar
-campaigns/H2/configs/lp256_24h.toml script scripts/lp_baseline.jl years=2013 eps=0.02 carriers=offwind
-campaigns/H2/configs/lp256_24h.toml script scripts/lp_baseline.jl years=2013 eps=0.02 carriers=gas
-campaigns/H2/configs/lp256_24h.toml script scripts/lp_baseline.jl years=2013 eps=0.02 carriers=battery
-campaigns/H2/configs/lp256_24h.toml script scripts/lp_baseline.jl years=2013 eps=0.02 carriers=H2
-campaigns/H2/configs/lp256_24h.toml script scripts/lp_baseline.jl years=2013 eps=0.05 carriers=onwind
-campaigns/H2/configs/lp256_24h.toml script scripts/lp_baseline.jl years=2013 eps=0.05 carriers=solar
-campaigns/H2/configs/lp256_24h.toml script scripts/lp_baseline.jl years=2013 eps=0.05 carriers=offwind
-campaigns/H2/configs/lp256_24h.toml script scripts/lp_baseline.jl years=2013 eps=0.05 carriers=gas
-campaigns/H2/configs/lp256_24h.toml script scripts/lp_baseline.jl years=2013 eps=0.05 carriers=battery
-campaigns/H2/configs/lp256_24h.toml script scripts/lp_baseline.jl years=2013 eps=0.05 carriers=H2
-campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2009-2013 eps=0.02 carriers=onwind
-campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2009-2013 eps=0.02 carriers=solar
-campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2009-2013 eps=0.02 carriers=offwind
-campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2009-2013 eps=0.02 carriers=gas
-campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2009-2013 eps=0.02 carriers=battery
-campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2009-2013 eps=0.02 carriers=H2
-campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2009-2013 eps=0.05 carriers=onwind
-campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2009-2013 eps=0.05 carriers=solar
-campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2009-2013 eps=0.05 carriers=offwind
-campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2009-2013 eps=0.05 carriers=gas
-campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2009-2013 eps=0.05 carriers=battery
-campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2009-2013 eps=0.05 carriers=H2

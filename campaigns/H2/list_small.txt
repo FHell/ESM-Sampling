@@ -21,4 +21,3 @@ campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2020
 campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2021
 campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2022
 campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2009-2013
-campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2013 eps=0.01,0.02,0.05,0.1

@@ -181,13 +181,14 @@ LP of `solve_lp` (`src/lp.jl`), built by `lp_build` from one operation block per
   ends a capacity objective with `OTHER_ERROR` at such a point: dual residuals after
   postsolve), anything else is recorded as failed.
 
-> **Status: partially verified.** On the 5-node test problem every MGA solve ends optimal. At
-> 40 nodes daily (2013, ε = 5 %) with the scaled bound: onwind min `OPTIMAL` (−45 %, 8 min),
-> onwind max (+50 %) and gas max (+117 %) feasible points exactly at the bound, HiPO status
-> `OTHER_ERROR`, 5–7 min each; the maxima of the other carriers are untested locally (three of
-> them together did not finish in 29 min on the loaded laptop). Without the scaling the
-> maxima failed. Untried: IPX with crossover, a dual-simplex re-solve warm-started from a
-> basis (it needs a crossover of the optimum first), tighter capacity boxes.
+> **Status: open (maximisation).** On the 5-node test problem every MGA solve ends optimal; on
+> the PyPSA network (H2b smoke, 14 days) too. At 40 nodes daily (2013, ε = 5 %) the
+> minimisation ends optimal (onwind −45 %, 8–9 min), the maximisation is not reliable: in an
+> interactive session onwind max (+50 %) and gas max (+117 %) ended at feasible points exactly on
+> the bound (HiPO `OTHER_ERROR`, 5–7 min each), but in the smoke run of `scripts/lp_baseline.jl`
+> onwind max did not finish in 17 min, and three other maxima together not in 29 min. Unscaled,
+> every maximisation failed. Untried: IPX with crossover, a dual-simplex re-solve warm-started
+> from a crossed-over optimum, tighter capacity boxes.
 
 **MGA with open solvers: what others report.** PyPSA's `optimize_mga` adds the same kind of
 budget, on `n.statistics` capex + opex with the fixed costs on both sides, and recommends

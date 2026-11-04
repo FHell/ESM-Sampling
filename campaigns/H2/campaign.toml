@@ -15,14 +15,16 @@ scripts/lp_baseline.jl on the configs in campaigns/H2/configs (default model ter
 hard line limits, no losses or commitment; the LP's resolution is the configuration's reference
 level). Runs on the rebuilt model files (the wind-calibration fix of scripts/prepare_data.py,
 docs/system/data_sources.md §2); the input file and its hash are recorded per run in run.toml.
-Three job arrays by resources (hpc/jobs/cpu_array.sbatch), one line per case:
-  list_small.txt  (24)  40 x 24 h: the 22 single years; stacked 2009-2013; MGA at 2013, eps 1, 2, 5, 10 %
-  list_medium.txt (71)  40 x 6 h and 256 x 24 h single years (22 each); 40 x 24 h stacked 2004-2013;
-                        MGA 40 x 6 h at 2013 (eps 2, 5 %, one line each); MGA 256 x 24 h at 2013 and
-                        40 x 24 h stacked 2009-2013 (eps 2, 5 %, one line per eps and carrier)
+Four job arrays by resources, one line per case (hpc/jobs/cpu_array.sbatch):
+  list_small.txt  (23)  40 x 24 h: the 22 single years; stacked 2009-2013
+  list_medium.txt (45)  40 x 6 h and 256 x 24 h single years (22 each); 40 x 24 h stacked 2004-2013
   list_large.txt  (9)   40 x 1 h single years 2003, 2010, 2013, 2017; 40 x 24 h stacked over all 22
                         years; 40 x 6 h stacked 2009-2013 and 2004-2013; 256 x 24 h stacked
                         2009-2013; 256 x 6 h at 2013 (HiGHS time limit 240000 s per LP)
+  list_mga.txt    (27)  MGA: 40 x 24 h at 2013 (eps 1, 2, 5, 10 %); 40 x 6 h at 2013 (eps 2, 5 %, one line
+                        each); 256 x 24 h at 2013 and 40 x 24 h stacked 2009-2013 (eps 2, 5 %, one line
+                        per eps and carrier). Submit after the MGA maximisation is verified (open:
+                        docs/system/validation.md §2.7)
   list_smoke.txt  (1)   the local smoke case (40 x 24 h, 2013, eps 5 %, onwind)
 Storage and commitment are cyclic within each year (no carry-over between stacked years). Outputs
 per run: summary_lp.toml, years.csv, capacity.csv; with eps: mga.csv, mga_capacity.csv,
@@ -44,6 +46,8 @@ An MGA solve costs about one optimum; a line solves the optimum plus 2 per eps a
 Requests (no resubmission past a time limit: --time covers the estimate with a margin):
   list_small   standby, -c 4 --mem-per-cpu=6G (24 GB),  --time=12:00:00
   list_medium  standby, -c 8 --mem-per-cpu=6G (48 GB),  --time=2-00:00:00
+  list_mga     standby, -c 8 --mem-per-cpu=6G (48 GB),  --time=5-00:00:00 (a solve may take several
+               times the optimum when HiPO falls back to IPX; a preempted line keeps its solves)
   list_large   QOS medium (guaranteed: a preempted LP restarts from zero, and these run for a day
                or more), -c 8 --mem-per-cpu=24G (192 GB), --time=4-00:00:00
 A preempted standby line is requeued by Slurm: a single LP starts over, an MGA sweep skips its
