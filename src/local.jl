@@ -2038,13 +2038,24 @@ end
 # ---------------------------------------------------------------------------
 #
 # For one investable unit (node capacity k of a generator or storage unit at a
-# spatially complete level) the scaling group (k, y_1..y_n) ↦ (e^u k, e^{−u} y)
-# acts on the raw capacity and all n utilizations of that unit (T for a
-# generator, 2T with commitment, T for storage: the state of charge). Inside the
-# boxes it keeps every injection and state of charge unchanged, so only capex,
-# penalty weights and the clamps change. u is drawn from the generalized Gibbs
-# conditional ∝ π(g_u x) e^{(1−n)u} (Liu & Sabatti 2000) by slice sampling,
-# truncated to k e^u ≥ κmin so that the selection rule (k ≥ κmin) is invariant.
+# spatially complete level) the scaling group acts on the raw capacity and all n
+# utilizations of that unit (T for a generator, 2T with commitment, T for storage:
+# the state of charge) as
+#   (k, y) ↦ (e^u k, y·c(k)/c(e^u k)),   c = clamp to the capacity box,
+# i.e. the utilizations scale against the clamped capacity that the operation sees
+# (a translation in (log k, log y + log c(k))). It keeps every injection and state of
+# charge unchanged everywhere, so only capex, its box penalty, the penalty weights and
+# the clamps change; inside the box it is (e^u k, e^{−u} y). Above the box only the raw
+# capacity moves, so a raw capacity beyond the box is free to return to it. u is drawn
+# from the generalized Gibbs conditional ∝ π(g_u x)·e^u·(c(k)/c(e^u k))^n (Liu & Sabatti
+# 2000; e^{(1−n)u} inside the box) by slice sampling, truncated to k e^u ≥ κmin so that
+# the selection rule (k ≥ κmin) is invariant.
+
+"Utilization factor c(k0)/c(k1) of the capacity moves (1 where the clamped capacity does not change)."
+@inline kc_ratio(kc0::Float64, kc1::Float64) = kc0 == kc1 ? 1.0 : kc0 / kc1
+
+"Log Jacobian of the scaling move of a unit with n utilization coordinates: u + n log(c(k0)/c(k1))."
+@inline kscale_logjac(n::Int, u::Float64, kc0::Float64, kc1::Float64) = n == 0 || kc0 == kc1 ? u : u + n * log(kc0 / kc1)
 
 "Raw node capacities of every k field at the level."
 knodes(P::Problem, ℓ::Int, k) = [vec(nodevals(k, P.lk[ℓ+1], P.E.kspecs, f)) for f in eachindex(P.E.kspecs)]
@@ -2066,7 +2077,7 @@ function kscale_delta!(dp, P::Problem, LM::LocalModel, LC::LocalCost, Kraw, kind
     kc0, kc1 = clamp(k0, sp.lo[i], sp.hi[i]), clamp(k1, sp.lo[i], sp.hi[i])
     cap = f_capex(E, kf)[i]
     Δcap = cap * (k1 - k0) + E.γk * cap * (abs(k1 - kc1) - abs(k0 - kc0))
-    sc = exp(-u)
+    sc = kc_ratio(kc0, kc1)
     Δop = 0.0
     c = LM.cell[bus]; nc = LM.ncell[c]
     for τ in 1:T
@@ -2078,9 +2089,9 @@ function kscale_delta!(dp, P::Problem, LM::LocalModel, LC::LocalCost, Kraw, kind
             c1, p1 = gen_cost(g, i, A, kc1, kc1 + κ0, Δt, cv, y1)
             if g.ucf > 0                       # the commitment scales with the output (committed MW kept)
                 τ1 = mod(τ, T) + 1
-                u, u1 = LC.Y[g.ucf][i, τ], LC.Y[g.ucf][i, τ1]
-                c0 += uc_cost(g, i, A, kc0, kc0 + κ0, Δt, cv, clamp(y0, 0.0, 1.0), u, u1)
-                c1 += uc_cost(g, i, A, kc1, kc1 + κ0, Δt, cv, clamp(y1, 0.0, 1.0), u * sc, u1 * sc)
+                uc0, uc1 = LC.Y[g.ucf][i, τ], LC.Y[g.ucf][i, τ1]
+                c0 += uc_cost(g, i, A, kc0, kc0 + κ0, Δt, cv, clamp(y0, 0.0, 1.0), uc0, uc1)
+                c1 += uc_cost(g, i, A, kc1, kc1 + κ0, Δt, cv, clamp(y1, 0.0, 1.0), uc0 * sc, uc1 * sc)
             end
             d = p1 - p0
         else
@@ -2124,9 +2135,12 @@ One scaling move per investable unit (random order) at a spatially complete
 level, with the level's weather fixed. Needs the k fields and the units' v
 fields complete at the level. At α = 1 the bias change comes from the incremental
 bias cache `BC` (built from `s` if not given), which follows the committed moves.
+For tests: `select(kind, gi, i)` restricts the units, and `rec` (a vector) receives per
+move the drawn u, the line log density lf(u) − lf(0) and its log Jacobian part.
 """
 function kscale_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC=nothing, κmin::Float64=1.0, w::Float64=0.3,
-                       mh::Bool=false, σ::Float64=0.3, nprop::Int=1, order::Symbol=:shuffle, kinds::Symbol=:all)
+                       mh::Bool=false, σ::Float64=0.3, nprop::Int=1, order::Symbol=:shuffle, kinds::Symbol=:all,
+                       select=nothing, rec=nothing)
     E = P.E
     ℓ = LM.ℓ
     lk, lv = P.lk[ℓ+1], P.lv[ℓ+1]
@@ -2154,6 +2168,7 @@ function kscale_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC
         # Metropolis form: the draws of a unit (z₁, u₁, z₂, u₂, …) are taken before any skip, so that a
         # pre-generated stream per (unit, proposal) lines up with the device kernel
         draws = mh ? [(randn(rng), rand(rng)) for _ in 1:nprop] : nothing
+        (select === nothing || select(kind, gi, i)) || continue
         k0 >= κmin || continue
         n = kind == 1 ? (E.gens[gi].vf > 0 ? T : 0) * (E.gens[gi].ucf > 0 ? 2 : 1) : T
         function setk!(u)
@@ -2166,9 +2181,11 @@ function kscale_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC
         sp_ = E.kspecs[kf]
         phys = E.measure == :physical && (kind == 2 || E.gens[gi].wf == 0)
         lm0 = phys ? n * log(clamp(k0, sp_.lo[i], sp_.hi[i]) + E.κ0) : 0.0
+        kc0 = clamp(k0, sp_.lo[i], sp_.hi[i])
         function lf(u)
-            val = -kscale_delta!(dp, P, LM, LC, Kraw, kind, gi, i, u) + (1 - n) * u
-            phys && (val += n * log(clamp(k0 * exp(u), sp_.lo[i], sp_.hi[i]) + E.κ0) - lm0)
+            kcu = clamp(k0 * exp(u), sp_.lo[i], sp_.hi[i])
+            val = -kscale_delta!(dp, P, LM, LC, Kraw, kind, gi, i, u) + kscale_logjac(n, u, kc0, kcu)
+            phys && (val += n * log(kcu + E.κ0) - lm0)
             BC === nothing || (val -= bias_delta_k(BC, P.bias, E, lk, kind, gi, i, k0 * exp(u)))
             return val
         end
@@ -2184,6 +2201,8 @@ function kscale_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC
         else
             u = slice_scalar(rng, lf, 0.0, w, log(κmin / k0))
         end
+        rec === nothing || push!(rec, (; kind, gi, i, u, lf=lf(u) - lf(0.0),
+                                        logjac=kscale_logjac(n, u, kc0, clamp(k0 * exp(u), sp_.lo[i], sp_.hi[i]))))
         u == 0.0 && continue
         nmoved += 1
         # commit: capacities, utilizations, residuals, cell sums, bias cache
@@ -2194,7 +2213,7 @@ function kscale_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC
         Kraw[kf][i] = k1
         sp = E.kspecs[kf]
         kc1 = clamp(k1, sp.lo[i], sp.hi[i])
-        sc = exp(-u)
+        sc = kc_ratio(kc0, kc1)
         bus = kind == 1 ? E.gens[gi].bus[i] : E.stors[gi].bus[i]
         c = LM.cell[bus]
         if kind == 1

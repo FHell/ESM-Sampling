@@ -221,13 +221,14 @@ requirement at the nodes it touches. What the other units do is the compensation
 At the complete level, one `kscale` and one `kpeak` move per investable unit, in random
 order (`kscale_sweep!`, `kpeak_sweep!`; [moves/capacity.md](moves/capacity.md)):
 
-- **`kscale`**: the scaling group $(k,\omega)\mapsto(e^u k, e^{-u}\omega)$ of one unit, which
-  keeps its dispatch fixed inside the boxes; $u$ from the generalized Gibbs conditional with
-  factor $e^{(1-n)u}$ by slice sampling.
+- **`kscale`**: the scaling group $(k,\omega)\mapsto(e^u k, \omega\,c(k)/c(e^uk))$ of one
+  unit ($c$ the clamp to the capacity box; $(e^uk, e^{-u}\omega)$ inside it), which keeps its
+  dispatch fixed, also for a raw capacity above its box; $u$ from the generalized Gibbs
+  conditional with factor $e^{u}(c(k)/c(e^uk))^{n}$ by slice sampling.
 - **`kpeak`**: $k\to k+\delta$ for a dispatchable unit together with its dispatch on the
-  node's peak steps (top 5 % of the proxy requirement), the residual or the other units
-  absorbing the change; $\delta$ from the generalized Gibbs conditional with
-  $(k/(k+\delta))^{T}$ by slice sampling.
+  node's peak steps (top 5 % of the proxy requirement, the output there changes by
+  $A(c(k+\delta)-c(k))$), the residual or the other units absorbing the change; $\delta$ from
+  the generalized Gibbs conditional with $(c(k)/c(k+\delta))^{T}$ by slice sampling.
 
 - **`kop`** (`kop_sweep!`, with `kop = true`): $k\to e^u k$ for one renewable or storage unit,
   or for all units of such a carrier with a common $u$, at fixed utilizations, so that the
