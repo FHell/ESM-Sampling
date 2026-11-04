@@ -217,14 +217,20 @@ measured again this session) → after:
 **Form choice on the GPU** (same setup; seconds per sweep, dense / slope-jump): `tsoc` 1.08 /
 1.12, `sblk2` 1.08 / 1.20, `cell3` 0.033 / 0.047, `cellpair3` 0.032 / 0.051, `sblk4` 1.10 / 0.92,
 `sblk8` 1.68 / 0.74, `cell1` 0.118 / 0.040, `cellpair1` 0.278 / 0.066. The ratio `JUMP_RATIO["gpu"]`
-= 10 picks the faster form for all of them (`tsoc` has a ratio of 9.6, `sblk2` 16 → dense? no:
-`sblk2` is dense because its dense points × columns are below 10 × its entries after the removal of
-the slot entries).
+= 10 picks the faster form for all of them; at 4 (the CPU value) `tsoc` and `sblk2` would take the
+slope-jump form, 4–11 % slower on the GPU.
 
 **Dense angle families** (`configs/device40_6h_flow_gpu.toml`, flow basis, `ADAPT=1`: directions
 from the chains' frames, 4 chains, one site per step and time class): `tdir` 0.216 s per sweep
 (37 µs per move: 325 columns, about 3 300 entries per site), `tdir0` 0.125 s (21 µs). The CPU
 takes about 10 ms per `tmode` move at 40 nodes.
+
+**Float32 build** (`ESMDevice.F32`, `FLOAT=32`, same setup; FP64 → Float32 seconds per sweep):
+`FAMILIES_FAST` 0.62 → 0.15, `spair0` 0.45 → 0.106, `tsoc` 1.08 → 0.29, `tpot` 2.21 → 0.86, the blocks
+`sblk2` … `sblk32` 3.93 → 1.27, the cell levels 0.44 → 0.17; the run set 8.7 → 2.9 s per sweep. On
+this card FP64 runs at 1/64 of the FP32 rate; the gain is 3× rather than more because the program is
+bound by memory traffic and sorts. Whether Float32 is accurate enough is not tested here (by
+design: the user tests it empirically).
 
 The `sblk32` and cell rows before are those of ad73f13 (the profile of the old code was stopped by
 the memory limit before them). In `tpot` the payload sort fell from 1.26 to 0.26 s per sweep (921

@@ -22,11 +22,16 @@ esm_load_julia
 # data: the checkout reads data/ from the project space
 [ -e data ] || ln -s "$ESM_PROJ/data" data
 
-# Reactant: request the CUDA runtime variant (a login node has no GPU to detect)
+# Reactant: request the CUDA runtime variant (a login node has no GPU to detect); ESMDevice: run its
+# precompile workload (it traces the device programs once at precompile time, so every job saves the
+# Julia compilation of the tracing code; off by default on development machines)
 cat > device/LocalPreferences.toml <<EOF
 [Reactant_jll]
 gpu = "$REACTANT_GPU"
 gpu_version = "$REACTANT_GPU_VERSION"
+
+[ESMDevice]
+precompile_workload = true
 EOF
 
 export JULIA_NUM_PRECOMPILE_TASKS=${JULIA_NUM_PRECOMPILE_TASKS:-8}   # shared login node

@@ -12,7 +12,8 @@ using Preferences: @load_preference
 using PrecompileTools: @setup_workload, @compile_workload
 
 "A tiny synthetic device model and state (C chains, T steps): 3 nodes on a triangle, two units per
-node without fleet commitment, one storage unit per node, one link; all model terms present."
+node without fleet commitment, one storage unit per node, one link; no line losses and a lossless
+link (the share-preserving families need them), soft limits and merged vintages."
 function toy_device(; C=2, T=8)
     N, nl = 3, 3
     b0, b1 = [1, 2, 1], [2, 3, 3]
@@ -26,8 +27,8 @@ function toy_device(; C=2, T=8)
     ψ = hinge_from([0.0, 0.9, 1.0], [0.0, 0.0, 0.1], 10.0)
     Lq = hinge_from([0.0, 0.5, 1.0], [0.0, 0.25, 1.0], 2.0)
     f(x, n) = fill(x, n)
-    M = DeviceModel(map(ftfield, (N, T, 6.0, 3000.0, 5.0, 1e4, 1.0, 0.1, Dl, Al, f(50.0, nl), f(1000.0, nl), f(1e-5, nl), ψ, Lq,
-        oh([1]), oh([2]), [500.0], [0.97],
+    M = DeviceModel(map(ftfield, (N, T, 6.0, 3000.0, 5.0, 1e4, 1.0, 0.1, Dl, Al, f(50.0, nl), f(1000.0, nl), f(0.0, nl), ψ, Lq,
+        oh([1]), oh([2]), [500.0], [1.0],
         oh(gn), [20.0, 30.0, 40.0, 80.0, 90.0, 70.0], [25.0, 30.0, 35.0, 80.0, 90.0, 70.0], [100.0, 0.0, 50.0, 0.0, 0.0, 0.0],
         f(1.0, Ug), [0.3, 0.3, 0.3, 0.5, 0.5, 0.5], [0.3, 0.3, 0.3, 0.5, 0.5, 0.5], f(0.0, Ug), f(0.3, Ug), f(10.0, Ug), f(5.0, Ug),
         f(0.0, Ug), fill(true, Ug), f(0.0, Ug), f(5000.0, Ug), f(1e5, Ug),
