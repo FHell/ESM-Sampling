@@ -179,7 +179,7 @@ for leaving its box.
 
 **Bias.** $-\hat b(x_{\ell_b}, k_{\ell_b})$ at $\alpha = 1$ (`use_bias = true`), on the state
 restricted to the level of the bias, the finest level in the finest chains
-([ensemble.md](ensemble.md) §4.4).
+([../archive/learned_bias.md](../archive/learned_bias.md) §4.4).
 
 **Weather prior.** $\log p^w(m,z_0,w)$ ([weather_model.md](weather_model.md) §5).
 

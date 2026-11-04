@@ -65,6 +65,29 @@ h5py). `quantity_names` names the rows.
 | `config/levels` | the levels |
 | `run/restarts`, `run/resumed_at_sweep` | resumes from a snapshot (0 for a straight run) and the fine sweep counter of the last one (−1: none, or resumed in the level-0 warmup) |
 
+**Replica driver** (`sampler = "replicas"`, `run_replicas`): `chains_report` as above on the
+replica mean of the monitored quantities per step (no `post/*`), then (`write_replica_outputs`):
+
+| path | content |
+|---|---|
+| `replicas/carriers`, `replicas/feature_names`, `replicas/M`, `replicas/kappa_s` | carrier names of the k fields, names of the replica weather features, replicas per chain, $\kappa_s$ per k field |
+| `replicas/tilt` | $(\lambda, \mu_\Phi, \sigma_\Phi)$ (NaN without a declared $\Phi$) |
+| `replicas/<c>/ktot` | carrier totals of the shared capacities per step (MW; k field × step) |
+| `replicas/<c>/capex`, `op`, `shed`, `penalty`, `pfcost` | capex per step; per replica (replica × step) opex, shed (MWh), penalty and penalty-free cost (capex + generation + storage) |
+| `replicas/<c>/weights`, `active`, `since`, `phi`, `moved` | per replica and step: drift weight $\omega_j$, active flag, steps since its last burst, $\Phi(x_j)$, whether its weather moved |
+| `replicas/<c>/rs`, `fk` | per k field and step: interior-node means of the drift score $r\bar s_k$ and of $\beta_k\partial_kK$ |
+| `replicas/<c>/eta_w`, `nclip`, `time` | Langevin step per k field, clipped drifts, (wall time, time of the replica loop) per step |
+| `replicas/<c>/features` | replica weather features per step, stacked replica by replica (feature × replica, step): annual mean load, capacity factors, residual load at the start capacities (mean, peak step, worst 7-step mean; GW), regime frequencies, regime switches |
+| `replicas/<c>/probe/it` | per probe: (step, replica, adapted 0/1) |
+| `replicas/<c>/probe/gap`, `rs_eq`, `rs_in`, `fk` | per k field and probe: gap/$\beta_k\partial K$, equilibrated and in-flight $r\hat s_k$, $\beta_k\partial K$ (interior means) |
+| `replicas/<c>/probe/cost`, `eta_before`, `eta_after` | (opex, opex at equilibrium, shed, shed at equilibrium) of the probed replica; the step before and after the probe |
+| `weather/transition`, `calibration/beta`, `config/levels`, `run/restarts`, `run/resumed_at_sweep` | as for the chains driver (the step counter of the last resume) |
+
+`summary_replicas.txt` next to `out` (collected by `hpc/collect.sh`): over the production
+steps per chain the carrier totals (mean, sd, last), the last Langevin steps, the drift and the
+probes' equilibrated scores and gaps in units of $\beta_k\partial K$, capex, penalty-free cost,
+opex, shed, the mean number of active replicas and the replica weather features (mean, sd).
+
 ## 4. Caches
 
 `<cache>/weather_<hash>.jls` (fitted weather model, Julia Serialization) and
@@ -94,3 +117,14 @@ every write. Vectors are the coefficient vectors of the state at its level (the 
 | `chains/<c>/start`, `chains/<c>/Q` | fine phase: start kind and the monitored trace so far (quantity × sweep) |
 | `co2/price_trace` | the CO₂ price trace of the fine warmup so far |
 | `sampler/sigma_scale`, `sampler/gibbs/{wv,wz,wk}` | level-0 phase: carrier-scaling step sizes and slice widths |
+
+**Replica driver** (`write_replica_snapshot`; `read_snapshot` of the chains driver refuses it):
+
+| path | content |
+|---|---|
+| `version`, `sampler` | layout version (1), `"replicas"` |
+| `phase`, `it`, `where`, `restarts`, `written`, `co2_price`, `config/seed`, `config/levels`, `nchains` | as above; `phase = "replicas"`, `it` the replica steps completed (above `mlda_warmup` is production; 0: after the initialisation) |
+| `chains/<c>/start`, `replicas`, `Q` | start kind, number of replicas, the monitored trace so far |
+| `chains/<c>/eta_w`, `since`, `window`, `active` | Langevin step per k field; per replica steps since its last burst, whether it had a regime window, active flag |
+| `chains/<c>/trace/<key>`, `chains/<c>/probe/<key>` | the replica and probe records so far (the keys of `replicas/<c>/...` above) |
+| `chains/<c>/replica/<j>/level`, `m`, `z0`, `w/<i>`, `k`, `v` | the state of replica j |

@@ -1,13 +1,13 @@
 # The sampled ensemble
 
 This document derives the probability measure the sampler targets: the joint law of
-weather $x$, capacities $k$ and operation $v$ in a two-temperature ensemble with a learned
-bias. Which properties of this measure are fixed and which are modelling choices is stated in
-§3.1: only the weather prior is fixed; the decisions need a near-optimal density in which
-more expensive configurations are less likely, not one exact density. It covers the
-operational Gibbs measure per weather year, the investment measure, the
-role of the bias $\hat b(x,k)$, the reference measure, the regularized constraints and the
-zero-temperature limits. The terms of the cost are listed in [model.md](model.md), the
+weather $x$, capacities $k$ and operation $v$ in a two-temperature ensemble. Which properties
+of this measure are fixed and which are modelling choices is stated in §3.1: only the weather
+prior is fixed; the decisions need a near-optimal density in which more expensive
+configurations are less likely, not one exact density. It covers the operational Gibbs measure
+per weather year, the investment measure, how the ensemble is sampled (weather replicas from
+the prior, a Langevin step of the capacities on the replica-averaged sampled score, §4), the
+reference measure, the regularized constraints and the zero-temperature limits. The terms of the cost are listed in [model.md](model.md), the
 weather prior in [weather_model.md](weather_model.md), and how the measure is sampled in
 [sampler.md](sampler.md). Symbols are collected in [glossary.md](glossary.md).
 
@@ -86,196 +86,127 @@ A sampler design is judged by these properties, not by its distance from one exa
 
 **The weather is the exception.** Its marginal must be the prior $\rho^x$: tilting it toward
 cheap years would change the climate the system is designed against, not the cost
-preference. A deliberate bias toward expensive weather (stress tests) is planned; it is to be
-an explicit, controllable tilt with a known weight, separate from the capacity and operation
-steps, never a side effect of them.
+preference. A deliberate bias toward expensive weather (stress tests) is an explicit,
+controllable tilt with a known weight, separate from the capacity and operation steps, never a
+side effect of them (§4.5).
 
-## 4. Why a bias is needed
+## 4. How the ensemble is sampled: weather replicas and a Langevin capacity step
 
-### 4.1 The ensemble without bias ($\alpha = 0$)
+### 4.1 The ensemble without a correction
 
 The density that a sampler can evaluate locally is
 $$
 \rho_0(dx,dk,dv) \propto \rho^x(dx)\,e^{-\beta_k K(k)}\,e^{-\beta_v C_x(k,v)}\,J(k)\,dk\,dv .
 $$
-Integrating out $v$ shows what it does: the weather is tilted, $x\mid k \propto
-\rho^x(x)\,Z_x(k)$, toward cheap years, with a strength of $\beta_v$ times the spread of
-$F_x$ over the weather (about $4\cdot10^4$ nats at the defaults). The capacity marginal is
-$e^{-\beta_k K(k)}\,\mathbb E_x Z_x(k)$, an annealed average in which operating cost is
-weighted $\beta_v/\beta_k = 10^3$ times more than capital cost. $\rho_0$ is not the model.
-In the code it is the case `use_bias = false`.
+Integrating out $v$ shows that it is not the model: the weather is tilted, $x\mid k \propto
+\rho^x(x)\,Z_x(k)$, toward cheap years, with a strength of $\beta_v$ times the spread of $F_x$
+over the weather (about $4\cdot10^4$ nats at the defaults), and the capacity marginal is
+$e^{-\beta_k K(k)}\,\mathbb E_x Z_x(k)$, an annealed average in which operating cost is weighted
+$\beta_v/\beta_k = 10^3$ times more than capital cost. $\rho_1$ is $\rho_0$ reweighted by
+$e^{-b(x,k)}$ with $b = \log Z_x(k) - r\Lambda(k)$, which would have to be known to about one
+nat across the visited weather and capacities; that is out of reach at $r = 10^{-3}$ (§4.6). The
+sampler therefore does not sample one joint density of $(x,k,v)$. It samples the three stages
+of $\rho_1$ by three coupled processes, each with the property §3.1 asks of it.
 
-### 4.2 The exact relation
+### 4.2 The capacity score
 
-Define
+The capacity marginal $\rho_K\propto\exp(-\beta_kK(k)+r\Lambda(k))$ has the gradient
 $$
-b(x,k) = \log Z_x(k) - r\,\Lambda(k).
+\nabla_k\log\rho_K = -\beta_k\,\partial_kK(k) + r\,\mathbb E_{x\sim\rho^x}\,\partial_k\log Z_x(k),\qquad
+\partial_k\log Z_x(k) = \mathbb E_{\pi(v\mid x,k)}\big[\hat s_k\big],\quad
+\hat s_k = -\beta_v\,\partial_kC_x(k,v) + \partial_k\log J(k),
 $$
-Then
+by the score identity (every constraint is priced, §6, so differentiation under the integral
+has no boundary terms). $\hat s_k$ is the **sampled capacity score** of a state: an estimate of
+$\partial_k\log Z_x(k)$ whose mean is exact when the dispatch is distributed as $\pi(v\mid x,k)$.
+With $M$ weather years $x_j\sim\rho^x$, each with its own dispatch $v_j$,
 $$
-\rho_1(dx,dk,dv) \propto \rho^x(dx)\,e^{-\beta_k K(k)}\,e^{-\beta_v C_x(k,v)}\,J(k)\,e^{-b(x,k)}\,dk\,dv .
+\bar s_k = \sum_j\omega_j\,\hat s_k^{(j)},\qquad \sum_j\omega_j = 1,
 $$
-To check this, integrate out $v$: it produces $Z_x(k)$, which cancels against
-$e^{-\log Z_x(k)}$ and leaves $\rho^x(dx)\,e^{-\beta_k K(k) + r\Lambda(k)}$, which is
-$\rho^x\otimes\rho_K$. So $\rho_1$ is $\rho_0$ reweighted by $e^{-b}$, and $b$ is the only
-normalizing quantity that has to be learned. Its weather dependence is the weather
-dependence of $\log Z_x(k)$; its capacity dependence is $(1-r)$ times the capacity
-dependence of $\log Z$ plus terms that are constant in $x$.
+estimates $\mathbb E_x\partial_k\log Z_x(k)$, and $-\beta_k\partial_kK + r\bar s_k$ estimates
+$\nabla_k\log\rho_K$.
 
-### 4.3 Accuracy requirements
+### 4.3 The sampled process
 
-If the bias in use is $\hat b = b + \varepsilon$, the sampled $(x,k)$ marginal is
-$\rho^x\otimes\rho_K$ multiplied by $e^{-\varepsilon(x,k)}$. Write
-$\varepsilon = [\hat g + \hat h - \log Z] - r[\bar{\mathbb E}\hat g + \hat h - \Lambda]$
-with the decomposition of §4.4. The first bracket is the model error of $\log Z_x(k)$ and
-enters undamped: its weather-dependent part tilts the weather marginal and its
-capacity-dependent part distorts $\rho_K$. The second bracket, the error of the
-weather-averaged term, is damped by $r = 10^{-3}$. The bias therefore has to reproduce
-differences of $\log Z_x(k)$ across the visited weather and capacities to about one nat.
+The state is the shared capacities $k$ and $M$ **weather replicas** $(m_j, z_{0,j}, w_j, v_j)$,
+$j = 1..M$ (`replicas`, default 8). One step:
 
-Under §3.1 the capacity part of this requirement is stricter than the model needs: a
-distortion $e^{-\varepsilon}$ of $\rho_K$ is acceptable if the result still prefers cheaper
-capacities near the optimum. It is not acceptable when $\varepsilon$ reverses that preference;
-a bias error of millions of nats did so on `chains40`, where the frozen bias paid a chain to
-shed load ([roadmap.md](roadmap.md) §1). The weather part of the requirement stands in full,
-since the weather marginal must be $\rho^x$.
+1. **Weather**, per replica: a step of a Markov kernel that leaves the weather prior invariant
+   and reads neither $k$ nor any $v$. It works in the non-centred coordinates $u = (m, e, w)$, $e$
+   the innovations of the level-0 VAR, in which the prior is
+   $p_{\rm Markov}(m)\,\mathcal N(e;0,I)\prod_\ell\mathcal N(w_\ell;0,I)$: pCN steps of $(e,w)$,
+   regime window draws from the Markov prior given the regimes outside the window, optionally
+   the centred FFBS ([moves/weather.md](moves/weather.md)). Every replica has its own random
+   stream, and the schedule of the steps (staggered bursts) does not depend on the state.
+2. **Operation**, per replica: operation sweeps at fixed $(x_j, k)$, each leaving
+   $\pi(v\mid x_j,k)$ invariant (the fine kernel's sweep, [sampler.md](sampler.md) §4), after a
+   compensated initialisation of $v_j$ when its weather moved.
+3. **Capacities**: one Langevin step in $w = \log(k+\kappa_s)$ per unit ($\kappa_s$ a per-carrier
+   offset), the exact change of variables of $\rho_K$ from $k$ to $w$,
+   $$
+   w' = w + \eta_w\big[(k+\kappa_s)(-\beta_k\partial_kK + r\bar s_k) + 1\big] + \sqrt{2\eta_w}\,\xi,
+   $$
+   with the drift clipped per step and reflection at $k = \kappa_{\min}$ and at the upper bound of
+   the box. The weights $\omega_j$ are uniform over the replicas whose dispatch has relaxed after
+   their last weather burst (the gate, [sampler.md](sampler.md) §11.3), times the stress tilt
+   (§4.5).
+4. **Dispatch following**: the new $k$ is applied to every replica with its dispatch following:
+   dispatchable generators at fixed output, renewables and storage at fixed utilization with the
+   node's dispatchable generators following share-preservingly (the maps of `kscale` and `kop`,
+   [moves/capacity.md](moves/capacity.md)).
 
-### 4.4 The learned bias $\hat b$
+### 4.4 What the process samples
 
-Under the physical reference measure (§5), $J$ depends on $k$ only, so
-$\log Z_x(k) = \log J(k) + \log Z^u_x(k)$ with $Z^u$ the partition function in utilization
-coordinates, and the exact bias contains $(1-r)\log J(k)$ exactly. The code (`src/bias.jl`)
-carries that term exactly and uses the decomposition
-$\log Z^u_x(k) \approx \hat g(x,k) + \hat h(k) + \text{const}$, which gives
-$$
-\hat b(x,k) = \hat g(x,k) - r\,\bar{\mathbb E}_{x'}\hat g(x',k) + (1-r)\,\big[\hat h(k) + \log J(k)\big].
-$$
-The entropic force of the reference measure, $n_u/(k_u+\kappa_0)$ per unit, is then damped to
-$r\,n_u/(k_u+\kappa_0)$ in the target exactly, whatever the fit. Under the utilization measure,
-and at level 0 (where no field is complete), $\log J = 0$.
-$\hat b$ is evaluated at one level $\ell_b$ of the hierarchy, on the restriction of the state
-to that level: the anomalies $x_{\ell_b}$ of the weather and the capacity coefficients
-$k_{\ell_b}$. During the level-0 warmup $\ell_b = 0$; before the finest chains start, the bias
-is lifted to their level (below), which is spatially complete, so that $\hat b$ sees the full
-weather of the finest level and the node capacity of every unit.
+- **Weather: exactly the prior.** Every replica's weather is an autonomous Markov chain with
+  stationary law $\rho^x$: its kernel is a composition of prior-reversible blocks chosen by a
+  state-independent schedule, and no other part of the step changes $(m, e, w)$. Started from an
+  exact prior draw, its marginal is $\rho^x$ at every step, whatever the capacities and the
+  operation do. The weather paths of different replicas are independent.
+- **Operation: the Gibbs measure, up to the lag.** At fixed $(x_j,k)$ the operation sweeps
+  converge to $\pi(v\mid x_j,k)$. The capacities and the weather move between sweeps, so the
+  dispatch lags behind its equilibrium; the lag probe measures the resulting gap in the scores
+  and keeps it below a tolerance through the step size ([sampler.md](sampler.md) §11.4).
+- **Capacities: a near-optimal density of the form of $\rho_K$.** With the exact score the step is
+  the unadjusted Langevin algorithm for $\rho_K$ in $w$. Its stationary law differs from $\rho_K$ by
+  the discretization ($O(\eta_w)$), by the noise of $\bar s_k$ (finitely many replicas and sweeps:
+  a stochastic-gradient Langevin step without correction, which widens the density), by the
+  dispatch lag, and by the gate's selection of replicas. These change the density of $(k,v)$, not
+  the properties §3.1 asks for: the drift points down the expected total cost, and the density
+  concentrates near its optimum at the temperature $\beta_k$.
 
-**Weather part.** $\hat g$ is local in time, a sum over the steps $t$ of level $\ell_b$ (length
-$\Delta t_b$) of two functions of two system features:
-$$
-\hat g(x,k) = \Delta t_b\sum_{t}\big[F_1(u_{1,t}) + F_2(u_{2,t})\big],\qquad
-u_{1,t} = \frac{D_t - R_t(k)}{\bar D},\qquad u_{2,t} = u_{1,t} - \frac{F(k)}{\bar D}.
-$$
-$D_t$ is the system load of the level's node weather after the data map, $R_t(k)$ the available
-output of every generator except gas (renewables at their weather availability, fixed fleets at
-their constant availability) at the clamped node capacities of the level, $F(k)$ the firm
-capacity (gas plus storage power) and $\bar D$ the mean system load of the level-0 bias samples.
-The two functions are ramp sums,
-$$
-F_1(u) = \theta_{1}u + \sum_j\theta_{1j}\,s\,\mathrm{softplus}\big((u-\tau_j)/s\big),\qquad
-F_2(u) = \theta_{2}u + \sum_j\theta_{2j}\,s\,\mathrm{softplus}\big((u-\tau'_j)/s\big),
-$$
-with $s=0.05$ and knots $\tau_j$ in $[-1.5,0.75]$ for $u_1$ and $\tau'_j$ in $[-0.6,0.4]$ for
-$u_2$: the basis $\phi = [u_1,\ \text{ramps}(u_1),\ u_2,\ \text{ramps}(u_2)]$ with
-coefficients $\theta$.
+> **Status: deviation.** The gate selects replicas by a relaxation indicator computed from their
+> state, so the replicas that enter the drift at a given step are not an unconditional sample of
+> the weather: years whose dispatch relaxes slowly enter later (at most `replica_gate_max` steps
+> after their burst). This tilts the weather average of the drift, not the weather of any
+> replica. Its size is not measured.
 
-**Tables.** $F_1$ and $F_2$ are evaluated from tables (`RampTable`): the piecewise-linear
-interpolant of the analytic ramp sum on a uniform grid of spacing $s/$`bias_table_res` over the
-knot range widened by $20s$ on both sides, continued linearly with the end slopes beyond it
-(they equal the asymptotic slopes of the ramp sum to $e^{-20}$). The tables are rebuilt
-whenever $\theta$ changes, and they define $\hat g$ everywhere: global and incremental
-evaluation, CPU and device. A capacity move re-evaluates $\hat g$ and $\bar{\mathbb E}\hat g$ at
-every step of the level and at every sample step, which a table lookup makes cheap (an
-evaluation of the ramp sums costs 22 softplus per point). The score regression keeps the
-analytic basis for its design matrix.
+### 4.5 Stress tilt
 
-**Weather average.** $\bar{\mathbb E}$ is a fixed weighted set of exact weather steps at the same
-level $\ell_b$: of the $S\,T$ steps of $S$ = `bias_samples` exact draws of the weather at that
-level, $n$ = `bias_sample_steps` are kept (uniformly without replacement), each with the weight
-$\Delta t_b\,T/n$, so that $\bar{\mathbb E}\hat g = \Delta t_b\,(T/n)\sum_j[F_1+F_2]$ is an
-unbiased estimate of the mean of $\hat g$ over the draws. Because $\hat g$ is a sum of per-step
-terms, a subsample of steps suffices, and it is a fixed function of $k$, which is all the target
-needs. $\bar{\mathbb E}\hat g$ must use the same $\hat g$ (same level) as the chain's own: through
-the factor $r$ the capacity marginal sees $r(\bar{\mathbb E}\hat g + \hat h)\approx-\beta_k\,
-\mathbb E_xF_x(k)$, the expected operating cost at the investment temperature, of the order of
-the capex, and sub-daily residual-load variability (solar cycle, storage) changes $\hat g$ a
-lot between daily and 6-hourly steps.
+A deliberate bias toward expensive weather is an explicit replica weight,
+$\omega_j\propto\exp(\lambda\,\Phi(x_j))$ over the active replicas (self-normalised), with a declared
+functional $\Phi$ (`tilt_functional = "resload_mean"`: the annual mean residual load at the fixed
+reference capacities of the set-up start, standardised by its prior mean and sd from
+`tilt_samples` exact draws) and the strength $\lambda$ (`tilt_lambda`). The capacities are then
+designed against $\rho^x e^{\lambda\Phi}/Z$ (estimated by self-normalised importance weights over
+the replicas, bias $O(1/M)$), while every replica's weather keeps the marginal $\rho^x$. At
+$\lambda = 0$, the default, the weights are exactly the untilted ones, and the step is bitwise the
+untilted step.
 
-**Score identity.** Because no constraint depends on $x$ (§6), differentiating $\log Z$
-under the integral gives
-$$
-\nabla_x\log Z_x(k) = \mathbb E_{\pi(v\mid x,k)}\big[-\beta_v\nabla_x C_x(k,v)\big].
-$$
-$\hat g$ is linear in $\theta$, so $\theta$ is a least-squares fit of $\nabla\hat g$ to per-sample
-scores $s_x = -\beta_v\nabla C$ in the weather state coordinates of level $\ell_b$: $z_0$ and
-the detail coordinates $\xi_1,\dots,\xi_{\ell_b}$ of the level transfers (the gradient w.r.t.
-the anomalies of the level, `weather_grad_to_x`, split by the adjoints of the transfers,
-`weather_coords_grad`). The design matrix is the Jacobian of the analytic $\hat g$ in the same
-coordinates; the normal equations are accumulated with a small ridge.
+### 4.6 Retired: the learned bias
 
-**Monotone-price constraint** (`bias_monotone = true`, the default). The derivative
-$\partial\hat g/\partial D_t = -\beta_v\Delta t_b\,\lambda(u_t)$ defines an implied price
-$\lambda$ of residual load. The fit is solved as a small convex QP under the constraints
-that $\lambda$ is non-decreasing (every ramp coefficient $\le 0$) and bounded in
-$[-c_{\rm dump}, c_{\rm shed}]$. $\hat g$ can then grow at most at physical price slopes,
-which keeps it from leaking into the load tail where there are few samples. $F_1$ and $F_2$
-are then concave, so the secant slopes of their tables are non-increasing and the implied
-price of the tabulated $\hat g$ is monotone as well. In addition the linear coefficient of
-$u_2$ is non-positive, $\theta_{u_2}\le 0$: the shortfall part $-F_2'/(\beta_v\bar D)$ of the
-price is non-negative, so firm capacity never has a negative value,
-$\partial\hat g/\partial F = -(\Delta t_b/\bar D)\sum_t F_2'(u_{2,t})\ge 0$. The weather
-scores do not separate $\theta_{u_1}$ from $\theta_{u_2}$ (their design columns are equal), so
-without the constraint the ridge splits them equally, and a positive $\theta_{u_2}$ makes the
-target push firm capacity up in surplus at about $\Delta t_b T\theta_{u_2}/\bar D$ nats per MW.
+The earlier design sampled the joint density $\rho_1 = \rho_0e^{-b}$ with a learned bias $\hat b$
+(regressed on the sampled scores, lifted, refitted online, post-corrected by reweighting). Its
+error enters the weather marginal undamped and had to stay below about one nat; at $r = 10^{-3}$
+the regression could not reach that, and a bias error of millions of nats reversed the cost
+preference of the capacities on `chains40` (ledger E14–E16). It is retired as part of the target
+([../retired.md](../retired.md)); its derivation is archived in
+[../archive/learned_bias.md](../archive/learned_bias.md).
 
-**Capacity part.** $\hat h(k) = \sum_i h_i(\kappa_i)$ is separable in the scaled, clamped
-capacity coefficients $\kappa_i$ of the level (all coefficients of the level's layout). Each
-$h_i$ is a fitted quadratic that can neither turn over inside the box nor run outward beyond its
-data (`hcoord`). With $[\kappa^-_i,\kappa^+_i]$ the range of $\kappa_i$ in the regression data
-and $q(\kappa) = a\kappa + \tfrac12 c\kappa^2$, flat beyond its vertex $\kappa^* = -a/c$ when
-$c < 0$ ($C^1$, the value $-a^2/(2c)$ there; `hsat`),
-$$
-h_i(\kappa) = \begin{cases}
-q(\kappa^+) + \max\big(q'(\kappa^+), 0\big)(\kappa-\kappa^+) & \kappa > \kappa^+,\\
-q(\kappa) & \kappa^-\le\kappa\le\kappa^+,\\
-q(\kappa^-) + \min\big(q'(\kappa^-), 0\big)(\kappa-\kappa^-) & \kappa < \kappa^-,
-\end{cases}
-$$
-so that outside its data $e^{-\hat h}$ never grows away from the data. Per coordinate, the
-residual capacity score $s_{k,i} - \partial_i\log J - \partial_i\hat g$, with
-$$
-s_k = -\beta_v\,\partial_k C + \partial_k\log J(k)
-$$
-(the score of $\log Z$; the measure term is `log_measure_grad`, zero under the utilization
-measure and for fields that are not complete at the level, and it is subtracted again because
-$\hat b$ carries it exactly), is regressed linearly on $\kappa_i$ (slope only until $\kappa_i$
-has varied); the regression sums also keep the minimum and maximum of $\kappa_i$, which become
-the data range at a refit (no data: an unbounded range, and $a = c = 0$). Evaluating $\hat h$
-on clamped coefficients keeps it from outweighing the capacity box penalty.
-
-Why this form: the score regression only knows $\log Z$ where the chains have been. A quadratic
-fitted from states far apart is concave ($\log Z^u$ is) with its maximum inside the box, and
-beyond the maximum $e^{-\hat h}$ grows with the capacity; a linear or convex extrapolation with
-a slope that points away from the data does the same. Either makes the target run outward in
-that capacity until the box stops it, by up to $10^9$ nats. Saturated beyond the vertex and
-not pushing outward beyond the data, $\hat h$ leaves the target there to the cost and the
-damped measure term: in utilization coordinates $\log Z^u$ decreases with a capacity beyond its
-need (the volume of the confined dispatch shrinks like $k^{-n_{\rm conf}}$), so the target is
-confined, and the chains extend the data range only where the cost leads them. A linear
-continuation with the unclipped edge slope would still run away whenever the vertex lies inside
-the data.
-
-**Lift** (`lift_bias!`). The level-0 warmup learns at $\ell_b = 0$. Before the finest chains
-start, the bias is lifted to their level $L$: $\theta$ and $\bar D$ are kept; $a$, $c$, the data
-ranges of $\hat h$ and the coefficient scales are mapped to the fine layout (the level-0
-coefficients are the prefix of each field's coefficients, the new detail coefficients start at
-$a = c = 0$, so $\hat h$ of capacities without details beyond level 0 is unchanged); the
-regression sums are reset, so the fine refits use fine data only; and the sample steps of
-$\bar{\mathbb E}$ are redrawn at level $L$. The online refits of the finest warmup then fit at
-level $L$, the first after `bias_online_min` observations (sampler.md §7.1).
-
-How $\hat b$ is learned during a run (level-0 warmup, lift, online refits on a geometric
-schedule, post-correction by reweighting) is described in [sampler.md](sampler.md) §7.1, and
-how the moves evaluate it incrementally in [sampler.md](sampler.md) §6–§7.
+> **Status: deviation.** The bias code (`src/bias.jl`, `bias_online.jl`, `bias_post.jl`, the
+> level-0 warmup, `device/src/bias_dev.jl`) and the capacity moves `kscale`/`kpeak`/`kop` as moves
+> of a joint density remain for the chains driver (`sampler = "chains"`, the `Config` default),
+> which samples $\rho_0$ (`use_bias = false`) or the bias ensemble. The system's sampler is
+> `sampler = "replicas"` (CPU); the device has no replica sampler yet.
 
 ## 5. The reference measure
 
@@ -292,12 +223,13 @@ The ensemble is defined only once a reference measure on $v$ is fixed. The code 
   renewables treated as load have no dispatch coordinate at all. $\kappa_0 = 1$ MW keeps the
   term finite at $k = 0$.
 
-The choice does not change $\pi(v\mid x,k)$ and, with an exact bias, does not change the
-weather marginal, because $J$ depends on $k$ only. It changes $\log Z$ by $\log J(k)$ and
+The choice does not change $\pi(v\mid x,k)$ and does not change the weather marginal,
+because $J$ depends on $k$ only. It changes $\log Z$ by $\log J(k)$ and
 therefore the capacity marginal. In utilization coordinates the confined dispatch of a unit
 occupies a volume proportional to $k^{-n_{\rm conf}}$, an entropic force against capacity
 of size $n_{\rm conf}/k$; the physical measure removes it. In $\rho_1$ any such force reaches
-$\rho_K$ only with the factor $r$; in $\rho_0$ it acts at full strength.
+$\rho_K$ only with the factor $r$ (in the Langevin drift through $r\hat s_k$, which contains
+$\partial_k\log J$); in $\rho_0$ it acts at full strength.
 
 > **Open design choice.** Which reference defines the near-optimal ensemble (utilization
 > shares or physical units, per technology class) is not settled. The sampler and its moves
@@ -325,27 +257,38 @@ large slope, so the target is positive everywhere:
   times the capex of the excess; the operation sees the clamped capacity.
 
 Three properties follow. The target is proper and positive, so no move proposal is
-infeasible. No constraint depends on $x$, so the score identity of §4.4 has no boundary
-terms (this needs $c_{\rm dump}$ finite: otherwise $r \ge 0$ would be a hard,
+infeasible. No constraint is a wall, so the score identities of §4.2 (and the weather
+score $\nabla_x\log Z_x = \mathbb E_\pi[-\beta_v\nabla_xC]$) have no boundary terms (this needs $c_{\rm dump}$ finite: otherwise $r \ge 0$ would be a hard,
 weather-dependent wall). And every cost term is convex and piecewise linear in each
 coordinate, which makes the exact line sampler of [sampler.md](sampler.md) possible. As
 $c_{\rm shed}, c_{\rm dump}, c_{\rm viol}\to\infty$ the hard-constrained LP is recovered.
 
-## 7. The density as implemented
+## 7. The densities as implemented
 
-With $\alpha\in\{0,1\}$ (`use_bias`), the sampled density in the non-centered weather
-coordinates is
+**Replica sampler** (`sampler = "replicas"`, `src/replicas.jl`). No joint density is evaluated.
+Per replica, the weather kernels use the prior $p^w(m,z_0,w)$ in the coordinates $(m, e, w)$
+(`z0_innovations`, `pcn_weather`, `regime_window`); the operation sweeps use the conditional log
+density at fixed $(x_j,k)$,
+$$
+\log\pi(v\mid x_j,k) = -\beta_v C_{x_j}(k,v) + \text{const},
+$$
+which is `logtarget` (`src/hierarchy.jl`) at $\alpha = 0$ up to terms constant in $v$; and the
+Langevin step uses $-\beta_k\partial_kK$ and $\hat s_k = -\beta_v\partial_kC + \partial_k\log J$ of
+every replica (`capacity_scores`, the gradients of `energy_cost` and `log_measure`). $-\beta_k
+\partial_kK + \hat s_k$ is the gradient in $k$ of `logtarget` at $\alpha = 0$ at fixed $(v, x)$.
+
+**Chains driver** (`sampler = "chains"`; §4.6). With $\alpha\in\{0,1\}$ (`use_bias`), the sampled
+density in the non-centred weather coordinates is
 $$
 \log\pi(m,z_0,w,k,v) = \log p^w(m,z_0,w) - \beta_k K(k) - \beta_v C_{X(m,z_0,w)}(k,v)
  - \alpha\,\hat b(x_{\ell_b},k_{\ell_b}) + \log J(k) + \text{const},
 $$
-with $x_{\ell_b}$, $k_{\ell_b}$ the restrictions of the weather and the capacities to the level
-of the bias (the finest level in the finest chains).
-`logtarget` in `src/hierarchy.jl` returns this quantity without the weather prior; the prior
-enters the weather moves directly (`weather_moves.jl`, `weather_fine.jl`). The cost
-$C$ is `energy_cost` in `src/energy.jl` (or its incremental form `LocalCost`/`eval_move!` in
-`src/local.jl`), $J$ is `log_measure`, and $\hat b$ is `bias_term` (in the moves its incremental
-form `BiasCache`).
+with $x_{\ell_b}$, $k_{\ell_b}$ the restrictions of the weather and the capacities to the level of
+the bias ([../archive/learned_bias.md](../archive/learned_bias.md)). `logtarget` returns it
+without the weather prior; the prior enters the weather moves directly (`weather_moves.jl`,
+`weather_fine.jl`). The cost $C$ is `energy_cost` in `src/energy.jl` (or its incremental form
+`LocalCost`/`eval_move!` in `src/local.jl`), $J$ is `log_measure`, and $\hat b$ is `bias_term`
+(in the moves its incremental form `BiasCache`).
 
 ## 8. Temperatures
 

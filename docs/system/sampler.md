@@ -3,12 +3,17 @@
 This document describes how the ensemble of [ensemble.md](ensemble.md) is sampled: the
 fine-level transition as a mixture of exact line moves, the exact sampler of a line
 conditional, why each move leaves the target invariant, the compensation rules, adaptation,
-the capacity and weather moves, how the bias is learned and corrected, and multi-chain runs
-with their convergence diagnostics. The individual move families are in
+the capacity and weather moves, multi-chain runs with their convergence diagnostics, and the
+system's sampler, the replica–Langevin sampler (§11), whose operation sweeps are the sweeps of
+§4. §1–§10 describe the chains driver (`sampler = "chains"`), whose learned bias (§7.1) and
+joint capacity moves (§6) are retired as part of the target ([ensemble.md](ensemble.md) §4.6)
+and remain until their code is removed. The individual move families are in
 [moves/README.md](moves/README.md); the code structure in
 [architecture.md](architecture.md); the GPU version in [device.md](device.md).
 
 ## 1. Structure of a run
+
+The chains driver (`run_chains`; the replica driver: §11.1):
 
 1. **Setup** (`setup`): read the data, build the energy model, fit or load the weather model,
    draw an initial weather year, and build a start state at the finest level, either from the
@@ -230,6 +235,10 @@ requirement at the nodes it touches. What the other units do is the compensation
 
 ## 6. Capacity moves
 
+> **Status: deviation.** As moves of a joint density these belong to the chains driver; the
+> replica sampler moves the capacities by its Langevin step (§11.2) and uses only the maps of
+> `kscale` (fixed output) and `kop` (fixed utilization, pro-rata following).
+
 At the complete level, one `kscale` and one `kpeak` move per investable unit, in random
 order (`kscale_sweep!`, `kpeak_sweep!`; [moves/capacity.md](moves/capacity.md)):
 
@@ -274,6 +283,10 @@ cache itself. The global `evaluate!` equals the incremental sums to round-off.
 
 ### 7.1 Learning the bias
 
+> **Status: deviation.** The learned bias is retired as part of the target
+> ([ensemble.md](ensemble.md) §4.6); this section describes the code that remains for the chains
+> driver at $\alpha = 1$. The replica sampler does not use it.
+
 - **Level-0 warmup** (`run_level0!` with `learn = true`, `warmup0` iterations). A chain on
   level 0 with the level-0 kernel: in random order, a local operation sweep, slice updates of
   the level-0 weather coordinates at fixed operation (five colour classes of steps), the
@@ -285,7 +298,7 @@ cache itself. The global `evaluate!` equals the incremental sums to round-off.
   `bias_every` iterations. With `init = "lp"` the zero-temperature scores of the reference LP
   (its duals) enter first as pseudo-observations of weight `bias_warmstart`. An optional
   reflective descent of the operation (`descent_iters`) precedes the warmup.
-- **Lift** (`lift_bias!`, both drivers, [ensemble.md](ensemble.md) §4.4). Before the finest
+- **Lift** (`lift_bias!`, both drivers, [../archive/learned_bias.md](../archive/learned_bias.md) §4.4). Before the finest
   chains start, the bias is lifted to their level: $\theta$ and $\bar D$ kept, $a$ and $c$
   prolongated (new detail coefficients zero), the regression sums reset, the sample steps of
   $\bar{\mathbb E}$ redrawn at the finest level from a stream of their own (seed + 4243), so
@@ -410,3 +423,132 @@ country, system and meteorological season, over the production sweeps of all cha
 CPU driver. At finite $\beta_v$ the sampled prices have a
 heavier upper tail than LP duals, because near-optimal states shed occasionally where the LP
 sits at the margin.
+
+## 11. The replica–Langevin sampler
+
+The system's sampler ([ensemble.md](ensemble.md) §4), `sampler = "replicas"`: the CPU driver
+`run_replicas` in `src/replicas.jl`. Each chain holds the capacities $k$ and $M$ = `replicas`
+weather replicas sharing them; the weather of every replica follows its prior, its operation
+follows its weather and $k$, and $k$ takes one Langevin step per step on the replica-averaged
+sampled score. It uses neither the learned bias nor the capacity moves `kscale`, `kpeak`, `kop`
+as moves (it uses their maps).
+
+### 11.1 A run
+
+1. `setup` as for the chains driver (the bias is set up but not used: `with_bias(P, false)`);
+   the tilt functional $\Phi$ from `tilt_samples` exact draws (stream seed + 5151).
+2. Per chain (`nchains`, starts cycled from `chain_starts`: `low` ×0.5, `high` ×2, or as set up):
+   `init_replicas` draws a fresh exact weather year per replica from its own stream, compensates
+   the start dispatch to it (`compensate_weather!`) and runs `replica_init_sweeps` operation
+   sweeps at fixed $k$.
+3. `mlda_warmup` + `nsamples` steps of `replica_step!` per chain, with a lag probe every
+   `replica_probe_every` steps. The Langevin step adapts from the probes during the warmup and is
+   frozen in production; the probes continue in production as diagnostics.
+4. Outputs: `chains_report` on the replica mean of the monitored quantities (§9; the capacities
+   are shared, costs, prices and weather quantities are replica means), the replica and probe
+   records, and `summary_replicas.txt` ([data.md](data.md) §3).
+
+Streams (re-seeded after every resume, as in §9): per chain one for the operation sweeps and the
+Langevin noise, one for the probes, and one per replica for its weather (initial draw and
+process), so that a replica's weather path depends on nothing but its stream.
+
+### 11.2 One step (`replica_step!`)
+
+For every replica $j$ in order:
+
+1. **Weather** (`replica_weather!`). The schedule `weather_schedule` is fixed: a pCN burst of
+   angle $\varphi$ (`replica_burst_angle`) when $(it + (j-1)\lfloor n_b/M\rfloor) \bmod n_b = 0$,
+   $n_b$ = `replica_burst_every` (the replicas staggered), and the continuous angle
+   `replica_theta` at every step (composed with a burst: $\cos\theta_{\rm eff} = \cos\theta\cos\varphi$).
+   With a burst, a regime window move of $B$ = `replica_window` level-0 steps with probability
+   `replica_window_prob` (one uniform of the replica's stream), and with `replica_ffbs` the centred
+   FFBS. `weather_process_step` applies them in that order ([moves/weather.md](moves/weather.md)),
+   then `compensate_weather!` initialises the dispatch: at every node and step the
+   weather-independent dispatchable generators take up the change of the node residual (an
+   increase in proportion to their headroom, a decrease in proportion to their output).
+2. **Operation** (`replica_operation`): `replica_inner` operation sweeps (`operation_sweep!`, the
+   sweep of the fine kernel `fine_kernel`, §2) with the capacity scores (`capacity_scores`) after
+   each, averaged: per k field the node vectors of $\hat s_k$ and of $\beta_k\partial_kK$.
+3. **Gate** (`update_gate!`, §11.3) and, if the replica is active, its scores $r\hat s_k$ into its
+   in-flight window (the last `replica_probe_win` active steps).
+
+Then:
+
+4. **Weights** (`drift_weights`): `tilt_weights`$(\lambda, \Phi(x_j), {\rm active})$ with a declared
+   $\Phi$, `uniform_weights`(active) without one; all replicas if none is active.
+5. **Langevin step** (`langevin_capacities`): per investable k field in field order, one standard
+   normal per node (scalar draws from the chain stream), `langevin_update` with drift
+   $-\beta_k\partial_kK + r\bar s_k$, $\bar s_k = \sum_j\omega_j\hat s_k^{(j)}$:
+   $w = \log(k+\kappa_s)$, $w' = w + {\rm clamp}(\eta_w((k+\kappa_s)g+1), \pm c) + \sqrt{2\eta_w}\,\xi$
+   ($c$ = `langevin_clip`), reflected at $w_{\min} = \log(\kappa_{\min}+\kappa_s)$ and, with
+   `langevin_box`, at $w_{\max} = \log(\max(\bar k,\kappa_{\min}+1)+\kappa_s)$ when the step crosses
+   it from below. $\kappa_s$ per carrier from `langevin_kappa` (defaults onwind 500, solar 1000,
+   offwind 200, gas 300, battery 100, H₂ 100 MW, else `langevin_kappa_default`); $\eta_w$ per k
+   field, starting at `langevin_eta`.
+6. **Dispatch following** (`follow_capacities!`) on every replica: dispatchable generators at
+   fixed output (`set_dispatchable_capacity!`: utilizations and commitment scaled by
+   $c(k)/c(k')$), then every renewable and storage unit along its kop curve at
+   $u = \log(k'/k)$ (`kop_prepare`, `kop_commit!`): fixed utilizations, the node's dispatchable
+   generators following share-preservingly. All replicas get bitwise the same $k$.
+
+### 11.3 The gate
+
+A replica whose weather has just moved has a dispatch far from equilibrium, and its scores are
+wrong by up to 50 times the capex force during the relaxation (ledger E20, E23). Its scores get
+weight 0 from its burst until it is **active** again: from `replica_gate_min` steps after the burst
+on (`replica_gate_min_window` after a burst with a regime window), once the **relaxation
+indicator** is below `replica_gate_tol`, and in any case from `replica_gate_max`
+(`replica_gate_max_window`) steps on. The indicator (`relaxation_indicator`) is the largest
+difference over the k fields between the mean normalised carrier score
+$\langle r\hat s_k\rangle/\langle\beta_k\partial_kK\rangle$ (interior nodes: above 50 MW and below the box) of
+the last `replica_gate_win`/2 steps and of the half before. Active stays active until the next
+burst. With bursts every $n_b$ steps and relaxations of $n_r$ steps about $M(1 - n_r/n_b)$ replicas
+are active, so $M$ is chosen larger than the number that should enter the drift (8 replicas for
+about 4 active at $n_b = 40$).
+
+The indicator is computed from the replica's state and therefore depends on its weather: this is
+a declared deviation ([ensemble.md](ensemble.md) §4.4), bounded by `replica_gate_max`. The
+schedule of the weather steps does not depend on the gate.
+
+### 11.4 The lag probe and the step adaptation
+
+Every `replica_probe_every` steps, `probe_candidate` picks among the replicas with a full
+in-flight window (`replica_probe_win` steps active since their last burst, so their weather has
+relaxed) the one longest after its burst; `lag_probe` freezes $(k, x)$ on a copy of it, runs
+`replica_probe_len` operation sweeps from the probe stream and compares the mean score of the
+last `replica_probe_tail` sweeps (the equilibrated score) with the replica's in-flight window, per
+k field on the interior nodes:
+$$
+{\rm gap}_f = \big(\langle r\hat s_{\rm in}\rangle - \langle r\hat s_{\rm eq}\rangle\big)/\langle\beta_k\partial_kK\rangle .
+$$
+Because the probed replica has been active over its whole window, the gap is the lag of the
+dispatch behind the moving capacities, not the relaxation after its weather burst. During the
+warmup (`langevin_adapt`) `adapt_step!` buffers the gaps and, once it holds `replica_probe_avg`
+probes, per k field with mean gap $\bar g$: $\eta_w\leftarrow\max(\eta_{\min}, 0.7\eta_w)$ if
+$|\bar g| >$ `langevin_gap_hi`, $\eta_w\leftarrow\min(\eta_{\max}, 1.2\eta_w)$ if $|\bar g| <$
+`langevin_gap_lo` ($\eta_{\min}, \eta_{\max}$ = `langevin_eta_min`, `langevin_eta_max`); the buffer is
+then emptied. The equilibrated scores of all probes are the **equilibrated-score diagnostics** of
+the run: at the stationary capacities $\langle r\hat s_{\rm eq}\rangle/\langle\beta_k\partial_kK\rangle\approx1$
+for every carrier whose capacity is interior.
+
+### 11.5 Snapshots and resume
+
+The contract of `run_chains` (§9, [hpc.md](hpc.md) §7): with `checkpoint` set, `boundary!` writes a
+snapshot (`write_replica_snapshot`) once after the initialisation, every `checkpoint_minutes` and
+when the stop file exists (then exit code 75). A resumed run (`read_replica_snapshot`) restores
+per chain every replica's state, the Langevin steps $\eta_w$, the gates (steps since the burst, its
+kind, the active flags), the monitored trace and the replica and probe records; it re-seeds every
+stream from the seed and the restart count and rebuilds the kernels. Not restored: the in-flight
+windows, the gate's indicator buffers and the probe buffer (a resumed replica that was relaxing
+waits for its indicator again).
+
+### 11.6 Status
+
+> **Status: deviation.** Measured only as the prototype (`scripts/replicas/`, ledger E22–E25,
+> [../replica_sampler.md](../replica_sampler.md); its gate was a fixed step count and its probe
+> did not separate the weather lag): onwind and solar meet from starts 4× apart in 330 steps,
+> offwind, gas and batteries not yet, gas stays overbuilt (equilibrated marginal value ≈ 0 against
+> its capex). The `src/` sampler with the relaxation gate, the separated probe and 8 replicas is
+> campaign H4 ([../campaigns.md](../campaigns.md)). Open: a Rao–Blackwellised score, a gas step of
+> its own, the relaxation of seasonal storage after a burst, and the device form of the whole
+> step ([device.md](device.md)).

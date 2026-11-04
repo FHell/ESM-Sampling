@@ -1,5 +1,11 @@
 # Replica Langevin sampler: prototype and measurements
 
+> The sampler is now in `src/replicas.jl` (`sampler = "replicas"`), described in
+> [system/sampler.md](system/sampler.md) §11 and [system/ensemble.md](system/ensemble.md) §4,
+> with the changes of §6 below (a relaxation gate, a probe of relaxed replicas averaged over
+> several probes, 8 replicas, regime windows of B = 60); this note keeps the prototype and its
+> measurements.
+
 Development note (2026-11-04) on the prototype of the sampler that replaces the learned bias:
 M weather replicas share the capacities; the weather of every replica follows a
 prior-reversible process; the operation of every replica follows its weather and the

@@ -19,12 +19,15 @@ The defaults are the values of the system:
 | `measure` | open design choice; the configurations use `"physical"` | `"utilization"` (kept until the choice is made) |
 | `nchains` | several chains (the configurations use 4) | 4 |
 | `bias_online` | refits during the finest-level warmup, frozen afterwards | `true` |
+| `sampler` | `"replicas"` (the replica–Langevin sampler, [sampler.md](sampler.md) §11) | `"chains"` (kept until the chains driver and the bias are removed) |
 
-All constraints are priced (there are no hard walls), the fine-level transition is
-`fine_local_step` in every driver, and the bias is refitted during the warmup only and frozen
-for production in every driver.
+All constraints are priced (there are no hard walls). In the chains driver the fine-level
+transition is `fine_local_step`, and the bias is refitted during the warmup only and frozen for
+production; the replica driver uses the operation sweep of the same fine kernel and no bias.
 
-System configurations: `configs/complete40.toml` (all model terms, adaptive kernel, α = 1).
+System configurations: `configs/complete40.toml` (all model terms, adaptive kernel, α = 1);
+the replica-sampler configurations of campaign H4 (`campaigns/H4/*.toml`: 40 nodes daily and
+6-hourly, `sampler = "replicas"`, no bias).
 `configs/chains40.toml` and `configs/device40.toml` are **mechanics tests only**: they combine
 α = 0, the physical measure and capacity scaling moves, in which combination capacities can
 run away; they exercise the drivers and diagnostics and are not physically meaningful runs.
@@ -136,6 +139,46 @@ the 256-node network.
 | `bias_online_min` | 16 | no online refit before this many observations (refits at $2^j\ge$ it); the lifted fit stays until then |
 | `bias_trust` | 1.0 | trust region of the online refits: the change of $\hat b$ minus its mean over the last 32 observed states is at most this times the spread of $\hat b$ over them (at least the number of capacity coordinates); 0: off |
 | `bias_post` | `true` | post-correction by reweighting at $\alpha = 1$ |
+
+**Replica–Langevin sampler** (`sampler = "replicas"`, `run_replicas`, [sampler.md](sampler.md)
+§11). The chain keys apply: `nchains` replica sets, starts cycled from `chain_starts`,
+`mlda_warmup` and `nsamples` count replica steps; `fine_kernel`, `local_extra`, the storage keys
+and the `xloc` keys define the operation sweep; `use_bias`, the bias keys, `kop` and the
+fine-weather keys are not used.
+
+| key | default | meaning |
+|---|---|---|
+| `sampler` | `"chains"` | CPU driver: `"chains"` (`run_chains`) or `"replicas"` (`run_replicas`) |
+| `replicas` | 8 | weather replicas per chain, sharing the capacities |
+| `replica_init_sweeps` | 40 | operation sweeps per replica at fixed $k$ after its first weather draw |
+| `replica_inner` | 1 | operation sweeps per replica and step (scores averaged over them) |
+| `replica_theta` | 0.0 | continuous pCN angle per step (0: off) |
+| `replica_burst_every` | 40 | a pCN burst per replica every this many steps, staggered over the replicas (0: off) |
+| `replica_burst_angle` | 0.3 | the burst angle $\varphi$ |
+| `replica_window` | 60 | regime window length $B$ in level-0 steps (0: no window moves) |
+| `replica_window_prob` | 0.5 | probability of a window move with a burst (continuous mode: per step) |
+| `replica_ffbs` | `false` | centred FFBS of the regimes with every burst |
+| `replica_compensate` | `true` | compensated initialisation of the dispatch after a weather step |
+| `replica_gate_min`, `replica_gate_max` | 10, 30 | gate after a pCN burst: no weight before `min` steps, then once the relaxation indicator is below the tolerance, in any case from `max` steps on |
+| `replica_gate_min_window`, `replica_gate_max_window` | 20, 60 | the same after a burst with a regime window |
+| `replica_gate_win` | 8 | relaxation indicator: compares the halves of the last this many steps |
+| `replica_gate_tol` | 0.3 | ... active below this difference of the normalised carrier scores (units of $\beta_k\partial K$) |
+| `replica_probe_every` | 20 | lag probe every this many steps (0: off) |
+| `replica_probe_len`, `replica_probe_tail` | 30, 15 | probe: operation sweeps at frozen $(k,x)$, of which the last `tail` give the equilibrated score |
+| `replica_probe_win` | 10 | in-flight score: mean over this many active steps of the probed replica (a replica needs that many) |
+| `replica_probe_avg` | 3 | probes averaged per step adaptation |
+| `langevin_eta` | 5e-4 | initial Langevin step $\eta_w$ in $w=\log(k+\kappa_s)$, every k field |
+| `langevin_eta_min`, `langevin_eta_max` | 2e-5, 2e-3 | bounds of the adapted step |
+| `langevin_adapt` | `true` | adapt $\eta_w$ per k field from the probes (warmup only; ×0.7 / ×1.2) |
+| `langevin_gap_hi`, `langevin_gap_lo` | 0.10, 0.05 | shrink above, grow below this mean $\lvert$gap$\rvert/\beta_k\partial K$ |
+| `langevin_kappa` | `{}` | $\kappa_s$ per carrier (MW), a TOML table such as `{ gas = 300.0 }`; carriers not given: onwind 500, solar 1000, offwind 200, gas 300, battery 100, H2 100 |
+| `langevin_kappa_default` | 100.0 | $\kappa_s$ of other carriers |
+| `langevin_kmin` | 1.0 | reflection at $k = \kappa_{\min}$ (MW) |
+| `langevin_clip` | 0.02 | drift clip per step in $w$ |
+| `langevin_box` | `true` | reflection at the upper capacity bound |
+| `tilt_functional` | `"resload_mean"` | declared weather functional $\Phi$ of the stress tilt ([ensemble.md](ensemble.md) §4.5); `"none"`: no $\Phi$ |
+| `tilt_lambda` | 0.0 | tilt strength $\lambda$ (0: the untilted drift, bitwise) |
+| `tilt_samples` | 200 | exact weather draws for the standardisation of $\Phi$ |
 
 **Run lengths.**
 
