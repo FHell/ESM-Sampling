@@ -34,7 +34,7 @@ How to add a family, with its tests and its device port: [adding_a_move.md](addi
 | `cell`, `cellpair` | all | `:cell{q}`, `:cellpair{q}` (level-bucketed cell templates) |
 | `tpot`, `tmode`, `tline`, `tcut`, `tmode0`, `tline0`, `tsoc` | flow, adaptive | `:tpot`, `:tsoc` (no requirement tracking); others missing |
 | `tpotL`, `tmodeL`, `tlineL`, `tcutL`, `tsocL` | adaptive | `:tpotL`, `:tsocL` (static coefficients); others missing |
-| storage plateau and shape | flow, adaptive (SoC form) | `:sblk{L}`, `:sblkL{L}` (one unit; aggregates missing) |
+| storage plateau and shape | all | `:sblk{L}`, `:sblkL{L}` (one unit; aggregates missing) |
 | `amode`, `amode0`, `amodeL`, `acut`, `acutL`, learned shapes | adaptive | missing |
 | `kscale`, `kpeak` | all, at the complete level | Metropolis forms, renewables included (`kren`); the learned `kpeak` variant missing |
 | fine-level weather moves | all, with `fine_weather > 0` | missing |

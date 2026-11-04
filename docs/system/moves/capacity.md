@@ -53,8 +53,10 @@ once the coefficients exist, with probability 1/2).
 
 **Conditional.** The maps form a one-parameter translation group, so $\delta$ is drawn from
 $\propto\pi(g_\delta s)\,(k/(k+\delta))^{T}$ ($2T$ with unit commitment), including capex, the
-operating cost, the bias and the measure term; by slice sampling with width $0.1k$, truncated
-to $k+\delta\ge\kappa_{\min}$. A Metropolis form with a fixed per-unit scale mirrors the device.
+operating cost, the bias and the measure term; by slice sampling in $u=\log((k+\delta)/k)$
+(Jacobian $e^u$) with the fixed width 0.1, truncated to $k+\delta\ge\kappa_{\min}$. (A width
+proportional to the current $k$ in $\delta$ would differ between the points of the line and
+break the reversibility of the stepping-out rule.) A Metropolis form with a fixed per-unit scale mirrors the device.
 
 **Cost.** $O(T)$ per unit (plus the compensating units in the learned variant) and a bias
 evaluation at $\alpha = 1$. **Use.** The capacity move of $\alpha = 1$; gas capacity moves by

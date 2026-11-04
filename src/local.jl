@@ -2170,8 +2170,9 @@ local_model(K::LocalKernel, P::Problem, ℓ::Int) = lock(() -> get!(() -> LocalM
 
 """
 One π_ℓ-invariant transition of the operation and (where complete) the
-capacities at the level of `s` with the weather fixed: a local sweep, then the
-investment scaling moves, in random order.
+capacities at the level of `s`: the operation sweep (local sweep, then with
+probability 1/2 the storage multiscale sweep; or the flow/adaptive sweep) and the
+capacity moves in random order, then the fine weather moves if enabled.
 """
 function fine_local_step(rng, P::Problem, s::State, S)
     K = S.loc
@@ -2198,12 +2199,23 @@ function fine_local_step(rng, P::Problem, s::State, S)
         return maybe_weather!(rng, P, K, LM, s)
     end
     kmoves! = x -> kpeak_sweep!(rng, P, LM, kscale_sweep!(rng, P, LM, x)[1])[1]
+    # the plain sweep, then (SoC form, complete level) with probability 1/2 the storage multiscale
+    # sweep as in the flow kernel: without it the seasonal state of charge does not relax
+    # (docs/mixing_diagnosis.md §6.2); it needs no flow basis
+    function op!(x)
+        x, _ = local_sweep!(rng, P, LM, x; wsets=K.wsets, extra=K.extra)
+        if rand(rng) < 0.5 && LM.complete[P.E.fθ]
+            isempty(K.pools) && append!(K.pools, [BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
+            x, _ = storage_ms_sweep!(rng, P, LM, x; pools=K.pools)
+        end
+        return x
+    end
     if rand(rng) < 0.5
-        s, _ = local_sweep!(rng, P, LM, s; wsets=K.wsets, extra=K.extra)
+        s = op!(s)
         s = kmoves!(s)
     else
         s = kmoves!(s)
-        s, _ = local_sweep!(rng, P, LM, s; wsets=K.wsets, extra=K.extra)
+        s = op!(s)
     end
     return maybe_weather!(rng, P, K, LM, s)
 end

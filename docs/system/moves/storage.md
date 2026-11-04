@@ -22,7 +22,7 @@ two-step move at one node. Rates: `tsoc` 0.1 (flow and adaptive kernels), `tsocL
 
 ## Plateau and shape moves over dyadic blocks
 
-`storage_ms_sweep!` runs, with probability 1/2 per sweep of the flow and adaptive kernels, a
+`storage_ms_sweep!` runs, with probability 1/2 per sweep of every fine kernel, a
 sweep of block moves. For each dyadic length $L\in\{2,4,\dots,128\}$ with $L<T/2$ (random
 order), a random offset defines blocks of $L$ steps; blocks of one parity run in parallel,
 with 8 moves per block. Each move acts on one storage unit or, with probability 1/2, on all

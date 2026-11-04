@@ -87,7 +87,8 @@ Device tests run traced code on Reactant's CPU backend by default. Each fresh Ju
 costs minutes of start-up and compilation, so iterate in one persistent Julia session and
 compile only once the array version passes.
 
-> **Status: open.** The capacity part of `test/test_exact.jl` passes $|z| < 4$ but sits at
-> $z\approx-3.6$ to $-3.9$ for cost and shed, and the CPU reference states of that test may be
-> under-equilibrated in the storage and dump directions; longer reference runs would tell
-> slow mixing from bias ([roadmap.md](roadmap.md)).
+> **Status: open.** The capacity part of `test/test_exact.jl` passes with $|z|\le 2.1$ (cost
+> 0.91, shed 2.05, gas capacity 0.49, mean SoC 2.13, line flow −1.16 on 2026-11-04). It did not
+> distinguish the `kpeak` slice sampler before and after the width fix (both pass, $|z|\le 1.2$
+> with the old width), so it is not sensitive to small invariance violations of the capacity
+> moves; longer reference runs would make it so ([roadmap.md](roadmap.md)).

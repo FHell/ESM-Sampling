@@ -39,7 +39,7 @@ in random order (probability 1/2 each), followed by a **weather sweep** if
 
 | `fine_kernel` | operation sweep | families |
 |---|---|---|
-| `"local"` | `local_sweep!` | atoms and the plain local families |
+| `"local"` | `local_sweep!` | atoms and the plain local families, then with probability 1/2 the storage multiscale sweep |
 | `"flow"` (the `"auto"` choice with `basis = "flow"`) | `flow_sweep!` | plain plus transport families, then (SoC form) with probability 1/2 the storage multiscale sweep |
 | `"adaptive"` | `adaptive_sweep!` | plain, transport and learned families, storage multiscale, learned temporal shapes; then observation and adaptation |
 
@@ -135,7 +135,7 @@ The family list and its rates depend on the kernel (§2):
 
 The number of random moves is scaled so that the plain families keep their absolute rates.
 A new family is added by the checklist in [moves/adding_a_move.md](moves/adding_a_move.md).
-The flow and adaptive kernels add the **storage multiscale sweep** (`storage_ms_sweep!`,
+All three kernels add the **storage multiscale sweep** (`storage_ms_sweep!`,
 probability 1/2 per sweep: plateau and shape moves over dyadic blocks) and, in the adaptive
 kernel, the **learned temporal shapes** (`adaptive_block_sweep!`). Blocks of one length are
 updated in parallel by parity of the block index.

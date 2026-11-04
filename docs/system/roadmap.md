@@ -20,10 +20,10 @@ when done, and the affected document is updated in the same change.
   ([sampler.md](sampler.md) §7.1).
 - **$\alpha = 1$ end to end.** The weather marginal against exact draws, before and after the
   post-correction.
-- **Exactness test margins.** The capacity part of `test/test_exact.jl` sits near
-  $|z|\approx 3.6$–$3.9$ for cost and shed; check with longer runs, and check whether the CPU
-  reference states are equilibrated in the storage and dump directions
-  ([testing.md](testing.md)).
+- **Exactness test sensitivity.** The capacity part of `test/test_exact.jl` passes ($|z|\le 2.1$)
+  but did not detect the `kpeak` slice-width violation (fixed 2026-11-04); longer runs and
+  reference states equilibrated in the storage and dump directions would make it sensitive to
+  such errors ([testing.md](testing.md)).
 
 ## 2. Validation
 

@@ -533,7 +533,11 @@ function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, AM=
                 log(uu) < lp - lδ && (δ = δp; lδ = lp)
             end
         else
-            δ = slice_scalar(rng, lf, 0.0, w * k0, κmin - k0)
+            # slice sampling in u = log((k0 + δ)/k0) (Jacobian e^u) with a width that does not
+            # depend on the state: a width w·k0 in δ would differ between the points of the line,
+            # and the stepping-out rule would then not be reversible
+            lfu(u) = lf(k0 * expm1(u)) + u
+            δ = k0 * expm1(slice_scalar(rng, lfu, 0.0, w, log(κmin / k0)))
         end
         δ == 0.0 && continue
         nmoved += 1

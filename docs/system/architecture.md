@@ -135,7 +135,8 @@ calibration).
 
 **Fine step** (`fine_local_step`): `local_model` → for the flow and adaptive kernels
 `FlowFrames` (refreshed) and `AdaptiveModes` → in random order the operation sweep
-(`local_sweep!`, `flow_sweep!` or `adaptive_sweep!`) and the capacity moves
+(`local_sweep!` followed with probability 1/2 by `storage_ms_sweep!`, `flow_sweep!` or
+`adaptive_sweep!`) and the capacity moves
 (`kscale_sweep!` then `kpeak_sweep!`) → `maybe_weather!` → `fine_weather_sweep!`.
 
 **Operation sweep** (`local_sweep!`): `LocalCost` → per parity class, threaded over its steps:
