@@ -34,16 +34,21 @@ concrete next steps. Update it at the end of every work session.
 - Cross-node storage move: store at A, release at B, flows re-routed with the `xloc` templates
   (single-instant and `slong`-style interval forms), to avoid the node's own gas wall at the end
   steps; after the `storage_long` merge.
-- Seasonal storage relaxes slowly at fixed (k, x) (τ ≳ 100 sweeps for hydro, PHS, H₂; ledger
-  E17): a longer measurement (3000–5000 sweeps), then longer storage blocks or a seasonal
-  plateau move per region in the CPU kernel.
+- Seasonal storage at fixed (k, x) after the long-range moves (ledger E21): the hydro seasonal
+  shape, the large PHS units and opex still drift over 1000 sweeps; their moves stop where the
+  node's own gas saturates at an end step. Next: a run of 3000 sweeps with the new kernel to see
+  whether opex settles; a compensation that spreads over the node's gas and storage units or
+  over several steps; the device port of `slong`/`slevel` and of the nominal storage
+  requirement (`soc_qadj`) for `:tsoc` and `:sblk`.
 
 **Decisions taken:**
 - The learned bias is retired as part of the target (user, 2026-11-04): work proceeds on the
   replica–Langevin structure. A learned weather-response term may return only as an optional
   control variate for the between-year variance of the Langevin drift (no effect on the
   target; to be measured once the replica sampler is in `src/`).
-- `storage_long` stays (on by default) once its branch is merged.
+- `storage_long` stays, on by default (user, 2026-11-04); merged. The `soc_qadj` correction
+  changes `tsoc` and the storage plateaus, so the device comparisons of the share-preserving
+  `:tsoc`/`:sblk` fail until the device adds it.
 
 **Decisions waiting for the user:**
 - z0 block moves are on by default (`fine_weather_blocks = 1`), a behaviour change for
@@ -89,6 +94,15 @@ concrete next steps. Update it at the end of every work session.
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 
 ## Log
+
+### 2026-11-04 (seasonal storage)
+
+- Long-range storage moves `slong` (plateau over any cyclic interval, energy between two
+  arbitrary steps) and `slevel` (shift of a whole trajectory), `src/storage_long.jl`, in every
+  kernel (`storage_long`, `storage_long_moves`, `storage_long_hours`); the nominal storage
+  requirement `soc_qadj` in the share-preserving compensation of `tsoc`, the storage plateaus
+  and `slong` (the curve was not a coordinate line before); tests in `test_local.jl`,
+  `test_model.jl`, `test_exact.jl` (ledger E21).
 
 ### 2026-11-04 (afternoon, replica prototype)
 

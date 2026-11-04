@@ -21,12 +21,21 @@ the stiff shed case, the two-step SoC case, requirement-tracking kinks, commitme
 Gaussian weather prior.
 
 **End-to-end exactness** (`test/test_exact.jl`): on a 3-node sub-network at a 120-hour step
-(73 steps) with fixed weather, the full adaptive kernel (all local, flow, learned and capacity
-moves, with adaptation) must reproduce the equilibrium of a simple reference chain for a set
+(73 steps) with fixed weather, the full adaptive kernel (all local, flow, learned, long-range
+storage and capacity moves, with adaptation) must reproduce the equilibrium of a simple reference chain for a set
 of observables within Monte Carlo error ($|z| < 4$ with ESS-based standard errors). The
 reference for the operation is the atoms plus the plain linear families, which are exact by
 construction (atoms alone do not mix in usable time); the capacity test compares `kscale`
 against `kscale` + `kpeak`.
+
+> **Status: deviation.** The capacity part of `test/test_exact.jl` depends on the seed: run
+> alone with a fixed seed it gives identical results on main and with the long-range storage
+> moves (it does not use them), and it passes with seed 21 ($|z|\le 1.84$) but fails with seed
+> 22 (cost $z = -5.6$, gas capacity $-3.9$, line flow $2.7$) on the same code (2026-11-04). Its
+> chains do not mix within 2000 steps and its error bars, from the chains' own ESS, are too
+> small, so it decides neither whether `kpeak` is exact nor whether a change broke something.
+> It needs references that have converged (longer runs, several seeds, or an exact
+> enumeration on a smaller problem; ledger P6, H8). The operation test passes.
 
 **The device port is verified against the CPU reference, not statistically.** The same
 prepared moves and the same mock random numbers drive both sides (a mock `AbstractRNG` on the
@@ -43,11 +52,11 @@ comparison uses given uniforms.
 | file | checks |
 |---|---|
 | `test/runtests.jl` | level transfers on graph Haar bases (split/merge round trip, block means commute with restriction); FFBS against the exact regime posterior; cost gradients against finite differences on the 40-node data; graph Haar bases |
-| `test/test_local.jl` | sparse Haar field bases (orthonormality, sparsity, cell projections, gauge-free angles); segment helpers (`logseg`, truncated exponential); local moves on the 40-node model: cache cost = global cost, `xloc` templates keep the balance except at the leak nodes, cell-level probabilities, recorded walk evaluation bitwise equal to the plain one, incremental cost = global, cache consistency, line draws against quadrature (single-step and linked two-step), the potential linear between the walk's points on lines with storage terms (`spair`, `tsoc`, linked storage moves), scaling moves keep the caches consistent |
+| `test/test_local.jl` | sparse Haar field bases (orthonormality, sparsity, cell projections, gauge-free angles); segment helpers (`logseg`, truncated exponential); local moves on the 40-node model: cache cost = global cost, `xloc` templates keep the balance except at the leak nodes, cell-level probabilities, recorded walk evaluation bitwise equal to the plain one, incremental cost = global, cache consistency, line draws against quadrature (single-step and linked two-step), the potential linear between the walk's points on lines with storage terms (`spair`, `tsoc`, linked storage moves), scaling moves keep the caches consistent; long-range storage moves (`slong`, `slevel`): incremental cost = global, recorded = plain evaluation, lazy interior = full evaluation, caches after `storage_long_sweep!`, reversibility of the curve and inverse Jacobians (also for `tsoc` and the storage plateaus, across the compensation kink), walk linearity, line draws against quadrature |
 | `test/test_flow.jl` | batched congestion ADMM against a QP; transport modes and angle basis orthonormal and gauge-free; storage shapes; face projection of the modes; flow moves: incremental = global, shares and excess invariant across the kink, caches; adaptive modes update on schedule and give gauge-free directions and zero-end shapes; `kpeak` keeps the caches consistent |
 | `test/test_bias.jl` | the monotone fit gives a non-decreasing implied price within $[-c_{\rm dump}, c_{\rm shed}]$ and $\theta_{u_2}\le0$ (a non-increasing $F_2$); the per-coordinate $\hat h$ (`hsat`, `hcoord`): the quadratic, flat beyond the vertex, continued outside the data range with a clipped slope that never points away from the data, continuous, derivative against differences; $\hat b$ carries $(1-r)\log J$ exactly (global value, cache) and $\hat h$ regresses $s_k-\partial_k\log J-\partial_k\hat g$ with the data range in its sums; the refit floor (`bias_online_min`) and the trust region (the step is a convex combination of the old and the new fit, within the bound over the recent states, satisfies the monotone constraints; a wide region takes the full step); the tables of $F_1$, $F_2$ equal the analytic ramp sums at the grid points, are within the interpolation bound between them, continue linearly and have non-increasing secant slopes; the lift keeps $\theta$, $\bar D$ and the prefix coefficients (and $\hat h$ of capacities without details), resets the sums and redraws the sample steps; the bias cache, with $\hat h$ coordinates in every branch near the state: incremental $\Delta\hat b$ = global difference for capacity changes of renewable, gas and storage units and for fine weather moves of every level, the cache after commits equals a rebuild, and after `kscale`, `kpeak` and weather sweeps equals `bias_term`; $\partial_k\log J$, the design $\nabla\hat g$ in the weather state coordinates and $\partial_k\hat g$ (analytic $\hat g$), $\partial\hat h$ against finite differences, the measure term in $s_k$; post-correction records reproduce $\hat b$; the Metropolis bias correction of a fine weather move: repeated moves of one coordinate against quadrature of the line target with the bias (KS), which differs from the bias-free conditional |
 | `test/test_kbox.jl` | `kscale` and `kpeak` at the capacity box, at $\alpha = 0$ and $\alpha = 1$, from a state with raw capacities above their box: per move (inside the box, above it and across its edge; dispatchable and storage units) the line density without its Jacobian against the change of the global log target, the reverse move returns to the start with the opposite density and Jacobian, the local and bias caches equal a rebuild; one `kscale` and one `kpeak` sweep bring the raw capacities above the box toward it |
-| `test/test_model.jl` | all model-completion terms on (40 nodes): incremental = global for random local and transport moves, caches, line draws with requirement-tracking kinks and with commitment against quadrature, level-0 gradients against finite differences, fine-level weather moves (incremental = global, caches, the non-centered representation and the regime step reproduce the anomalies, line draws with the Gaussian prior), the local $z_0$ quadratic against `logp_z0` |
+| `test/test_model.jl` | all model-completion terms on (40 nodes): incremental = global for random local and transport moves, caches, line draws with requirement-tracking kinks and with commitment against quadrature, long-range storage moves with requirement-tracking end steps (incremental = global, caches, a line draw against quadrature), level-0 gradients against finite differences, fine-level weather moves (incremental = global, caches, the non-centered representation and the regime step reproduce the anomalies, line draws with the Gaussian prior), the local $z_0$ quadratic against `logp_z0` |
 | `test/test_convergence.jl` | multi-chain diagnostics on synthetic chains: iid passes, AR chains give the expected ESS, location and scale differences raise $\hat R$, random walks fail, warmup detection |
 | `test/test_exact.jl` | end-to-end exactness (§1); about 2–3 minutes; skipped with `EXACT_SKIP=1` |
 
@@ -90,8 +99,7 @@ Device tests run traced code on Reactant's CPU backend by default. Each fresh Ju
 costs minutes of start-up and compilation, so iterate in one persistent Julia session and
 compile only once the array version passes.
 
-> **Status: open.** The capacity part of `test/test_exact.jl` passes with $|z|\le 2.1$ (cost
-> 0.91, shed 2.05, gas capacity 0.49, mean SoC 2.13, line flow −1.16 on 2026-11-04). It did not
-> distinguish the `kpeak` slice sampler before and after the width fix (both pass, $|z|\le 1.2$
-> with the old width), so it is not sensitive to small invariance violations of the capacity
-> moves; longer reference runs would make it so ([roadmap.md](roadmap.md)).
+> **Status: open.** The capacity part of `test/test_exact.jl` cannot detect invariance
+> violations of the capacity moves (it missed the `kpeak` slice-width bug, and its result
+> depends on the seed, see above); converged references would make it a test
+> ([roadmap.md](roadmap.md)).

@@ -82,6 +82,34 @@ if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
             end
         end
         @test !isempty(ks) && maximum(ks) < 0.015
+        # long-range storage moves (slong, slevel; requirement-tracking end steps): incremental =
+        # global, caches, and a line draw against quadrature
+        pool3 = ML.BlockPool(P, 3)
+        LC = ML.LocalCost(P, LM, s)
+        msl = ML.SLong(pool3.wss[1], pool3.wss[2], pool3.wss[3], P, LM, LC)
+        sunits = [(si, i) for (si, st) in enumerate(P.E.stors) for i in eachindex(st.bus)]
+        nbad, nmv = 0, 0
+        for trial in 1:60
+            si, i = rand(rng, sunits)
+            Lb = rand(rng) < 0.2 ? LM.T : rand(rng, 1:LM.T-1)
+            ML.prep_slong!(msl, si, i, rand(rng, 1:LM.T), Lb, jac) || continue
+            t = rand(rng) < 0.5 && msl.ilo <= msl.ihi ? msl.ilo + rand(rng) * (msl.ihi - msl.ilo) : 0.01 * randn(rng)
+            op0 = s.parts.op
+            Δ = ML.mv_eval!(msl, t)
+            ML.commit_slong!(msl, s.v, t)
+            ML.evaluate!(P, s)
+            nmv += 1
+            nbad += abs(s.parts.op - op0 - Δ) > 1e-12 * abs(op0) + 1e-9 * abs(Δ) + 1e-6
+        end
+        @test nmv > 40 && nbad == 0
+        LC2 = ML.LocalCost(P, LM, s)
+        @test maximum(abs.(LC.S .- LC2.S)) < 1e-6 && maximum(abs.(LC.r .- LC2.r)) < 1e-6
+        LC = LC2
+        msl.LC = LC
+        si, i = argmax(u -> LC.kst[u[1]][u[2]] * P.E.stors[u[1]].hours[u[2]], sunits)
+        ML.prep_slong!(msl, si, i, 3, LM.T ÷ 3, jac)
+        x = model_ks(rng, P, msl, 20000)
+        @test isnan(x) || x < 0.015
         # gradients at level 0 (finite differences)
         s0 = ML.restrict_state(P, sL, 0)
         Xn = ML.weather_nodes(P.W, 0, s0.xs[end])

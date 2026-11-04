@@ -91,7 +91,7 @@ if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5")) && get(ENV,
         ref(x) = MX.local_sweep!(rng, P_, LM, x; extra=4.0, families=plain)[1]
         FF = MX.FlowFrames(P_, 1, s0)
         AM = MX.AdaptiveModes(P_, 1; K=2, lengths=[2, 4, 8])
-        full(x) = MX.adaptive_sweep!(rng, P_, LM, FF, AM, x)[1]          # all families, learned, adaptive
+        full(x) = MX.adaptive_sweep!(rng, P_, LM, FF, AM, x; slong=(p=1.0, nmoves=4, hmin=0.0))[1]   # all families, learned, adaptive, long-range storage
         R = run_chain(ref, copy(s0), 200, 2000)
         Tm = run_chain(full, copy(s0), 200, 1000)
         compare(names_[[1, 2, 4, 5]], R[[1, 2, 4, 5], :], Tm[[1, 2, 4, 5], :])

@@ -40,9 +40,9 @@ in random order (probability 1/2 each), followed by a **weather sweep** if
 
 | `fine_kernel` | operation sweep | families |
 |---|---|---|
-| `"local"` | `local_sweep!` | atoms and the plain local families, then with probability 1/2 the storage multiscale sweep |
-| `"flow"` (the `"auto"` choice with `basis = "flow"`) | `flow_sweep!` | plain plus transport families, then (SoC form) with probability 1/2 the storage multiscale sweep |
-| `"adaptive"` | `adaptive_sweep!` | plain, transport and learned families, storage multiscale, learned temporal shapes; then observation and adaptation |
+| `"local"` | `local_sweep!` | atoms and the plain local families, then with probability 1/2 the storage multiscale sweep, then the long-range storage sweep |
+| `"flow"` (the `"auto"` choice with `basis = "flow"`) | `flow_sweep!` | plain plus transport families, then (SoC form) with probability 1/2 the storage multiscale sweep, then the long-range storage sweep |
+| `"adaptive"` | `adaptive_sweep!` | plain, transport and learned families, storage multiscale, long-range storage, learned temporal shapes; then observation and adaptation |
 
 Each component leaves the target invariant, so their composition does.
 
@@ -144,9 +144,12 @@ The family list and its rates depend on the kernel (§2):
 The number of random moves is scaled so that the plain families keep their absolute rates.
 A new family is added by the checklist in [moves/adding_a_move.md](moves/adding_a_move.md).
 All three kernels add the **storage multiscale sweep** (`storage_ms_sweep!`,
-probability 1/2 per sweep: plateau and shape moves over dyadic blocks) and, in the adaptive
-kernel, the **learned temporal shapes** (`adaptive_block_sweep!`). Blocks of one length are
-updated in parallel by parity of the block index.
+probability 1/2 per sweep: plateau and shape moves over dyadic blocks), the **long-range
+storage sweep** (`storage_long_sweep!`, probability `storage_long` per sweep: `slong` plateaus
+over any cyclic interval and the level move `slevel`, per storage unit, cells in parallel;
+[moves/storage.md](moves/storage.md)) and, in the adaptive kernel, the **learned temporal
+shapes** (`adaptive_block_sweep!`). Blocks of one length are updated in parallel by parity of
+the block index.
 
 ### 4.3 Locality
 
@@ -207,7 +210,9 @@ requirement at the nodes it touches. What the other units do is the compensation
   $$J_{\rm curve}(t) = \prod_{n}\Big|\frac{P_n(t)}{P_n(0)}\Big|^{|S_n|-1}.$$
   With losses or lossy links $Q(t)$ is the actual requirement along the move
   (requirement-tracking variant, §3.3), and the Jacobian is evaluated from the move at the
-  drawn $t$.
+  drawn $t$. Without them $Q$ must change by exactly $g\,t$; for storage moves, whose actual
+  injection is bent by efficiencies, power limits and the box, $Q$ carries the nominal
+  injection of the moved units (`soc_qadj`, [moves/storage.md](moves/storage.md)).
 - **Learned linear** (`compensate_learned!`, families with suffix `L`). Unit $i$ at node $n$
   changes its output by $\beta_{n,c,i}\,g$ and the residual takes $(1-\sum_i\beta_{n,c,i})g$,
   with coefficients learned by regressing each unit's output on the node requirement over the
