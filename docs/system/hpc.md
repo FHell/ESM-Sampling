@@ -321,7 +321,7 @@ current ones, with what each needs:
 | campaign | needs | then |
 |---|---|---|
 | H0b (SIGTERM and snapshot tests) | D1: the snapshot test is skipped without `model.h5` | `bash hpc/new_campaign.sh H0b`; `sbatch hpc/jobs/h0_cpu.sbatch H0b` |
-| H10 (storage pairs) | D1 (rebuilt); being redesigned to make its start states on the cluster | as in its row, once prepared again |
+| H10 (storage pairs) | D1 (rebuilt); its start states and the reference LP are made by the campaign | `bash hpc/new_campaign.sh H10`; `sbatch hpc/jobs/build.sbatch H10 configs/chains40.toml script scripts/lp_reference.jl` (stage 1, the LP into the cache); `sbatch --dependency=afterok:<stage 1 job id> --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt` |
 | H2 and the other LP campaigns | D1 for 40 and 76 nodes, D2 for 256, D3 for ERA5 | as in their rows |
 | the full-resolution run | D3 | not yet a campaign ([roadmap.md](roadmap.md) §6) |
 
