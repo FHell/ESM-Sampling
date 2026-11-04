@@ -65,14 +65,14 @@ concrete next steps. Update it at the end of every work session.
   once everything is built); the learned and adaptive families. Hand-written fused kernels
   deferred (the estimates promise large gains; feasibility note requested).
 - `:cellpairu1` compiles in about 290 s at 8 GB and stays out of the run set.
-- Device form of the Langevin capacity step (replaces the Metropolis capacity pass and the
-  planned `kop` port and per-carrier scales).
+- Device form of the Langevin capacity step: built (score, step, dispatch following, replica
+  batch, replica driver; device.md §5.2, §6.2); missing the lag probe and the η_w adaptation.
 - Re-measure the compile times on a quiet machine (239 s / 149 s were measured under load).
 
 **HPC (PIK cluster, [system/hpc.md](system/hpc.md); campaigns H0–H9 in the ledger):**
 - `cache_dir` key or `ESM_CACHE_DIR`: one shared, content-addressed cache with atomic writes
   (now per run directory).
-- Checkpoint and resume with SIGTERM handling in `run_chains` and `run_device`.
+- Checkpoint and resume with SIGTERM handling in `run_chains` and `run_device`: both built.
 - `hpc/` scripts built (env, prepare, campaigns, run wrapper, collection into git, job
   templates, H0 checks; wrapper mechanics tested locally); cluster values filled in (user
   hellmann, project directory coen, Slurm account icone, julia/1.12.2, CUDA 13 → Reactant 13.1, ERA5 at
@@ -111,6 +111,23 @@ concrete next steps. Update it at the end of every work session.
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 
 ## Log
+
+### 2026-11-04 (device: capacity side of the replica sampler, snapshots)
+
+- Device capacity score (`device/src/score.jl`: `cap_score`, the CPU's capacity gradient term by
+  term plus `log_measure_grad`), the Langevin step in w = log(k + κ_s) with reflection and the
+  dispatch following (fixed output for dispatchables, the kop curve for renewables and storage),
+  the replica batch C = chains × M with the weighted score reduction, and the weather upload with
+  the compensated initialisation (`device/src/langevin_dev.jl`); verified on arrays against the
+  CPU and the prototype (scores 7e-13 relative, step and commit to round-off) and compiled on the
+  CPU backend (`device/test/test_langevin_dev.jl`).
+- Replica driver `run_replicas_device` (`device_sampler = "replica"`, table `device_replica`;
+  host weather process from the prototype, gates, tilt weights; `configs/device40_replica.toml`).
+- Snapshots and resume for both device drivers (`device/src/snapshot_dev.jl`), exit code 75 and
+  `ESM_IGNORE_SIGTERM` in `device/scripts/run_device.jl`. Smoke-tested through `hpc/run.sh` in `device` mode on the CPU backend (`hpc/configs/device_smoke.toml`, simulated layout): SIGTERM to the wrapper after checkpoint 1 gave a snapshot, exit 75, status `checkpointed`; the same run id resumed (restart 1) and finished with exit 0, the run archived and indexed. Laptop GPU: score 10 ms, Langevin step 38 ms, weather upload 54 ms per step at 4 × 4 replicas, 40 nodes daily (performance.md §7).
+- Open: switch the references and the host weather process to the src/ replica sampler when it is
+  merged; the lag probe and the η_w adaptation on the device; `ren_units`/`pack_ren` live in
+  `bias_dev.jl` and must move when it is retired; GPU timings of the replica step in campaign H5.
 
 ### 2026-11-04 (storage pairs across nodes)
 
