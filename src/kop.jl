@@ -181,10 +181,13 @@ function kop_units(P::Problem, LM::LocalModel)
     return groups
 end
 
-"Prepare the kop move of `group` (units with k ≥ κmin, at distinct balance cells); nothing if empty."
-function kop_prepare(P::Problem, LM::LocalModel, LC::LocalCost, s::State, group; κmin::Float64=1.0)
+"""
+Prepare the kop move of `group` (units with k ≥ κmin, at distinct balance cells); nothing if
+empty. `Kraw` are the raw node capacities of `s` (computed if not given).
+"""
+function kop_prepare(P::Problem, LM::LocalModel, LC::LocalCost, s::State, group; κmin::Float64=1.0, Kraw=nothing)
     E = P.E
-    Kraw = knodes(P, LM.ℓ, s.k)
+    Kraw = Kraw === nothing ? knodes(P, LM.ℓ, s.k) : Kraw
     terms = KopTerm[]
     for (kind, gi, i) in group
         kf = kind == 1 ? E.gens[gi].kf : E.stors[gi].kf
@@ -232,8 +235,11 @@ function kop_logdensity(P::Problem, LM::LocalModel, LC::LocalCost, mv::KopMove, 
     return lf + length(mv.terms) * u - Δb, lj, Δb
 end
 
-"Commit the prepared move at u: capacities, compensators, coefficients, local caches and the bias cache."
-function kop_commit!(P::Problem, LM::LocalModel, LC::LocalCost, s::State, mv::KopMove, u::Float64; BC=nothing)
+"""
+Commit the prepared move at u: capacities, compensators, coefficients, local caches, the bias
+cache and, if given, the raw node capacities `Kraw`.
+"""
+function kop_commit!(P::Problem, LM::LocalModel, LC::LocalCost, s::State, mv::KopMove, u::Float64; BC=nothing, Kraw=nothing)
     E = P.E
     lk = P.lk[LM.ℓ+1]
     kop_bias_delta(P, LM, BC, mv, u; commit=true)
@@ -247,6 +253,7 @@ function kop_commit!(P::Problem, LM::LocalModel, LC::LocalCost, s::State, mv::Ko
         end
         kc1 = clamp(k1, kt.lo, kt.hi)
         kt.kind == 1 ? (LC.kgen[kt.gi][kt.i] = kc1) : (LC.kst[kt.gi][kt.i] = kc1)
+        Kraw === nothing || (Kraw[kt.kf][kt.i] = k1)
     end
     return s
 end
@@ -269,13 +276,14 @@ function kop_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC=no
     moves = Vector{Vector{NTuple{3,Int}}}()
     mode in (:unit, :both) && append!(moves, [[u] for g in groups for u in g])
     mode in (:carrier, :both) && append!(moves, groups)
+    Kraw = knodes(P, LM.ℓ, s.k)                       # raw node capacities, kept current by the commits
     nmoved = 0
     for group in shuffle(rng, moves)
-        mv = kop_prepare(P, LM, LC, s, group; κmin=κmin)
+        mv = kop_prepare(P, LM, LC, s, group; κmin=κmin, Kraw=Kraw)
         mv === nothing && continue
         u = slice_scalar(rng, x -> kop_logdensity(P, LM, LC, mv, x; BC=BC)[1], 0.0, w, mv.lo)
         u == 0.0 && continue
-        kop_commit!(P, LM, LC, s, mv, u; BC=BC)
+        kop_commit!(P, LM, LC, s, mv, u; BC=BC, Kraw=Kraw)
         nmoved += 1
     end
     return evaluate!(P, s), nmoved
