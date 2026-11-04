@@ -130,7 +130,7 @@ summ = Dict{String,Any}("run_id" => get(ENV, "ESM_RUN_ID", ""), "commit" => get(
                         "kernel" => kernel, "nmoves" => nlong, "nx" => nx, "sx" => sx,
                         "sweeps" => length(rec["op"]), "burn_in" => burn, "threads" => Threads.nthreads(),
                         "s_per_sweep_mean" => mean(rec["time"][2:end]), "s_per_sweep_median" => median(rec["time"]),
-                        "opex_first" => rec["op"][1], "opex_burn" => rec["op"][burn], "opex_last" => rec["op"][end])
+                        "opex_first" => rec["op"][1], "opex_burn" => rec["op"][max(burn, 1)], "opex_last" => rec["op"][end])
 summ["opex"] = stats(rec["op"][sel]); summ["shed"] = stats(rec["shed"][sel])
 Sc = reduce(hcat, rec["score"])
 summ["score"] = Dict(nm => stats(Sc[j, sel]) for (j, nm) in enumerate(rec["knames"]))
