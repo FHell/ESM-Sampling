@@ -36,6 +36,8 @@ onto the code. Agent and session rules are in [../CLAUDE.md](../CLAUDE.md).
 The other files are working notes, not a description of the system; where they and
 `docs/system/` disagree, `docs/system/` and the code win:
 
+- [experiments.md](experiments.md): the ledger of experiments run and planned, with the
+  question, setup, result and record of each.
 - [archive/](archive/README.md): development notes superseded by `docs/system/` (designs,
   experiments, plans, earlier phases), with an index of what replaced each.
 - [reactant_design.md](reactant_design.md): the design of the device port (its sections are

@@ -25,6 +25,9 @@ The other files in `docs/` are development notes, not a description of the syste
   gets its section in `docs/system/moves/` and a row in `moves/README.md`; a new config key goes
   into [config.md](docs/system/config.md); a new output into [data.md](docs/system/data.md); a
   removed limitation removes its status note.
+- Record every experiment (planned, running, done) in the ledger
+  [docs/experiments.md](docs/experiments.md): question, setup, one-line result, where the
+  record lives.
 - Personal or session notes (memory files, scratch notes, final reports) do not replace these
   documents.
 - Code wins over documents. If you find a disagreement, fix the document (or the code, if the
