@@ -34,12 +34,11 @@ concrete next steps. Update it at the end of every work session.
   `chains40` and `complete40`.
 - If any of the learned bias is kept: the bias safeguard choices (exact log J term, trust
   region on by default, θ_u₂ ≤ 0); `complete40.toml` has `warmup0` below `bias_start`.
-- Next device task: the GPU form choice (`tsoc` back to the dense form, about 1 s per sweep;
-  the padded commitment columns and the payload sort in `tpot`, 20–30 %), or the port of the
-  fine-level weather moves (uncompensated coordinate moves first).
 
 **Device port:**
-- Fine-level weather moves (missing); later the weather refresh in place of them.
+- Fine-level weather moves: not needed any more (the weather moves on the host by a
+  prior-reversible pCN process). Device agent (2026-11-04) on: GPU form choice and the `tpot`
+  padding, mixed precision in the slope-jump form, the learned and adaptive families.
 - `:cellpairu1` compiles in about 290 s at 8 GB and stays out of the run set.
 - Device form of the Langevin capacity step (replaces the Metropolis capacity pass and the
   planned `kop` port and per-carrier scales).
