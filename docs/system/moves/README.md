@@ -14,7 +14,7 @@ family name and whether the device port has it.
 | [pairs.md](pairs.md) | `pair`, `xpair`, `xloc`, `xlocc`, `spair` | injection-balanced shifts between two units, at one node, across nodes, or across two steps |
 | [cells.md](cells.md) | `cell`, `cellpair` | coarse spatial directions embedded at the fine level (multigrid atoms) |
 | [transport.md](transport.md) | `tpot`, `tmode`, `tline`, `tcut`, `tmode0`, `tline0`, and `tpotL`, `tmodeL`, `tlineL`, `tcutL` | transport in space with share-preserving, learned or no compensation |
-| [storage.md](storage.md) | `tsoc`, `tsocL`, storage plateau and shape moves | transport in time: states of charge over one instant or a dyadic block |
+| [storage.md](storage.md) | `tsoc`, `tsocL`, storage plateau and shape moves, `slong`, `slevel` | transport in time: states of charge over one instant, a dyadic block, any cyclic interval, or the whole trajectory |
 | [learned.md](learned.md) | `amode`, `amode0`, `amodeL`, `acut`, `acutL`, learned storage and dispatch shapes | directions learned from the chain's own fluctuations |
 | [capacity.md](capacity.md) | `kscale`, `kpeak`, `kop`; level-0 carrier scaling and capacity slice updates | capacities |
 | [weather.md](weather.md) | regime FFBS, weather coordinate moves, joint $z_0$ blocks, weather shear | weather |
@@ -35,6 +35,7 @@ How to add a family, with its tests and its device port: [adding_a_move.md](addi
 | `tpot`, `tmode`, `tline`, `tcut`, `tmode0`, `tline0`, `tsoc` | flow, adaptive | `:tpot`, `:tsoc` (no requirement tracking); others missing |
 | `tpotL`, `tmodeL`, `tlineL`, `tcutL`, `tsocL` | adaptive | `:tpotL`, `:tsocL` (static coefficients); others missing |
 | storage plateau and shape | all | `:sblk{L}`, `:sblkL{L}` (one unit; aggregates missing) |
+| `slong`, `slevel` | all, with `storage_long > 0` (SoC form, complete level) | missing |
 | `amode`, `amode0`, `amodeL`, `acut`, `acutL`, learned shapes | adaptive | missing |
 | `kscale`, `kpeak` | all, at the complete level | Metropolis forms, renewables included (`kren`); the learned `kpeak` variant missing |
 | `kop` | all, at the complete level, with `kop = true` | not planned: the capacity moves are replaced by a Langevin step on the sampled scores (its device form comes later; [../../worklog.md](../../worklog.md)) |

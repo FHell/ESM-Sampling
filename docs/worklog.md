@@ -12,38 +12,73 @@ concrete next steps. Update it at the end of every work session.
   its prior by refresh ([system/ensemble.md](system/ensemble.md) §3.1,
   [system/roadmap.md](system/roadmap.md) §1). Tested (ledger E19, E20): renewables meet from
   different starts, but the dispatch lag biases the stationary capacities unless the step per
-  operation sweep is ≲ 1e-4, and a weather refresh costs about 100 daily sweeps. Proposed
-  next: M weather replicas sharing k, a lag probe that tunes the step, weather by a
-  prior-reversible pCN process instead of refresh shocks; the user approved this structure
-  (2026-11-04). Prototype on an agent branch (replicas, pCN weather, lag probe, explicit
-  tilt knob), in parallel with seasonal storage moves on another branch. Then: rewrite ensemble.md §4 and sampler.md §6–7 for the new design, and retire the bias
+  operation sweep is ≲ 1e-4, and a weather refresh costs about 100 daily sweeps. The user
+  approved the structure (2026-11-04). Replica prototype built and measured (ledger E22–E25,
+  [replica_sampler.md](replica_sampler.md)): prior-reversible weather process exact and tested;
+  continuous pCN too slow at an acceptable dispatch lag, so gated bursts; onwind and solar meet
+  from opposite starts, offwind, gas and batteries not yet, gas overbuilt by the dispatch lag.
+  Next: separate the weather lag from the capacity lag in the probe (probe only replicas long
+  after their burst, or subtract a θ = 0 reference) and average several probes; choose the
+  burst size and gate from a relaxation measurement per burst size; more replicas than active
+  ones; regime windows of B ≥ 60 with their own gate; a better gas score; then move the
+  sampler into `src/`. Then: rewrite ensemble.md §4 and sampler.md §6–7 for the new design, and retire the bias
   code (ĝ, ĥ, tables, lift, refits, trust region, post-correction, level-0 warmup,
   `device/src/bias_dev.jl`) and the capacity moves `kscale`/`kpeak`/`kop` as targets of the
   α = 0 density; record the learned bias in [retired.md](retired.md) with the reason (the
   precision it needs at r = 1e-3, ledger E16).
-- An explicit, controllable tilt of the weather toward expensive years (stress tests), as a
-  weight on the refresh draws.
+- An explicit, controllable tilt of the weather toward expensive years (stress tests): built in
+  the replica prototype as replica weights exp(λΦ) in the capacity drift (E25); to decide: the
+  functional Φ, and whether M = 4 replicas give usable weights (self-normalised, ESS).
 - Rao-Blackwellized capacity scores (averages over the exact line conditionals) to cut the
   per-sweep score noise.
-- Seasonal storage relaxes slowly at fixed (k, x) (τ ≳ 100 sweeps for hydro, PHS, H₂; ledger
-  E17): a longer measurement (3000–5000 sweeps), then longer storage blocks or a seasonal
-  plateau move per region in the CPU kernel.
+- Cross-node storage move: store at A, release at B, flows re-routed with the `xloc` templates
+  (single-instant and `slong`-style interval forms), to avoid the node's own gas wall at the end
+  steps; after the `storage_long` merge.
+- Seasonal storage at fixed (k, x) after the long-range moves (ledger E21): the hydro seasonal
+  shape, the large PHS units and opex still drift over 1000 sweeps; their moves stop where the
+  node's own gas saturates at an end step. Next: a run of 3000 sweeps with the new kernel to see
+  whether opex settles; a compensation that spreads over the node's gas and storage units or
+  over several steps; the device port of `slong`/`slevel` and of the nominal storage
+  requirement (`soc_qadj`) for `:tsoc` and `:sblk`.
+
+**Decisions taken:**
+- The learned bias is retired as part of the target (user, 2026-11-04): work proceeds on the
+  replica–Langevin structure. A learned weather-response term may return only as an optional
+  control variate for the between-year variance of the Langevin drift (no effect on the
+  target; to be measured once the replica sampler is in `src/`).
+- `storage_long` stays, on by default (user, 2026-11-04); merged. The `soc_qadj` correction
+  changes `tsoc` and the storage plateaus, so the device comparisons of the share-preserving
+  `:tsoc`/`:sblk` fail until the device adds it.
 
 **Decisions waiting for the user:**
 - z0 block moves are on by default (`fine_weather_blocks = 1`), a behaviour change for
   `chains40` and `complete40`.
 - If any of the learned bias is kept: the bias safeguard choices (exact log J term, trust
   region on by default, θ_u₂ ≤ 0); `complete40.toml` has `warmup0` below `bias_start`.
-- Next device task: the GPU form choice (`tsoc` back to the dense form, about 1 s per sweep;
-  the padded commitment columns and the payload sort in `tpot`, 20–30 %), or the port of the
-  fine-level weather moves (uncompensated coordinate moves first).
 
 **Device port:**
-- Fine-level weather moves (missing); later the weather refresh in place of them.
+- Fine-level weather moves: not needed any more (the weather moves on the host by a
+  prior-reversible pCN process). Device agent (2026-11-04) on, in order: GPU form choice and
+  the `tpot` padding; restructuring so XLA does not materialize large intermediates
+  (points × columns tensors, sort payloads, concatenations, transposes); a uniform Float32
+  switch (FP64 stays the tested default; whether Float32 is a problem is tested empirically
+  once everything is built); the learned and adaptive families. Hand-written fused kernels
+  deferred (the estimates promise large gains; feasibility note requested).
 - `:cellpairu1` compiles in about 290 s at 8 GB and stays out of the run set.
 - Device form of the Langevin capacity step (replaces the Metropolis capacity pass and the
   planned `kop` port and per-carrier scales).
 - Re-measure the compile times on a quiet machine (239 s / 149 s were measured under load).
+
+**HPC (PIK cluster, [system/hpc.md](system/hpc.md); campaigns H0–H9 in the ledger):**
+- `cache_dir` key or `ESM_CACHE_DIR`: one shared, content-addressed cache with atomic writes
+  (now per run directory).
+- Checkpoint and resume with SIGTERM handling in `run_chains` and `run_device`.
+- `hpc/` scripts: environment preparation on a login node, the run wrapper, job templates, the
+  run record and the runs index.
+- Julia 1.12 on the cluster (the guide lists 1.11.7; the Manifests need 1.12); the Reactant CUDA
+  artifact fetched on a login node without a GPU; the ERA5 folder's path (the user will look it
+  up).
+- Request `/p/projects` space; fill in the project and account names in hpc.md.
 
 **Tests and validation:**
 - Exactness tests do not detect small invariance violations (missed the `kpeak` width and the
@@ -59,6 +94,23 @@ concrete next steps. Update it at the end of every work session.
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 
 ## Log
+
+### 2026-11-04 (seasonal storage)
+
+- Long-range storage moves `slong` (plateau over any cyclic interval, energy between two
+  arbitrary steps) and `slevel` (shift of a whole trajectory), `src/storage_long.jl`, in every
+  kernel (`storage_long`, `storage_long_moves`, `storage_long_hours`); the nominal storage
+  requirement `soc_qadj` in the share-preserving compensation of `tsoc`, the storage plateaus
+  and `slong` (the curve was not a coordinate line before); tests in `test_local.jl`,
+  `test_model.jl`, `test_exact.jl` (ledger E21).
+
+### 2026-11-04 (afternoon, replica prototype)
+
+- Replica Langevin sampler prototype (`scripts/replicas/`): M weather replicas sharing k,
+  prior-reversible weather process (pCN in the non-centred innovations, regime window draws),
+  compensated dispatch, gated weather bursts, lag probe with per-carrier step adaptation, stress
+  tilt; prior-invariance argument and tests, dispatch-lag scan, low/high run on chains40, tilt
+  demonstration (ledger E22–E25, [replica_sampler.md](replica_sampler.md)).
 
 ### 2026-11-04 (overnight session and morning)
 

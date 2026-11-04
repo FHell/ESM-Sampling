@@ -3,11 +3,16 @@
 # directions of the storage. Operation sweeps exactly as in the fine step (local sweep, storage
 # multiscale sweep with probability 1/2); no capacity or weather moves, so the bias plays no role.
 #
-# Usage: nice -n 19 julia --project=. -t 4 opmix.jl <chains.jls> <chain index> <nsweeps> <out.jls>
+# Usage: nice -n 19 julia --project=. -t 4 opmix.jl <chains.jls> <chain index> <nsweeps> <out.jls> [kernel] [nmoves]
+# kernel "base" (default, ledger E17): local sweep + storage multiscale sweep (probability 1/2);
+# "slong": the same plus the long-range storage sweep every sweep (slong, slevel; nmoves plateaus
+# per unit, default 32; ledger E21).
 import ESMSampling as ML
 using Random, Statistics, LinearAlgebra, Printf, Serialization
 
 chainsfile, ci, nsw, out = ARGS[1], parse(Int, ARGS[2]), parse(Int, ARGS[3]), ARGS[4]
+kernel = length(ARGS) >= 5 ? ARGS[5] : "base"
+nlong = length(ARGS) >= 6 ? parse(Int, ARGS[6]) : 32
 cfg = ML.load_config("configs/chains40.toml"); cfg.verbose = false
 P, sL, info = ML.setup(cfg; rng=MersenneTwister(cfg.seed))
 chains = deserialize(chainsfile)
@@ -61,10 +66,31 @@ function soc_rq(P, s)
     return R
 end
 
+"Stored energy (MWh) per storage unit and quarter: rows (carrier, unit) in E.stors order."
+function unit_q(P, s)
+    LC = ML.LocalCost(P, LM, s)
+    Q = zeros(sum(length(st.bus) for st in E.stors), 4)
+    cnt = zeros(4)
+    for t in 1:T; cnt[season[t]] += 1; end
+    r = 0
+    for (si, st) in enumerate(E.stors)
+        Y = LC.Y[st.fe]
+        for i in axes(Y, 1)
+            r += 1
+            k = LC.kst[si][i]
+            for t in 1:T
+                Q[r, season[t]] += clamp(Y[i, t], 0.0, 1.0) * k * st.hours[i] / cnt[season[t]]
+            end
+        end
+    end
+    return Q
+end
+
 rng = MersenneTwister(1000 + ci)
 rec = Dict{String,Any}("op" => Float64[], "shed" => Float64[], "score" => Vector{Float64}[], "soc" => Array{Float64,3}[],
                        "time" => Float64[], "knames" => [string(f.name) for f in E.kspecs],
-                       "snames" => [st.carrier for st in E.stors], "kind" => ci)
+                       "snames" => [st.carrier for st in E.stors], "kind" => ci, "kernel" => kernel, "nlong" => nlong,
+                       "unitq" => Matrix{Float64}[])
 t0 = time()
 for i in 1:nsw
     a = time()
@@ -74,11 +100,16 @@ for i in 1:nsw
         isempty(K.pools) && append!(K.pools, [ML.BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
         s, _ = ML.storage_ms_sweep!(rng, P, LM, s; pools=K.pools)
     end
+    if kernel == "slong"
+        isempty(K.pools) && append!(K.pools, [ML.BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
+        s, _ = ML.storage_long_sweep!(rng, P, LM, s; pools=K.pools, nmoves=nlong)
+    end
     push!(rec["time"], time() - a)
     q = ML.quantities(P, s)
     push!(rec["op"], q[iop]); push!(rec["shed"], q[ish])
     push!(rec["score"], carrier_scores(P, s))
     push!(rec["soc"], soc_rq(P, s))
+    push!(rec["unitq"], unit_q(P, s))
     if i % 50 == 0
         @printf("chain %d sweep %d: opex %.4e shed %.3e  [%.0f s, %.2f s/sweep]\n", ci, i, q[iop], q[ish], time() - t0,
                 mean(rec["time"][end-49:end])); flush(stdout)

@@ -294,6 +294,8 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | compensated families `:spair`, `:spair0`, `:tsoc(L)`, `:tpot(L)` | verified on arrays and compiled (CPU backend); scheduled with `families = :all` |
 | cell templates (all partition levels) | verified on arrays; compiled except `:cellpairu1` (see §3); scheduled with `families = :all` except `:cellpairu1` |
 | storage blocks, one unit (plateau, shapes) | verified on arrays ($L$ = 2–32) and compiled; scheduled with `families = :all` |
+| nominal storage requirement of the share-preserving `:tsoc`, `:sblk{L}` (CPU `soc_qadj`, [moves/storage.md](moves/storage.md)) | deviation: the device uses the actual requirement; its comparisons against the CPU for these share-preserving families no longer hold until it adds the correction |
+| long-range storage moves `slong`, `slevel` | missing |
 | memory cap of a round (`DENSE_BUDGET`) | done |
 | slope-jump form of the line sampler, per-family choice (`JUMP_RATIO`) | done; verified on arrays against the CPU and the dense form, Reactant (CPU backend) against arrays |
 | term axis (program size independent of the term count) | done |

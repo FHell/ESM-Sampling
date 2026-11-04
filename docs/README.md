@@ -30,6 +30,7 @@ onto the code. Agent and session rules are in [../CLAUDE.md](../CLAUDE.md).
 | [system/formulations.md](system/formulations.md) | sampling-friendly forms of components not yet modelled (ramping, line expansion, sector coupling, CO₂ caps, …) |
 | [system/validation.md](system/validation.md) | convergence criteria and the comparison strategy with PyPSA-Eur |
 | [system/testing.md](system/testing.md) | exactness tests on the CPU and the verification of the device port |
+| [system/hpc.md](system/hpc.md) | runs on the PIK HPC cluster: environment, storage layout, caches, job types, checkpoints, run records |
 | [system/roadmap.md](system/roadmap.md) | open problems, missing pieces and planned experiments |
 | [system/glossary.md](system/glossary.md) | symbols and terms |
 
@@ -45,5 +46,8 @@ The other files are working notes, not a description of the system; where they a
 - [reactant_design.md](reactant_design.md): the design of the device port (its sections are
   cited from the device code); [reactant_phase3.md](reactant_phase3.md): the current phase of
   the port.
+- [replica_sampler.md](replica_sampler.md): the prototype of the replica Langevin sampler (M
+  weather replicas sharing the capacities, prior-reversible weather process, lag probe, stress
+  tilt), the prior-invariance argument and the measurements (2026-11-04).
 - [mixing_diagnosis.md](mixing_diagnosis.md): the diagnosis of the sampler's mixing at 40 nodes
   (2026-11-04) and the prototypes and measurements behind `kop` and the z0 block moves.

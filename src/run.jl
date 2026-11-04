@@ -19,6 +19,9 @@ Base.@kwdef mutable struct Config
     xloc_partner_hops::Int = 1      # partners of the localized pair moves (xloc, xlocc) within this many hops
     xloc_ball_hops::Int = 0         # ... flow re-routed on the nodes within this many hops of the pair (0: the pair only)
     kop::Bool = false               # capacity moves with their operation (kop.jl) in the fine step; off until α = 1 is stable with them
+    storage_long::Float64 = 1.0     # probability per operation sweep of the long-range storage sweep (slong, slevel; storage_long.jl)
+    storage_long_moves::Int = 32    # ... long-range plateaus per storage unit and sweep
+    storage_long_hours::Float64 = 24.0  # ... for the storage units with at least this many hours of storage
     measure::String = "utilization" # reference measure of dispatchable units: "utilization" or "physical" (MW); open choice
     storage::String = "soc"         # storage form: "soc" (state-of-charge trajectory; the only form)
     renewables::String = "load"     # renewables: "load" (output A·k; curtailment = nodal dump; the only form)
@@ -365,7 +368,8 @@ function new_sampler(P::Problem, s::State, cfg::Config)
                         LocalKernel(P; extra=cfg.local_extra, mode=Symbol(cfg.fine_kernel), weather=cfg.fine_weather,
                                     lmkw=(cell_power=cfg.cell_level_power, xr_partner=cfg.xloc_partner_hops,
                                           xr_ball=cfg.xloc_ball_hops), kop=cfg.kop, wblocks=cfg.fine_weather_blocks,
-                                    wblockspan=cfg.fine_weather_block_steps))
+                                    wblockspan=cfg.fine_weather_block_steps,
+                                    slong=(p=cfg.storage_long, nmoves=cfg.storage_long_moves, hmin=cfg.storage_long_hours)))
 end
 
 """

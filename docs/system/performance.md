@@ -77,6 +77,11 @@ s per sweep at 4 threads (`bench_perf.jl sweep`):
 | `local_sweep!`, plain families | 0.51 | 7.65 |
 | `local_sweep!`, plain and flow families (the operation part of `flow_sweep!`) | 0.55 | 12.0 |
 | `storage_ms_sweep!` | 0.072 | 0.55 |
+| `storage_long_sweep!` (32 `slong` + 1 `slevel` per unit with ≥ 24 h; measured in the E21 setup, not with `bench_perf.jl`) | 0.10 | — |
+
+One `slong` move costs about 30 µs for hydro, 50 µs for the large PHS units and 130 µs for H₂
+at 40 nodes daily (one thread; the interior steps are evaluated only where they leave the box),
+against 1.3 ms for an `L = 128` plateau of `storage_ms_sweep!`.
 
 At 256 nodes the atoms take about 5.6 s of the 7.65 s plain sweep (467 200 atom moves at
 48 µs on one thread); the dense transport modes and `tline` come next. One adaptive sweep

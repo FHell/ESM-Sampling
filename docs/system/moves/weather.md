@@ -93,3 +93,32 @@ $\alpha = 0$), the blocks are confined too and cost about 5 % of a fine step at 
 
 > **Status: missing.** A non-centered regime move at the fine level (innovations fixed, anomalies
 > changing with the regime, Metropolis with the cost), for faster regime mixing.
+
+## Prior-reversible weather process (replica sampler)
+
+In the sampler without a learned bias ([../roadmap.md](../roadmap.md) §1) the weather of every
+replica follows a process that never reads the capacities or the operation, so that its
+marginal is exactly $\rho^x$. It works in the fully non-centred coordinates $u = (m, e, w)$,
+where $e$ are the innovations of the level-0 VAR, $z_0(1) = L_0e_1$,
+$z_0(\tau) = \Phi_{m_\tau}z_0(\tau-1) + c_{m_\tau}(\tau) + L_{m_\tau}e_\tau$ ($L_kL_k^\top=\Sigma_k$),
+and the prior is $p_{\rm Markov}(m)\,\mathcal N(e;0,I)\,\prod_\ell\mathcal N(w_\ell;0,I)$:
+
+- **pCN step** of $(e, w)$ at fixed $m$: $(e,w)\to\cos\theta\,(e,w)+\sin\theta\,\xi$,
+  $\xi\sim\mathcal N(0,I)$; reversible for $\mathcal N(0,I)$, which is independent of $m$.
+- **Regime window**: the regimes of a window of $B$ level-0 steps (uniform start) redrawn from
+  their Markov prior given the regimes outside it, at fixed $(e,w)$; the exact prior Gibbs
+  conditional, since $m$ is a priori independent of $(e,w)$. The window length sets the regime
+  mixing (about 45 window moves per independent regime frequency at $B = 60$, 700 at $B = 7$).
+- Alternatively the centred FFBS above (exact, leaves $x$ unchanged, rarely changes $m$).
+
+After a weather change the dispatch is compensated (the node's weather-independent
+dispatchable units take up the change of the node residual). The dispatch lags a moving
+weather: a gap below 10 % of $\beta_k\partial K$ in the capacity scores needs $\theta\lesssim0.02$
+per operation sweep, about $10^4$ sweeps per independent weather year, while a single pCN step
+of $\varphi = 0.3$ relaxes in about 20 sweeps. The replica sampler therefore moves the weather in
+staggered bursts and gives a replica's scores zero weight for a fixed number of steps after its
+burst (a schedule that does not depend on the weather). The invariance argument, its tests and
+the measurements are in [../../replica_sampler.md](../../replica_sampler.md).
+
+> **Status: prototype.** In `scripts/replicas/replicas.jl` (`pcn_weather`, `regime_window`,
+> `weather_step`, `compensate!`), not in `src/` and not on the device.
