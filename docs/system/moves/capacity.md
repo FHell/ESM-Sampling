@@ -112,7 +112,8 @@ $$
 $$
 the group Jacobian of the scaling on the moved capacities and the Jacobian of the pro-rata
 coordinates ($m_{n,\tau}$ compensating generators), with capex and its box penalty, every
-operating cost term of the moved units and their compensators, the balance of their nodes,
+operating cost term of the moved units and their compensators (with fleet unit commitment the
+commitment walls of the compensators at their fixed commitment), the balance of their nodes,
 the measure term $T\log(k+\kappa_0)$ of a store under `measure = "physical"`, and the bias
 change at $\alpha = 1$. It is drawn by slice sampling in $u$ with the fixed width 0.3
 (stepping out, shrinkage; $u$ is a group parameter, so the interval rule is the same from

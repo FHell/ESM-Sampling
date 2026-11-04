@@ -13,7 +13,7 @@ comparison with PyPSA-Eur) is in [validation.md](validation.md); the code struct
 ([ensemble.md](ensemble.md) §3.1); it is validated against LP-based results
 ([validation.md](validation.md)). What the tests guarantee is that every move is a correct line
 move for the density it is written for, and that is checked without statistics, in seconds,
-by the move-consistency suite `test/test_moves.jl` (being built; Status: missing): for every
+by the move-consistency suite `test/test_moves.jl` (§5): for every
 family, the potential is linear between the walk's points, the incremental cost equals the
 global difference, the curve is reversible (the same discrete choices at the new state, −t
 returns to the start, inverse Jacobians, equal slice widths in the slice coordinate, symmetric
@@ -115,3 +115,94 @@ compile only once the array version passes.
 > violations of the capacity moves (it missed the `kpeak` slice-width bug, and its result
 > depends on the seed, see above); converged references would make it a test
 > ([roadmap.md](roadmap.md)).
+
+## 5. Deterministic move checks (`test/test_moves.jl`)
+
+One harness checks, for every move family, the conditions under which a single move leaves
+the target invariant, on single moves and without statistics. It exists because the
+seed-dependent `test_exact.jl` missed three exactness bugs that each violate a condition
+visible on one move: the `kpeak` slice width $w k_0$ (state-dependent, so the stepping-out
+was not reversible), balance roots interpolated across storage kinks (up to 262 nats wrong),
+and the share-preserving storage compensation on the actual instead of the nominal injection
+(`soc_qadj`: the curve back missed the start by 0.9). Reintroduced, each one fails the
+suite (the first through the width check, the second through the walk linearity, the third
+through the excess, the round trip, the reverse density and the Jacobians).
+
+**Sites.** For every family about 20 sites with fixed seeds; every site draws its discrete
+choices (step, unit, partner, interval, direction, template, cell group) from a generator of
+its own, so that the same site can be prepared again at another state.
+
+**Checks per site of a line family** (exact walk, `sample_line!`):
+
+1. *Draw consistency.* The potential $\beta\Delta C$ is linear between consecutive walk
+   points (at 1/4, 1/2, 3/4 of every segment, $\le 10^{-6}$ nats); the recorded walk evaluation
+   equals the plain one bitwise; the cost change reported for the drawn $t$ equals the change of
+   the global log target after the commit ($10^{-12}|L| + 10^{-9}(1 + |\beta\Delta C|)$).
+2. *Reversibility*, at the drawn $t$ and, for compensated moves, at 1.5 times the distance of
+   the nearest compensation kink (within ten times the walk's range; weather moves: within
+   80 nats of the potential's minimum with the prior). Prepared again at $s(t)$ with the same
+   seed: the same choices (the fixed part of the direction, the compensation shares, the
+   steps, entries, kink ids and requirement changes, and the next draw of the site's
+   generator); every share-preserving compensation keeps its excess and has its requirement
+   shifted by $g t$ ($10^{-6}$ relative); committing $-t$ returns to the start ($10^{-12}$
+   relative in the coefficients, and in $z_0$, the innovations and the anomalies for weather
+   moves); the reverse line density is the forward one shifted,
+   $f_{\rm rev}(u) - f_{\rm rev}(0) = f(t+u) - f(t)$ at four $u$, with the Jacobian, the prior
+   quadratic and the bias change ($10^{-6}$ nats plus $10^{-9}$ of the magnitude of the terms);
+   the Jacobians of the two directions are inverse ($10^{-9}$); Jacobian terms appear only in
+   families whose sweep applies the Jacobian step.
+3. *Caches.* After one threaded sweep of the family, `LocalCost` and, where the family changes
+   $k$ or $x$, the `BiasCache` equal a rebuild, and the cache cost equals the global cost.
+
+**Capacity families** go through their sweeps restricted to one unit (`select`) with the test
+hooks `rec` (the drawn coordinate, the slice width and lower bound, the peak set and the
+variant), `probe` (the sampler's log density at given points, evaluated before the commit) and
+`fix` (a given slice coordinate instead of a draw); `kop` uses its per-move functions. Checks:
+the line density without its Jacobian against the change of the global log target; the
+reverse move at $-x$ (slice forms through `fix`, Metropolis forms with the negated proposal)
+returns to the start, with the opposite density and Jacobian and the shifted density at three
+points; the slice width is identical at both ends and the lower bound shifts by $x$; `kpeak`
+gives the same peak set, variant and compensators; `kop` the same units, compensator shares,
+excesses and exponents. Then the cache check after a sweep.
+
+**Setups.** A: `configs/haar_poc.toml` at level 1 (40 nodes daily, no flow basis, no losses:
+the compensation with a fixed requirement change and `soc_qadj`), with the bias of
+`test_kop.jl` at $\alpha = 1$. B: a 5-node sub-network (DE/NL, two DC links, line ratings
+× 0.25 so that lines bind) daily, with the flow basis, line losses, soft limits, lossy links,
+gas commitment, the physical measure, the bias, and adaptive modes after four adaptive sweeps:
+requirement-tracking compensation, the transport, learned and adaptive families.
+
+**Family table** (`FAMILIES`; one entry per family: `name`, `setups`, `kind` (`:line`,
+`:kmove`, `:kop`), `prep(c, r)` returning a prepared site `LSite` (mover, Jacobian terms,
+signature, prior quadratic, bias change, commit, weather state), `jac` (whether the sweep
+applies the Jacobian step), `sweep(c, rng)`; optional `nsites`, `known_lin`):
+
+| entries | setups | prepared by |
+|---|---|---|
+| `atom` | B | `prep_atom!` (the atom sweep at 40 nodes is $10^5$ moves) |
+| `unit`, `pair`, `xpair`, `xloc`, `potential`, `cell`, `cellpair` | A, B | `prep_random!` |
+| `xlocc` | A, B | `prep_xloc!` with Jacobian terms |
+| `spair`, `tsoc`; `tsocL` | A, B; B | `prep_spair!`, `prep_tsoc!` (linked two-step moves) |
+| `splateau`; `sshape`, `splateauL` | A, B; B | `prep_storage_ms!` (one unit or a cell–class aggregate) |
+| `slong`, `slevel`; `slongL` | A, B; B | `prep_slong!` |
+| `tpot`; `tpotL`, `tmode`, `tmode0`, `tmodeL`, `tline`, `tline0`, `tlineL`, `tcut`, `tcutL` | A, B; B | `prep_tpot!`, `prep_tmode!`, `prep_tline!`, `prep_tcut!` |
+| `amode`, `amode0`, `amodeL`, `acut`, `acutL` | B | `prep_amode!`, `prep_tcut!` on the adapted modes |
+| `ashape`, `ashapeL`, `adshape` | B | learned storage shapes (`prep_storage_ms!`), dispatch-pair shapes (`prep_adshape!`) |
+| `kscale`, `kscaleMH`, `kpeak`, `kpeakMH`; `kpeakL` | A, B; B | `kscale_sweep!`, `kpeak_sweep!` (slice and Metropolis forms; learned variant) |
+| `kop`, `kopC` | A, B | `kop_prepare`, `kop_logdensity`, `kop_commit!` (unit and carrier) |
+| `wz0`, `wfine`, `wblock` | A, B | `weather_coord_prepare!` ($z_0$, innovations), `z0_block_prepare!` ($B \le 4$) |
+
+A new family is one entry: a `prep` that draws all its choices from the site's generator and
+fills an `LSite` (the helpers `stepsite` for the two-step dispatch of `local_sweep!`, `blocksite`
+for block moves), or a capacity entry, plus its sweep.
+
+**Runtime.** About 10 s of checks after the setups (A 2 s, B 5 s) on 4 threads under load
+(5.5 s for A, 3.5 s for B) once compiled; in a fresh process the first run compiles every
+family: about 2.5 min in all (setups 13 s and 56 s, checks 77 s, mostly compilation).
+
+> **Status: deviation.** The event walk of requirement-tracking moves (`walk!`, the `nonlin`
+> branch; every weather move, and the compensated moves with losses or lossy links) places some
+> kinks about $10^{-7}$ of the segment off, which leaves the potential up to about
+> $10^{-5}$ nats off its linear interpolation between walk points (seen on weather moves in
+> setup B; the compensated operation moves stay below $10^{-10}$). The suite reports these as
+> broken while they exceed $10^{-6}$ nats ([sampler.md](sampler.md) §3.3).

@@ -83,10 +83,13 @@ concrete next steps. Update it at the end of every work session.
 - Device driver checkpoint (after the device agent's work).
 
 **Tests and validation:**
-- Move-consistency suite `test/test_moves.jl` (agent, 2026-11-04): walk linearity, incremental =
-  global, curve reversibility, caches, for every family; it replaces `test_exact.jl` as the gate
-  (CLAUDE.md, testing.md, adding_a_move.md updated). No new statistical tests until the
+- Move-consistency suite `test/test_moves.jl` built and merged (2026-11-04); it replaces
+  `test_exact.jl` as the gate (CLAUDE.md, testing.md, adding_a_move.md). No new statistical tests until the
   performance work is much further (user, 2026-11-04).
+- The event walk of requirement-tracking moves places kinks about 1e-7 of the segment off (up
+  to ~1e-5 nats between walk points on weather moves; `test_moves.jl` reports it as broken);
+  an iterated secant made other lines worse. Needs a root placement that is exact where a
+  quantity bends at its own root.
 - Exactness tests do not detect small invariance violations (missed the `kpeak` width and the
   storage walk bug): longer reference runs (ledger P6).
 - Sweeps to equilibrium against network size and resolution; 256-node ERA5 run (ledger P7, P8).
@@ -101,6 +104,19 @@ concrete next steps. Update it at the end of every work session.
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 
 ## Log
+
+### 2026-11-04 (deterministic move checks)
+
+- `test/test_moves.jl`: one table-driven harness of single-move exactness checks for every
+  family (walk linearity, incremental = global, reversibility with the same choices, excess,
+  round trip, shifted density and inverse Jacobians, slice width and bound, Metropolis
+  negation, caches after a sweep), on `haar_poc` level 1 and a 5-node all-terms sub-network;
+  about 10 s after the setups (ledger E26, testing.md §5). Test hooks: `probe`/`fix` and more
+  `rec` fields in `kscale_sweep!`/`kpeak_sweep!`, `weather_coord_prepare!`/`_commit!`,
+  `prep_adshape!`.
+- Found and fixed: `kop` without the commitment walls of its compensators (`kop_uc`); the walk's
+  storage mask with commitment walls before the storage secondaries (`MoveWS.soff`). Open: the
+  event walk's root placement (up to ~1e-5 nats, sampler.md §3.3).
 
 ### 2026-11-04 (HPC: shared cache and state snapshots)
 

@@ -48,7 +48,7 @@ The other files in `docs/` are development notes, not a description of the syste
 ## Testing rules
 
 - CPU: deterministic checks only (`test/runtests.jl`). The gate for every new or changed move
-  family is the move-consistency suite `test/test_moves.jl` (seconds; being built): the
+  family is the move-consistency suite `test/test_moves.jl` (about 10 s after its setups): the
   potential linear between the walk's points, incremental = global cost, reversibility of the
   curve (the same discrete choices at the new state, −t returns to the start, inverse
   Jacobians, equal slice widths), caches after a threaded sweep. A new family adds its entry to

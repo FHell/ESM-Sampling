@@ -71,7 +71,7 @@ walk's points.
 
 ## 4. Test it (CPU)
 
-**The gate is the move-consistency suite** `test/test_moves.jl` (being built; see
+**The gate is the move-consistency suite** `test/test_moves.jl` (see
 [../testing.md](../testing.md) §1): add one entry for the family to its family table (prepare
 with seeded discrete choices, the line, the commit, the Jacobian), and the suite checks, in
 seconds and without statistics:
