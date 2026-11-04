@@ -63,7 +63,7 @@ julia --startup-file=no -e '
     c["out"] = joinpath(rd, "out.h5")
     set(k, v) = k in known && (c[k] = v)
     set("cache_dir", ARGS[3]); set("cache_mirror", ARGS[4])
-    set("checkpoint", joinpath(rd, "checkpoint.jls")); set("stop_file", joinpath(rd, "STOP"))
+    set("checkpoint", joinpath(rd, "snapshot.h5")); set("stop_file", joinpath(rd, "STOP"))
     open(io -> TOML.print(io, c), joinpath(rd, "config.toml"), "w")' \
     "$rundir/config.orig.toml" "$rundir" "$ESM_CACHE_DIR" "$ESM_CACHE_MIRROR" "$known" || exit 2
 rm -f "$rundir/STOP"
@@ -148,7 +148,7 @@ IFS='|' read -r _ a_elapsed a_maxrss a_cpu a_energy <<< "${acct:-||||}"
     echo "total_cpu = \"$a_cpu\""
     echo "energy_j = \"$a_energy\""
     echo "outputs = ["
-    find "$rundir" -maxdepth 1 -type f ! -name 'checkpoint*' ! -name STOP -printf '    "%f %s",\n'
+    find "$rundir" -maxdepth 1 -type f ! -name 'snapshot*' ! -name '.snapshot*' ! -name STOP -printf '    "%f %s",\n'
     echo "]"
     echo
 } >> "$rundir/run.toml"
@@ -163,7 +163,7 @@ line="{\"run_id\":$(jstr "$run_id"),\"campaign\":$(jstr "$campaign"),\"config\":
 ) 9>> "$ESM_PROJ/ledger/.lock"
 if [ "$status" = finished ] || [ "$status" = failed ]; then
     mkdir -p "$ESM_PROJ/archive/$campaign/$run_id"
-    rsync -a --exclude 'checkpoint*' --exclude STOP "$rundir/" "$ESM_PROJ/archive/$campaign/$run_id/"
+    rsync -a --exclude 'snapshot*' --exclude '.snapshot*' --exclude STOP "$rundir/" "$ESM_PROJ/archive/$campaign/$run_id/"
 fi
 
 # --- continuation ------------------------------------------------------------------------------

@@ -6,11 +6,9 @@ results come back. The scripts are in `hpc/`; the campaigns are rows H0–H9 of 
 ledger ([../experiments.md](../experiments.md)). User `hellmann`, project directory `coen`
 (`/p/projects/coen`), Slurm account `icone`.
 
-> **Status: deviation.** The scripts exist; the driver side is partly missing. The shared cache
-> (`cache_dir`), the state snapshots and resume of the CPU driver are being built (§4, §7);
-> until they are merged, `hpc/run.sh` sets only the config keys the code defines, and a
-> preempted run starts over. The device driver has no snapshots (§7). Nothing has run on the
-> cluster yet; campaign H0 is the first check.
+> **Status: partial.** The scripts exist, and the CPU driver's shared cache (§4) and state
+> snapshots with resume (§7) are built; the device driver has no snapshots yet (§7). Nothing
+> has run on the cluster yet; campaign H0 is the first check.
 
 ## 1. The cluster in brief
 
@@ -104,11 +102,20 @@ overridden before sourcing it); `hpc/prepare_env.sh [<code dir>]` prepares a cod
   sequentially, one such job at a time, never a recursive scan of the folder (no `find` or
   `grep` over it). Its layout (files per variable and year) is to be looked up once, by hand,
   for the variables needed.
-- **Weather-model and LP caches:** `ESM_CACHE_DIR=/p/tmp/hellmann/esm/cache` for every run, with
-  the read-only fallback `ESM_CACHE_MIRROR=/p/projects/coen/esm/cache`; the wrapper also writes
-  them into the run's config (`cache_dir`, `cache_mirror`). Writes go to a temporary name and
-  are renamed atomically. **Status: missing** in the driver (being built). At the end of a
-  campaign, its cache entries are copied to the mirror (`rsync -a cache/ ...`).
+- **Weather-model and LP caches** (`weather_<hash>.jls`, `lp_<hash>.h5`, content-hashed
+  keys; [architecture.md](architecture.md) §5). Their directory is the environment variable
+  `ESM_CACHE_DIR` if set and non-empty, else the key `cache_dir`, else `dirname(out)/cache`;
+  jobs set `ESM_CACHE_DIR=/p/tmp/hellmann/esm/cache`, so all runs share it. The read-only
+  mirror is `ESM_CACHE_MIRROR` (or the key `cache_mirror`), set to
+  `/p/projects/coen/esm/cache`: an entry missing in the cache but present in the mirror
+  is copied into the cache and used, instead of being recomputed. Every entry is written
+  under a temporary name in the cache directory (`.<name>.tmp-<pid>-<random>`) and renamed
+  into place, so concurrent array tasks see a complete entry or none; a task that is killed
+  while writing leaves only its temporary file, which is never read (and can be deleted). Two
+  tasks that miss the same entry at once both compute it and the later rename wins (the
+  entries are identical). An unreadable entry is recomputed and replaced, with a warning.
+  The wrapper sets both in the run's config as well. At the end of a campaign its cache
+  entries are copied to the mirror (`rsync -a /p/tmp/hellmann/esm/cache/ /p/projects/coen/esm/cache/`).
 - **Compilation.** A Reactant process spends 2–4 minutes tracing and compiling before the first
   sweep, so GPU jobs are long-lived processes that batch many chains and replicas.
 
@@ -193,20 +200,48 @@ tested locally with a stand-in driver on 2026-11-04.
 
 ## 7. State snapshots and resume
 
-No full-fidelity checkpoint: the CPU driver writes a **snapshot of the chain states** to the file
-given in the config (`checkpoint`) every `checkpoint_minutes`, and when the stop file appears, at
-a sweep boundary, atomically (temporary file, then rename), as plain data in HDF5: per chain the
-state vectors (capacities, operation, weather coordinates, level) and the small scalar driver
-state (phase, sweep counter, CO₂ price), not Julia serialization, which breaks across versions.
-At start it resumes from an existing snapshot: the chains continue from the saved states, the
-random streams are re-seeded from the seed and the restart count, caches are rebuilt; adaptation
-state that is not in the snapshot restarts. A resumed run is therefore not bitwise the run
-without interruption, which the ensemble does not require ([ensemble.md](ensemble.md) §3.1).
-Exit code 75 means "stopped after a snapshot". With `ESM_IGNORE_SIGTERM=1` the driver ignores
-SIGTERM, so that the wrapper's trap can request a snapshot within Slurm's 5-minute grace; a sweep
-longer than that is covered by the periodic snapshots. Snapshots are also outputs: a later
-experiment can start from them. **Status: missing** (being built). **Status: missing:** the
-device driver's snapshots.
+The jobs run preemptible (`standby`, requeued automatically), and losing the work since the
+last snapshot is acceptable, so the CPU driver writes **snapshots of the chain states**, not
+a full-fidelity checkpoint: plain HDF5 data that survives code and Julia versions (layout in
+[data.md](data.md) §5).
+
+- **Keys** ([config.md](config.md)): `checkpoint` (the snapshot file; empty: off),
+  `checkpoint_minutes` (30), `stop_file`. The wrapper points `checkpoint` at
+  `runs/⟨id⟩/⟨run id⟩/snapshot.h5` and `stop_file` at a file in the run directory.
+- **When** (`run_chains`, at sweep boundaries: after a level-0 warmup iteration or a fine
+  sweep over all chains): every `checkpoint_minutes` of wall time; once after the level-0
+  warmup, before the first fine sweep; and when the stop file exists, after which the driver
+  removes the stop file and exits with **code 75** (`scripts/run.jl` exits with the driver's
+  code: 0 finished, 75 stopped after a snapshot, anything else a failure). The snapshot is
+  written to a temporary name, flushed (`fsync`) and renamed over the previous one.
+- **Contents:** the phase (`level0` or `fine`; a fine sweep counter above `mlda_warmup` is
+  production) and the sweep counter; per chain the state (level, regimes `m`, `z0`, the
+  innovations `w` per level, `k`, `v`) and its start kind; the monitored traces so far; the
+  CO₂ price and its tuning trace; in the level-0 warmup the step sizes of the carrier scaling
+  and the slice widths. Not the learned modes, the bias, the online-bias observations, the
+  post-correction records or the price accumulators.
+- **Resume:** if the snapshot file exists at start, the driver sets up as usual (the caches
+  make that quick), loads the states, logs the restart count and the position, and continues
+  the phase and the sweep counter: the chains restart from exactly the saved states, with
+  random streams re-seeded from `seed` and the restart count (never a replay of the old
+  stream), kernels rebuilt (adaptation starts afresh in the rest of the warmup and is frozen
+  in production) and the caches recomputed from the states. A resume after the level-0
+  warmup lifts the set-up bias, not the one learned in the warmup (the bias is being
+  retired); the sampled prices and the post-correction cover the production sweeps since the
+  last start; the output records `run/restarts` and `run/resumed_at_sweep`. A snapshot is
+  refused if its levels or seed differ from the configuration.
+- **SIGTERM.** Slurm sends SIGTERM to every process of a preempted job and SIGKILL after the
+  grace time. With `ESM_IGNORE_SIGTERM=1`, `scripts/run.jl` ignores SIGTERM
+  (`ESMSampling.ignore_sigterm`: `SIG_IGN` and SIGTERM unblocked on the main thread; Julia's
+  own signal listener would otherwise receive it with `sigwait` and exit); the wrapper's trap
+  creates the stop file, and the driver writes the snapshot at the next sweep boundary and
+  exits with 75. The grace time must cover one sweep plus the write.
+
+> **Status: missing (device).** `run_device` writes no snapshot yet. On the device the state is
+> downloaded at each host checkpoint already; the snapshot adds the file write.
+
+Snapshots are also outputs: a later experiment can start from them. They stay in the run
+directory and are not archived (their size grows with the model).
 
 ## 8. First steps on the cluster
 
