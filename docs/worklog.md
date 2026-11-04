@@ -10,9 +10,11 @@ concrete next steps. Update it at the end of every work session.
 **Sampler design (decided direction, not yet built):**
 - Capacities by a Langevin step on the sampled scores instead of the learned bias, weather from
   its prior by refresh ([system/ensemble.md](system/ensemble.md) §3.1,
-  [system/roadmap.md](system/roadmap.md) §1). Prototype and tests running on an agent branch
-  (ledger P1–P3: Langevin test, fix of capacities above their box, refresh relaxation). Then:
-  merge, rewrite ensemble.md §4 and sampler.md §6–7 for the new design, and retire the bias
+  [system/roadmap.md](system/roadmap.md) §1). Tested (ledger E19, E20): renewables meet from
+  different starts, but the dispatch lag biases the stationary capacities unless the step per
+  operation sweep is ≲ 1e-4, and a weather refresh costs about 100 daily sweeps. Proposed
+  next: M weather replicas sharing k, a lag probe that tunes the step, weather by a
+  prior-reversible pCN process instead of refresh shocks. Then: rewrite ensemble.md §4 and sampler.md §6–7 for the new design, and retire the bias
   code (ĝ, ĥ, tables, lift, refits, trust region, post-correction, level-0 warmup,
   `device/src/bias_dev.jl`) and the capacity moves `kscale`/`kpeak`/`kop` as targets of the
   α = 0 density; record the learned bias in [retired.md](retired.md) with the reason (the
@@ -94,6 +96,10 @@ concrete next steps. Update it at the end of every work session.
   (ensemble.md §3.1, 50afdd6).
 
 **Docs**
+- Box fix: `kscale`/`kpeak` scale utilizations against the clamped capacity, so capacities
+  above their box return to it (74f9bb0, merged 489f806; ledger E18).
+- Langevin capacity test and weather-refresh relaxation (ledger E19, E20; scripts in
+  `scripts/langevin/`).
 - Superseded notes archived in `docs/archive/` (5037234); the experiment ledger (e7bb129); this
   work log; the list of retired approaches (`docs/retired.md`).
 
