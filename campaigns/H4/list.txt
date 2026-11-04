@@ -1,0 +1,6 @@
+campaigns/H4/h4_40d_low.toml cpu
+campaigns/H4/h4_40d_high.toml cpu
+campaigns/H4/h4_40d_low_m4.toml cpu
+campaigns/H4/h4_40d_high_m4.toml cpu
+campaigns/H4/h4_40x6h_low.toml cpu
+campaigns/H4/h4_40x6h_high.toml cpu
