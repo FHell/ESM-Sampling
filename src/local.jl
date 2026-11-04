@@ -496,6 +496,7 @@ mutable struct MoveWS
     bτs::Vector{Int}                 # BlockMove steps
     jac::Vector{NTuple{5,Float64}}   # Jacobian terms of pro-rata moves
     mvbuf::Vector{NTuple{3,Int}}     # move list of a step (local_sweep!)
+    soff::Int                        # secondaries before the storage ones at the last evaluation (commitment walls)
 end
 
 @inline kinkφ(Q, g, t) = max(Q + g * t, 0.0) - max(Q, 0.0)
@@ -513,7 +514,7 @@ function MoveWS(P::Problem)
            Bool[], Int[], Float64[], Float64[], false, true, Int[], Int[], Float64[], Float64[],
            LineBuf(), zeros(N), Int[], zeros(N), Float64[], Float64[], fill(false, nl), Int[],
            EntTerm[], LineTerm[], StuTerm[], CellTerm[], false,
-           Float64[], Float64[], Int[], NTuple{5,Float64}[], NTuple{3,Int}[])
+           Float64[], Float64[], Int[], NTuple{5,Float64}[], NTuple{3,Int}[], 0)
 end
 
 function clear!(ws::MoveWS)
@@ -852,8 +853,9 @@ function eval_move!(ws::MoveWS, P::Problem, LM::LocalModel, LC::LocalCost, τ::I
             ws.dr[sys.line_bus1[e]] += -(f1 - f0) + 0.5 * (L1 - L0)
         end
     end
-    # storage, step τ
+    # storage, step τ (after the commitment walls of the generator entries: `soff`, for `storage_mask!`)
     τ1 = mod(τ, T) + 1
+    ws.soff = length(ws.sec)
     @inbounds for (si, i) in ws.stu
         s = E.stors[si]
         k = LC.kst[si][i]; w = k + κ0
@@ -939,6 +941,7 @@ function eval_cached!(ws::MoveWS, P::Problem, LM::LocalModel, LC::LocalCost, τ:
         dr[lt.b0] += f1 - lt.f0
         dr[lt.b1] -= f1 - lt.f0
     end
+    ws.soff = 0
     @inbounds for st in ws.tstu
         c1, d1, j1 = soc_cost(E.stors[st.si], st.i, st.k, st.w, Δt, cv, st.ye + t * st.dye, st.ye1 + t * st.dye1)
         Δ += c1 - st.c0
@@ -1218,18 +1221,23 @@ mv_hasstor(mv) = any(ws -> !isempty(ws.stu), mv_wss(mv))
 
 """
 Mask of the storage-term secondaries (charge/discharge switch and power limits, three per
-storage term, pushed first by `eval_move!` and `eval_cached!`) in the secondary vector of a move
-without requirement-tracking kinks; the steps of a block move in its evaluation order.
+storage term, pushed by `eval_move!` and `eval_cached!` after the `soff` commitment-wall
+secondaries of the generator entries) in the secondary vector of a move without
+requirement-tracking kinks, as last evaluated; the steps of a block move in its evaluation order.
 """
 function storage_mask!(mask::Vector{Bool}, mv)
     empty!(mask)
     wss = mv_wss(mv)
     for q in (mv isa BlockMove ? (length(wss):-1:1) : (1:length(wss)))
-        ws = wss[q]
-        ns = 3 * length(ws.stu)
-        for j in eachindex(ws.sec)
-            push!(mask, j <= ns)
-        end
+        stepmask!(mask, wss[q])
+    end
+    return mask
+end
+"Append the storage mask of one step workspace (as last evaluated)."
+function stepmask!(mask::Vector{Bool}, ws::MoveWS)
+    lo, hi = ws.soff, ws.soff + 3 * length(ws.stu)
+    for j in eachindex(ws.sec)
+        push!(mask, lo < j <= hi)
     end
     return mask
 end
