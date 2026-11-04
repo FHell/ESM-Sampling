@@ -242,12 +242,12 @@ mv_evalc!(m::SXLong, t) = mv_eval!(m, t; mode=2)
 "Storage-term secondaries in the evaluation order of `mv_eval!(::SXLong)`: wb, the interior steps, wa."
 function storage_mask!(mask::Vector{Bool}, m::SXLong)
     empty!(mask)
-    for j in eachindex(m.wb.sec); push!(mask, j <= 3 * length(m.wb.stu)); end
+    stepmask!(mask, m.wb)
     for _ in eachindex(m.τi)
         for _ in 1:6; push!(mask, true); end
         for _ in 1:m.ncs; push!(mask, false); end
     end
-    for j in eachindex(m.wa.sec); push!(mask, j <= 3 * length(m.wa.stu)); end
+    stepmask!(mask, m.wa)
     return mask
 end
 

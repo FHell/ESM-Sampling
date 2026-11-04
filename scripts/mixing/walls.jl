@@ -34,12 +34,12 @@ function wall_kinds(m, p, own)
     ML.mv_eval!(m, p + δ); sb = copy(ML.mv_sec(m))
     ML.mv_eval!(m, p)                        # the kinks (kφ) at p
     off = 0
-    function secs!(nst, ncell, nall)         # one block of secondaries: storage (3 per term) first, cell sums last
+    function secs!(nst, ncell, nall; soff=0) # one block of secondaries: commitment walls (soff), storage (3 per term), …, cell sums last
         for q in 1:nall
             j = off + q
             (sa[j] < 0) != (sb[j] < 0) || continue
-            if q <= 3nst
-                push!(kinds, mod1(q, 3) == 1 ? "storage charge/discharge switch (hydro: zero discharge)" : "storage power limit")
+            if soff < q <= soff + 3nst
+                push!(kinds, mod1(q - soff, 3) == 1 ? "storage charge/discharge switch (hydro: zero discharge)" : "storage power limit")
             elseif q > nall - ncell
                 sb[j] > sa[j] && push!(kinds, "shed (cell turns into deficit)")
             end
@@ -53,7 +53,7 @@ function wall_kinds(m, p, own)
             nsq = m isa ML.SXLong ? 6 + m.ncs : 4
             for _ in eachindex(m.τi); secs!(nst, nsq - 3nst, nsq); end
         end
-        secs!(length(ws.stu), length(ws.cells), length(ws.sec))
+        secs!(length(ws.stu), length(ws.cells), length(ws.sec); soff=ws.soff)
         for e in ws.lines
             f1 = LC.F[e, τ] + p * ws.dfl[e]
             abs(abs(f1) - sys.line_s[e]) <= tol * sys.line_s[e] && push!(kinds, "line limit")
