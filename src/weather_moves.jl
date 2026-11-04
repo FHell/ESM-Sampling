@@ -1,5 +1,5 @@
 # Weather moves with built-in shear at level 0 (v2 §5.1(4); the weather move of
-# the transport-first formulation, docs/sampling_formulations.md §8.4).
+# the transport-first formulation, docs/archive/sampling_formulations.md §8.4).
 #
 # A coordinate update of the weather at fixed dispatch changes the nodal residual
 # and is blocked by the balance. Here a weather coordinate z_j at step τ moves

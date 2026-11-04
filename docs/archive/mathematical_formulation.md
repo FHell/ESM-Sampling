@@ -1,8 +1,8 @@
 # From a PyPSA LP to a joint weather × decision sampling problem — mathematical formulation
 
 This note describes the model as it is implemented in this repository. It
-follows the setup notes ([v1](../near_optimal_sampling_setup.md),
-[v2](../near_optimal_sampling_setup_v2.md)) and records where the
+follows the setup notes ([v1](../../near_optimal_sampling_setup.md),
+[v2](../../near_optimal_sampling_setup_v2.md)) and records where the
 implementation makes its own choices or leaves something out. Section numbers
 §v1.x / §v2.x refer to those notes. Gaps are collected in §9.
 

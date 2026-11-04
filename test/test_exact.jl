@@ -1,4 +1,4 @@
-# End-to-end exactness test (docs/todo.md item 1; ≈ 2–3 min): on a 3-node sub-network at daily resolution
+# End-to-end exactness test (docs/archive/todo.md item 1; ≈ 2–3 min): on a 3-node sub-network at daily resolution
 # with fixed weather, the full adaptive kernel (all local, flow, learned and capacity moves,
 # with adaptation) must reproduce the equilibrium of a simple reference chain (exact coordinate
 # draws on the basis atoms for the operation, slice sampling of each capacity coefficient on

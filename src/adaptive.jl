@@ -1,4 +1,4 @@
-# Adaptive empirical modes with diminishing adaptation (docs/flow_hierarchy.md §13).
+# Adaptive empirical modes with diminishing adaptation (docs/archive/flow_hierarchy.md §13).
 #
 # The chain learns the directions along which its own state fluctuates and uses
 # them as additional, overcomplete move directions:
@@ -374,7 +374,7 @@ function adaptive_sweep!(rng, P::Problem, LM::LocalModel, FF::FlowFrames, AM::Ad
 end
 
 # ---------------------------------------------------------------------------
-# transported peak-set capacity moves (α = 1; docs/setup_overview.md §10)
+# transported peak-set capacity moves (α = 1; docs/archive/setup_overview.md §10)
 # ---------------------------------------------------------------------------
 #
 # At α = 1 a dispatchable capacity is pinned to its peak dispatch within ≈ 1/(β_v c),

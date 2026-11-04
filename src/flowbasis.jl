@@ -1,4 +1,4 @@
-# Flow-based hierarchy, offline part (docs/flow_hierarchy.md §2, §5): proxy
+# Flow-based hierarchy, offline part (docs/archive/flow_hierarchy.md §2, §5): proxy
 # capacities and injections from the weather data, congestion projection by a
 # QP per step on the unextended network, transport modes from a PCA of the line
 # loadings, and the intra-block storage shapes. Run-time frames (§3) at the end.

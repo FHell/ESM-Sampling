@@ -1,4 +1,4 @@
-# Tests of the flow-based hierarchy (docs/flow_hierarchy.md): batched congestion
+# Tests of the flow-based hierarchy (docs/archive/flow_hierarchy.md): batched congestion
 # projection, transport modes and angle basis, storage shapes, active-set frames,
 # and the transport and storage moves.
 using Test, Random, LinearAlgebra, Statistics, SparseArrays, JuMP, HiGHS

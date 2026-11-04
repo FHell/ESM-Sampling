@@ -2,7 +2,7 @@
 
 Context: [mathematical_formulation.md](mathematical_formulation.md),
 [implementation.md](implementation.md), [plan.md](plan.md), setup notes
-[v2](../near_optimal_sampling_setup_v2.md). Units below: β_v = 4·10⁻⁵ €⁻¹,
+[v2](../../near_optimal_sampling_setup_v2.md). Units below: β_v = 4·10⁻⁵ €⁻¹,
 β_k = 4·10⁻⁸ €⁻¹, 1 nat of β_v ≙ 25 k€, typical cost spread across weather
 years ΔF ≈ 10⁹ €.
 

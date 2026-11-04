@@ -68,7 +68,7 @@ described in [setup_overview.md](setup_overview.md).
 21. [ ] Port the array-first parts (ADMM, frame projection, principal components)
 22. [~] Port the local kernel with chains as a batch dimension (padded size buckets, one compiled program per sweep). Done: phase 1 (device model, exact cost), phase 2 (term batch, exact dense line sampler, plain families gen/uc/pair/soc/link/θ, conflict-free rounds, compiled multi-sweep program; [reactant_phase2.md](reactant_phase2.md)), capacity moves kscale/kpeak with the bias on the device (`device/src/kmove.jl`, `bias_dev.jl`). All verified against the CPU reference with mock random numbers, on arrays and compiled. In progress: phase 3 (compensated and multiscale moves, one program with the capacity moves)
 35. [ ] Check whether the CPU reference states of `test/test_exact.jl` are equilibrated in the storage/dump directions (the phase-2 agent saw exact SoC coordinate sweeps move dump by −366 ± 73 from them); a longer CPU reference run would tell slow mixing from bias
-28. [x] Before 21/22: Reactant-first redesign review of model and sampler ([reactant_design.md](reactant_design.md))
+28. [x] Before 21/22: Reactant-first redesign review of model and sampler ([reactant_design.md](../reactant_design.md))
 
 ## Data and scale
 

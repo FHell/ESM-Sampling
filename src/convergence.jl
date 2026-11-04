@@ -1,4 +1,4 @@
-# Convergence diagnostics over several chains (docs/validation_plan.md Part A):
+# Convergence diagnostics over several chains (docs/archive/validation_plan.md Part A):
 # rank-normalized split-R̂, bulk and tail ESS and the MCSE of the mean, following
 # Vehtari, Gelman, Simpson, Carpenter, Bürkner (2021), "Rank-normalization, folding,
 # and localization: an improved R̂ for assessing convergence of MCMC".

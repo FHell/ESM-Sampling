@@ -1700,7 +1700,7 @@ end
 
 """
 Transport move with pro-rata re-dispatch (the transport-first formulation T2 of
-docs/sampling_formulations.md §8, as a move in the current coordinates). The
+docs/archive/sampling_formulations.md §8, as a move in the current coordinates). The
 transport direction (here: the angle of node n) changes the requirement Q_m at
 n and its neighbours by g_m per unit t. At every affected node the dispatchable
 generators S_m (all generator units with a utilization field) follow pro rata:
@@ -2280,7 +2280,7 @@ function fine_local_step(rng, P::Problem, s::State, S)
     s = copy(s)
     BC = BiasCache(P, s)
     kopmoves! = x -> K.kop ? kop_sweep!(rng, P, LM, x; BC=BC)[1] : x      # capacity with its operation (kop.jl)
-    if K.mode in (:flow, :adaptive) && P.E.flow !== nothing && LM.complete[P.E.fθ]   # flow design (docs/flow_hierarchy.md)
+    if K.mode in (:flow, :adaptive) && P.E.flow !== nothing && LM.complete[P.E.fθ]   # flow design (docs/archive/flow_hierarchy.md)
         FF = lock(() -> get!(() -> FlowFrames(P, s.ℓ, s), K.frames, s.ℓ), K.lk)
         isempty(K.pools) && append!(K.pools, [BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
         sweep! = if K.mode == :adaptive

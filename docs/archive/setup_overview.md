@@ -156,7 +156,7 @@ What the fine structure the move does not set does when the move happens:
   unit commitment and fine-level weather moves are options of the same exact kernel.
 * **CPU kernel after the performance work** ([perf_notes.md](perf_notes.md)): sweeps
   1.3–2.7× faster at 40 and 256 nodes, 0 B per move.
-* **GPU port** ([reactant_design.md](reactant_design.md)): phase 0 (spike) and phase 1
+* **GPU port** ([reactant_design.md](../reactant_design.md)): phase 0 (spike) and phase 1
   (device model and exact cost, all terms, = CPU to 10⁻¹²) done.
 
 * **Local kernel:** about 25 sweeps to stationarity from the level's own LP at

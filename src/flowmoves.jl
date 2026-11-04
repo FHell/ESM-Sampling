@@ -1,4 +1,4 @@
-# Flow-based hierarchy, run-time part (docs/flow_hierarchy.md §3, §6): active-set
+# Flow-based hierarchy, run-time part (docs/archive/flow_hierarchy.md §3, §6): active-set
 # frames per step and the transport and storage moves of the fine level.
 
 # ---------------------------------------------------------------------------
@@ -354,7 +354,7 @@ function flow_sweep!(rng, P::Problem, LM::LocalModel, FF::FlowFrames, s::State; 
 end
 
 # ---------------------------------------------------------------------------
-# localized transport moves (docs/flow_hierarchy.md §16)
+# localized transport moves (docs/archive/flow_hierarchy.md §16)
 # ---------------------------------------------------------------------------
 #
 # A transport mode d (dense node angles) is expanded in the sparse graph-Haar angle

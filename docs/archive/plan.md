@@ -2,7 +2,7 @@
 
 Status and gaps are recorded in [mathematical_formulation.md](mathematical_formulation.md)
 (§9) and [implementation.md](implementation.md) (§9). The target design is
-[near_optimal_sampling_setup_v2.md](../near_optimal_sampling_setup_v2.md). This
+[near_optimal_sampling_setup_v2.md](../../near_optimal_sampling_setup_v2.md). This
 plan orders the remaining work so that every stage has a checkable result
 before the next one builds on it.
 

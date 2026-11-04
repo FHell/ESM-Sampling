@@ -1,4 +1,4 @@
-# Model completion (docs/model_completion.md): losses, soft limits, lossy links,
+# Model completion (docs/archive/model_completion.md): losses, soft limits, lossy links,
 # vintages, CO₂ price, fleet unit commitment (item 17) and fine-level weather moves
 # (item 18). Checks: incremental move costs equal the global evaluation, caches stay
 # consistent, gradients match finite differences, exact line draws match quadrature

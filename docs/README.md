@@ -33,7 +33,13 @@ onto the code. Agent and session rules are in [../CLAUDE.md](../CLAUDE.md).
 | [system/roadmap.md](system/roadmap.md) | open problems, missing pieces and planned experiments |
 | [system/glossary.md](system/glossary.md) | symbols and terms |
 
-The other files in `docs/` are working notes from the development (designs, experiments,
-plans). They are being archived and are not a description of the system; where they and
-`docs/system/` disagree, `docs/system/` and the code win. `docs/reactant_phase3.md` records the
-current phase of the device port.
+The other files are working notes, not a description of the system; where they and
+`docs/system/` disagree, `docs/system/` and the code win:
+
+- [archive/](archive/README.md): development notes superseded by `docs/system/` (designs,
+  experiments, plans, earlier phases), with an index of what replaced each.
+- [reactant_design.md](reactant_design.md): the design of the device port (its sections are
+  cited from the device code); [reactant_phase3.md](reactant_phase3.md): the current phase of
+  the port.
+- [mixing_diagnosis.md](mixing_diagnosis.md): the diagnosis of the sampler's mixing at 40 nodes
+  (2026-11-04) and the prototypes and measurements behind `kop` and the z0 block moves.

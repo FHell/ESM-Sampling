@@ -3,10 +3,10 @@
 A design for a GPU (XLA, Reactant.jl) version of the model and the fine-level
 sampler, with many chains. It is written from the code in `src/` (energy.jl,
 local.jl, flowmoves.jl, flowbasis.jl, adaptive.jl, bias*.jl, hierarchy.jl,
-mlda.jl, run.jl) and the notes [setup_overview.md](setup_overview.md),
-[local_kernel.md](local_kernel.md), [flow_hierarchy.md](flow_hierarchy.md),
-[sampling_formulations.md](sampling_formulations.md) and
-[reactant_performance.md](reactant_performance.md). Nothing here changes the
+mlda.jl, run.jl) and the notes [setup_overview.md](archive/setup_overview.md),
+[local_kernel.md](archive/local_kernel.md), [flow_hierarchy.md](archive/flow_hierarchy.md),
+[sampling_formulations.md](archive/sampling_formulations.md) and
+[reactant_performance.md](archive/reactant_performance.md). Nothing here changes the
 target. Every simplification below either reparametrizes with a constant
 Jacobian or changes only the move set, and every move set listed keeps the
 coordinate moves, so the containment argument of setup_overview.md §6 still
@@ -635,12 +635,12 @@ The corrections below are adopted in the family map (§3.3) and the phase plan (
 
 * **MLDA is shelved**, so there is no coarse chain to port. The hierarchy acts
   through the overcomplete fine-level moves. If delayed acceptance with
-  surrogates is added for expensive move families (docs/todo.md item 30), the
+  surrogates is added for expensive move families (docs/archive/todo.md item 30), the
   surrogate evaluations are extra batched kernels in the same program.
 * **Keep the coarse cell and cell-pair moves and the dispatch atoms** as templates
   until the phase-0 ablation shows they do not matter. They are the multigrid
   part of the move set. They are sparse within a cell, and their cost is linear
-  in the cell size once levels are chosen by size (docs/todo.md item 6).
+  in the cell size once levels are chosen by size (docs/archive/todo.md item 6).
 * The other simplifications are justified as stated:
   - representation changes (node-value state, the generic move record, FP64,
     shared keys, learned compensation as the default) do not change the target
@@ -650,7 +650,7 @@ The corrections below are adopted in the family map (§3.3) and the phase plan (
 
 ## Amendment: model completion and merged CPU performance work (main session)
 
-The model gained terms after this design was written (docs/model_completion.md).
+The model gained terms after this design was written (docs/archive/model_completion.md).
 They change the device cost and the line sampler as follows.
 
 | term | device form | sampler |

@@ -1,6 +1,6 @@
 # Reactant port, phase 2: term batch, dense line sampler, plain rounds
 
-Phase 2 of [reactant_design.md](reactant_design.md) §8, as adapted for the session: the term batch and
+Phase 2 of [reactant_design.md](../reactant_design.md) §8, as adapted for the session: the term batch and
 the exact padded dense-form line sampler for the plain families, the commit, the conflict-free
 round schedule and the compiled device loop. Everything is array code over the chain
 dimension. It runs on Julia `Array`s (the reference) and traced by Reactant (XLA on this

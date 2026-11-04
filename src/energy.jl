@@ -44,7 +44,7 @@ GenGroup(carrier, bus, vf, kf, wf, kfix, kbar, capex, mc, avail) =
 @inline hasvintage(g::GenGroup, i) = g.k0[i] > 0 && g.mc0[i] != g.mc[i]
 
 """
-Merged co-located vintages (docs/sampling_formulations.md §3.2): the unit holds
+Merged co-located vintages (docs/archive/sampling_formulations.md §3.2): the unit holds
 the existing capacity k0 (old vintage) and the new capacity k − k0; output is
 dispatched in merit order, so the cost of output p = A k y is the convex
 piecewise-linear C(p) = c_lo min(p, A q_lo) + c_hi (p − A q_lo)₊, with q_lo the
@@ -122,7 +122,7 @@ function uc_grad(g::GenGroup, i, A, k, w, Δt, cv, yc, u, u1)
 end
 
 """
-Line terms in relative flow u = |f|/s on a shared grid `U` (docs/model_completion.md §3):
+Line terms in relative flow u = |f|/s on a shared grid `U` (docs/archive/model_completion.md §3):
 overload cost rate c_viol·s·ψ(u) €/h (hard: ψ = (u − 1)₊; soft: the marginal price
 rises linearly from 0 at s to c_viol at (1+δ)s, then stays c_viol) and losses
 α s² L(u) MW, L the piecewise-linear interpolant of u² (exact at the grid points,
@@ -783,7 +783,7 @@ n_u log(k_u + κ0) per investable unit u whose fields are complete at the level
 (n_u = number of its utilization coordinates). In utilization coordinates the
 cost-confined dispatch of a unit occupies a volume ∝ k^(−n_conf), an entropic
 force against capacity; the physical measure removes it (then integrating out
-idle capacity gives the capex of the peak dispatch, see docs/physical_formulation.md).
+idle capacity gives the capex of the peak dispatch, see docs/archive/physical_formulation.md).
 Renewables keep the utilization (curtailment share) measure: their physical
 volume vanishes wherever the availability does.
 """
