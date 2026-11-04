@@ -101,7 +101,11 @@ the 256-node network.
 | `kop` | `false` | capacity moves with their operation ([moves/capacity.md](moves/capacity.md)) in every fine step, after `kscale` and `kpeak` |
 | `storage_long` | 1.0 | probability per operation sweep of the long-range storage sweep (`slong`, `slevel`; [moves/storage.md](moves/storage.md)), every kernel |
 | `storage_long_moves` | 32 | ... `slong` moves per storage unit and sweep |
-| `storage_long_hours` | 24.0 | ... only for storage units with at least this many hours of storage (batteries and small PHS are box-limited) |
+| `storage_long_hours` | 24.0 | ... only for storage units with at least this many hours of storage (batteries and small PHS are box-limited); also the units of the storage pairs |
+| `storage_xpair` | 0.1 | rate of the single-instant storage pair `sxpair` in the local sweep, on the scale of the plain families (the other families keep their absolute rates; about 60 moves per unit and sweep at 40 nodes daily); every kernel ([moves/storage.md](moves/storage.md)) |
+| `storage_xlong` | 8 | interval storage pairs `sxlong` per storage unit in the long-range storage sweep |
+| `storage_xpair_hops` | 1 | storage pairs: partner units at the unit's own node or at nodes within this many hops |
+| `storage_xpair_ball` | 1 | ... flow re-routed on the nodes within this many hops of the pair (the leak beyond is compensated pro rata) |
 | `fine_weather` | 0.0 | fraction of the weather coordinates moved per fine step (0: weather fixed at the fine level) |
 | `fine_weather_blocks` | 1.0 | with `fine_weather > 0`: joint $z_0$ block moves (16, 64, 365 level-0 steps) per fine step, in expectation ([moves/weather.md](moves/weather.md)) |
 | `fine_weather_block_steps` | 600 | ... only of the lengths whose window spans at most this many finest-level steps: all three daily, 16 and 64 at 3 h and 6 h, 16 at 1 h |

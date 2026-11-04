@@ -374,3 +374,164 @@ if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
         end
     end
 end
+
+
+if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
+    @testset "cross-node storage pairs (sxpair, sxlong)" begin
+        cfg = ML.load_config(CFG); cfg.verbose = false
+        P, sL, info = ML.setup(cfg; rng=MersenneTwister(cfg.seed))
+        rng = MersenneTwister(19)
+        ℓ = 1
+        s = ML.restrict_state(P, sL, ℓ)
+        E = P.E
+        # every unit pairs (sx_hmin = 0); default templates (partners 1 hop, ball 1 hop) and partners
+        # within 2 hops with the flow re-routed on the pair only (large leaks)
+        LMs = (ML.LocalModel(P, ℓ; sx_hmin=0.0), ML.LocalModel(P, ℓ; sx_hmin=0.0, sx_ball=0, sx_partner=2))
+        LM = LMs[1]
+        T = LM.T
+        @test !isempty(LM.sxunits) && all(p[1] == n for (n, p) in enumerate(LM.sxpart))
+        # footprints: the cells of every node a template touches
+        okf = true
+        for LMx in LMs, n in 1:E.sys.N, j in eachindex(LMx.sxpart[n])
+            nd = vcat([n, LMx.sxpart[n][j]], LMx.sxlkn[n][j], LMx.sxnod[n][j])
+            okf &= issubset(unique(LMx.cell[nd]), LMx.sxfoot[n][j])
+        end
+        @test okf
+        # the family interface (one entry of a move-consistency table): prepare with seeded discrete
+        # choices, the line, the commit, the Jacobian
+        pool = ML.BlockPool(P, 3)
+        ws, wa = ML.MoveWS(P), ML.MoveWS(P)
+        jac, jac2 = NTuple{5,Float64}[], NTuple{5,Float64}[]
+        function prepare(kind, LMx, LCx, seed, jx)
+            r = MersenneTwister(seed)
+            if kind == :sxpair
+                return ML.sxpair_move!(r, wa, ws, P, LMx, LCx, rand(r, 1:T), jx)
+            end
+            m = ML.SXLong(pool.wss[1], pool.wss[2], pool.wss[3], P, LMx, LCx)
+            return ML.prep_sxlong_random!(r, m, jx) ? m : nothing
+        end
+        line(mv) = ML.sample_line!(rng, mv, P.βv, mv isa ML.SXLong ? mv.wa.secprev : ws.secprev)
+        commit!(mv, v, t) = mv isa ML.SXLong ? ML.commit_sxlong!(mv, v, t) : ML.commit_block!(mv, v, t)
+        kinds = (:sxpair, :sxlong)
+        # incremental = global; recorded = plain (bitwise); for sxlong the lazy interior = full evaluation
+        nmv = Dict(k => 0 for k in kinds)
+        nin, nout, nkink = 0, 0, 0
+        for LMx in LMs
+            LC = ML.LocalCost(P, LMx, s)
+            for trial in 1:200
+                kind = kinds[mod1(trial, 2)]
+                mv = prepare(kind, LMx, LC, rand(rng, UInt), jac)
+                mv === nothing && continue
+                if kind == :sxlong && mv.ilo <= mv.ihi && rand(rng) < 0.5
+                    t = mv.ilo + rand(rng) * (mv.ihi - mv.ilo)
+                else
+                    t = rand(rng) < 0.5 ? line(mv) : 0.02 * randn(rng)
+                end
+                Δ = ML.mv_eval!(mv, t); sec = copy(ML.mv_sec(mv))
+                Δc = (ML.mv_fill!(mv); ML.mv_evalc!(mv, t))
+                @test Δc == Δ && ML.mv_sec(mv) == sec
+                if kind == :sxlong
+                    lo, hi, qlo, qhi = mv.ilo, mv.ihi, copy(mv.qlo), copy(mv.qhi)
+                    mv.ilo, mv.ihi = Inf, -Inf; fill!(mv.qlo, Inf); fill!(mv.qhi, -Inf)
+                    Δf = ML.mv_eval!(mv, t)
+                    @test isapprox(Δf, Δ; atol=1e-9 * abs(Δ) + 1e-6)          # € (round-off of the full sum over the steps)
+                    @test maximum(abs, ML.mv_sec(mv) .- sec; init=0.0) < 1e-6 * (1 + maximum(abs, sec; init=0.0))
+                    mv.ilo, mv.ihi = lo, hi; mv.qlo .= qlo; mv.qhi .= qhi
+                    (lo <= t <= hi) ? (nin += 1) : (nout += 1)
+                end
+                op0 = s.parts.op
+                commit!(mv, s.v, t)
+                ML.evaluate!(P, s)
+                @test isapprox(s.parts.op - op0, Δ; atol=1e-12 * abs(op0) + 1e-9 * abs(Δ))
+                nmv[kind] += 1
+                nkink += length(jac)
+            end
+            LC2 = ML.LocalCost(P, LMx, s)
+            @test isapprox(ML.cache_cost(P, LMx, LC), s.parts.op; rtol=1e-10)
+            @test maximum(abs.(LC.S .- LC2.S)) < 1e-6 && maximum(abs.(LC.r .- LC2.r)) < 1e-6
+            @test maximum(abs.(LC.F .- LC2.F)) < 1e-6
+            @test maximum(maximum(abs.(LC.Y[f] .- LC2.Y[f])) for f in eachindex(LC.Y) if f != E.fθ) < 1e-9   # (angles: up to component constants)
+        end
+        @info "storage pairs" nmv nin nout nkink
+        @test nmv[:sxpair] > 80 && nmv[:sxlong] > 80 && nin > 5 && nout > 5 && nkink > 20
+        # the threaded sweeps keep the caches consistent: sxpair in the local sweep (steps of one
+        # parity in parallel), sxlong in the long-range storage sweep (rounds of disjoint footprints)
+        LC = ML.LocalCost(P, LM, s)
+        s, st = ML.local_sweep!(rng, P, LM, s; LC=LC, sxpair=1.0, atoms=false, extra=1.0)
+        @test st[end-1, 1] > 0 && st[end-1, 2] > 0                   # the sxpair row (the last family)
+        @test isapprox(ML.cache_cost(P, LM, LC), s.parts.op; rtol=1e-10)
+        s, st = ML.storage_long_sweep!(rng, P, LM, s; LC=LC, nmoves=2, hmin=0.0, nxmoves=8)
+        @test st[3, 1] > 0 && st[3, 2] > 0
+        @test isapprox(ML.cache_cost(P, LM, LC), s.parts.op; rtol=1e-10)
+        LC2 = ML.LocalCost(P, LM, s)
+        @test maximum(abs.(LC.S .- LC2.S)) < 1e-6 && maximum(abs.(LC.r .- LC2.r)) < 1e-6 && maximum(abs.(LC.F .- LC2.F)) < 1e-6
+        @test maximum(maximum(abs.(LC.Y[f] .- LC2.Y[f])) for f in eachindex(LC.Y) if f != E.fθ) < 1e-9
+        # rounds: the footprints of the moves of one round are disjoint
+        mvs = [x for x in (ML.sxlong_choice(rng, P, LM, LC, rand(rng, LM.sxunits)...) for _ in 1:200) if x !== nothing]
+        okr = true
+        for rd in ML.sx_rounds(P, LM, mvs)
+            fp = reduce(vcat, [LM.sxfoot[E.stors[mvs[k][1]].bus[mvs[k][2]]][mvs[k][5]] for k in rd])
+            okr &= allunique(fp)
+        end
+        @test okr
+        # reversibility of the curve: prepared again at s(t) with the same seed, the move makes the
+        # same discrete choices, its line density is the forward one shifted by t (cost and log
+        # Jacobian), −t returns to s (shares and excess of every compensation kept, also across a
+        # kink), and the Jacobian of the way back is the inverse
+        worst, worstj, worstd, nk, nr = 0.0, 0.0, 0.0, 0, 0
+        for trial in 1:120
+            kind = kinds[mod1(trial, 2)]
+            seed = rand(rng, UInt)
+            LC = ML.LocalCost(P, LM, s)
+            mv = prepare(kind, LM, LC, seed, jac)
+            (mv === nothing || isempty(jac)) && continue
+            k = argmin(x -> abs(jac[x][3] / jac[x][4]), eachindex(jac))           # the nearest kink
+            Q, g = jac[k][3], jac[k][4]
+            t = trial % 4 < 2 ? 0.3 * randn(rng) * abs(Q / g) : -2.0 * Q / g      # beyond it
+            us = (-t, -0.5t, 0.7t, 0.01 * randn(rng))
+            fwd = [(ML.mv_eval!(mv, t + u), ML.logjac(jac, t + u, mv)) for u in us]
+            c0, lj = ML.mv_eval!(mv, t), ML.logjac(jac, t, mv)
+            choice = kind == :sxpair ? copy(ws.ent) : mv.us
+            s1 = deepcopy(s)
+            mv = prepare(kind, LM, ML.LocalCost(P, LM, s1), seed, jac)
+            commit!(mv, s1.v, t)
+            ML.evaluate!(P, s1)
+            mv = prepare(kind, LM, ML.LocalCost(P, LM, s1), seed, jac2)
+            @test mv !== nothing && (kind == :sxpair ? Set(ws.ent) == Set(choice) : mv.us == choice)
+            for (u, (cf, jf)) in zip(us, fwd)
+                cb = ML.mv_eval!(mv, u)
+                worstd = max(worstd, P.βv * abs(cb - (cf - c0)))                   # nats
+                worstj = max(worstj, abs(ML.logjac(jac2, u, mv) - (jf - lj)))
+            end
+            lj2 = ML.logjac(jac2, -t, mv)
+            commit!(mv, s1.v, -t)
+            worst = max(worst, maximum(abs, s1.v .- s.v) / (1 + maximum(abs, s.v)))
+            worstj = max(worstj, abs(lj + lj2))
+            nk += abs(t) > abs(Q / g)
+            nr += 1
+        end
+        @info "storage pair reversibility" nr nk worst worstj worstd
+        @test nr > 60 && nk > 10
+        @test worst < 1e-9
+        @test worstj < 1e-8
+        @test worstd < 1e-6
+        # the walk's points: the potential is linear between consecutive points
+        LC = ML.LocalCost(P, LM, s)
+        worst, nl = 0.0, 0
+        for trial in 1:120
+            mv = prepare(kinds[mod1(trial, 2)], LM, LC, rand(rng, UInt), jac)
+            mv === nothing && continue
+            line(mv)
+            lb = ML.linebuf(mv)
+            pts, cs = copy(lb.pts), copy(lb.cs)
+            for j in 1:length(pts)-1
+                pts[j+1] > pts[j] || continue
+                cm = P.βv * ML.mv_eval!(mv, 0.5 * (pts[j] + pts[j+1]))
+                worst = max(worst, abs(cm - 0.5 * (cs[j] + cs[j+1])))
+            end
+            nl += 1
+        end
+        @test nl > 80
+        @test worst < 1e-6                       # nats
+    end
+end

@@ -230,7 +230,7 @@ function commit_slong!(m::SLong, v::AbstractVector, t::Float64)
 end
 
 """
-    storage_long_sweep!(rng, P, LM, s; nmoves, p_level, hmin, LC, pools, learn, κmin) -> (s, stats)
+    storage_long_sweep!(rng, P, LM, s; nmoves, p_level, hmin, nxmoves, LC, pools, learn, κmin) -> (s, stats)
 
 Long-range storage sweep at a complete level in the SoC form: for every storage unit with at
 least `hmin` hours of storage and κ_s ≥ κmin, a level move with probability `p_level` and
@@ -238,11 +238,13 @@ least `hmin` hours of storage and κ_s ≥ κmin, a level move with probability 
 1…T−1 (cyclic), in random order. The moves of one cell run on one thread and the cells in
 parallel (a move touches only its unit, the dispatch at its node and the balance of the node's
 cell; the coefficient changes, which share coarse basis coefficients across cells, are
-accumulated per thread and added at the end). Selection uses only (k, x) and fixed
-probabilities. `stats`: rows (slong, slevel); columns (moves, accepted, Σ |t|·E in MWh).
+accumulated per thread and added at the end). Then `nxmoves` interval storage pairs (`sxlong`,
+storage_cross.jl) per unit with at least the pair's storage hours (`LM.sxunits`), in rounds of
+disjoint footprints. Selection uses only (k, x) and fixed probabilities. `stats`: rows (slong,
+slevel, sxlong); columns (moves, accepted, Σ |t|·E in MWh).
 """
 function storage_long_sweep!(rng, P::Problem, LM::LocalModel, s::State; nmoves::Int=4, p_level::Float64=1.0,
-                             hmin::Float64=24.0, LC=nothing, pools=nothing, learn=nothing, κmin::Float64=1.0)
+                             hmin::Float64=24.0, nxmoves::Int=0, LC=nothing, pools=nothing, learn=nothing, κmin::Float64=1.0)
     E = P.E
     T = LM.T
     LCc = LC === nothing ? LocalCost(P, LM, s) : LC
@@ -256,7 +258,6 @@ function storage_long_sweep!(rng, P::Problem, LM::LocalModel, s::State; nmoves::
             push!(get!(bycell, LM.cell[st.bus[i]], NTuple{2,Int}[]), (si, i))
         end
     end
-    isempty(bycell) && return evaluate!(P, s), zeros(2, 3)
     cells = sort!(collect(keys(bycell)))
     seeds = rand(rng, UInt64, length(cells))
     loc = [zeros(2, 3) for _ in cells]
@@ -290,8 +291,9 @@ function storage_long_sweep!(rng, P::Problem, LM::LocalModel, s::State; nmoves::
         end
         clear!(m.wa); clear!(m.wb); clear!(m.wn)
     end
+    stx = storage_cross_phase!(rng, P, LM, LCc, dvs, pl; nmoves=nxmoves, learn=learn, κmin=κmin)
     for dv in dvs
         s.v .+= dv
     end
-    return evaluate!(P, s), sum(loc)
+    return evaluate!(P, s), vcat(sum(loc; init=zeros(2, 3)), stx)
 end

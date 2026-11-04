@@ -3,16 +3,21 @@
 # directions of the storage. Operation sweeps exactly as in the fine step (local sweep, storage
 # multiscale sweep with probability 1/2); no capacity or weather moves, so the bias plays no role.
 #
-# Usage: nice -n 19 julia --project=. -t 4 opmix.jl <chains.jls> <chain index> <nsweeps> <out.jls> [kernel] [nmoves]
+# Usage: nice -n 19 julia --project=. -t 4 opmix.jl <chains.jls> <chain index> <nsweeps> <out.jls> [kernel] [nmoves] [nx] [sx]
 # kernel "base" (default, ledger E17): local sweep + storage multiscale sweep (probability 1/2);
 # "slong": the same plus the long-range storage sweep every sweep (slong, slevel; nmoves plateaus
-# per unit, default 32; ledger E21).
+# per unit, default 32; ledger E21); "sx": the slong kernel plus the storage pairs (ledger E26):
+# nx interval pairs sxlong per unit in the long-range sweep (default 8) and the single-instant
+# pair sxpair at rate sx in the local sweep (default 0.1).
 import ESMSampling as ML
 using Random, Statistics, LinearAlgebra, Printf, Serialization
 
 chainsfile, ci, nsw, out = ARGS[1], parse(Int, ARGS[2]), parse(Int, ARGS[3]), ARGS[4]
 kernel = length(ARGS) >= 5 ? ARGS[5] : "base"
 nlong = length(ARGS) >= 6 ? parse(Int, ARGS[6]) : 32
+nx = length(ARGS) >= 7 ? parse(Int, ARGS[7]) : 8
+sx = length(ARGS) >= 8 ? parse(Float64, ARGS[8]) : 0.1
+kernel == "sx" || (nx = 0; sx = 0.0)
 cfg = ML.load_config("configs/chains40.toml"); cfg.verbose = false
 P, sL, info = ML.setup(cfg; rng=MersenneTwister(cfg.seed))
 chains = deserialize(chainsfile)
@@ -90,19 +95,21 @@ rng = MersenneTwister(1000 + ci)
 rec = Dict{String,Any}("op" => Float64[], "shed" => Float64[], "score" => Vector{Float64}[], "soc" => Array{Float64,3}[],
                        "time" => Float64[], "knames" => [string(f.name) for f in E.kspecs],
                        "snames" => [st.carrier for st in E.stors], "kind" => ci, "kernel" => kernel, "nlong" => nlong,
-                       "unitq" => Matrix{Float64}[])
+                       "unitq" => Matrix{Float64}[], "nx" => nx, "sx" => sx, "lstats" => Matrix{Float64}[],
+                       "ustore" => [(st.carrier, E.sys.nodes[st.bus[i]], st.hours[i]) for st in E.stors for i in eachindex(st.bus)])
 t0 = time()
 for i in 1:nsw
     a = time()
     global s
-    s, _ = ML.local_sweep!(rng, P, LM, s; wsets=K.wsets, extra=K.extra)
+    s, _ = ML.local_sweep!(rng, P, LM, s; wsets=K.wsets, extra=K.extra, sxpair=sx)
     if rand(rng) < 0.5 && LM.complete[E.fθ]
         isempty(K.pools) && append!(K.pools, [ML.BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
         s, _ = ML.storage_ms_sweep!(rng, P, LM, s; pools=K.pools)
     end
-    if kernel == "slong"
+    if kernel in ("slong", "sx")
         isempty(K.pools) && append!(K.pools, [ML.BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
-        s, _ = ML.storage_long_sweep!(rng, P, LM, s; pools=K.pools, nmoves=nlong)
+        s, lst = ML.storage_long_sweep!(rng, P, LM, s; pools=K.pools, nmoves=nlong, nxmoves=nx)
+        push!(rec["lstats"], lst)
     end
     push!(rec["time"], time() - a)
     q = ML.quantities(P, s)

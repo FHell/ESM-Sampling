@@ -137,16 +137,19 @@ The family list and its rates depend on the kernel (§2):
 
 | kernel | families (rate) |
 |---|---|
-| plain | `unit` 0.3, `pair` 0.25, `xpair` 0.03, `xlocc` 0.08, `xloc` 0.04, `potential` 0.1, `cellpair` 0.1, `cell` 0.1, and `spair` 0.3 in the SoC form |
+| plain | `unit` 0.3, `pair` 0.25, `xpair` 0.03, `xlocc` 0.08, `xloc` 0.04, `potential` 0.1, `cellpair` 0.1, `cell` 0.1, and `spair` 0.3 in the SoC form; `sxpair` at `storage_xpair` (0.1) on top, in every kernel |
 | flow | plain, plus `tpot` 0.1, `tmode` 0.05, `tcut` 0.15, `tline` 0.05, `tmode0` 0.05, `tline0` 0.05, `tsoc` 0.1 (SoC form) |
 | adaptive | flow, plus `amode` 0.03, `acut` 0.1, `amode0` 0.03 and the learned-compensation variants `tmodeL` 0.03, `tcutL` 0.1, `tlineL` 0.05, `tpotL` 0.05, `amodeL` 0.02, `acutL` 0.08, `tsocL` 0.05 |
 
-The number of random moves is scaled so that the plain families keep their absolute rates.
+The number of random moves is scaled so that the plain families keep their absolute rates;
+`sxpair` is added on top of each list with the number scaled again, so that it leaves every other
+rate unchanged.
 A new family is added by the checklist in [moves/adding_a_move.md](moves/adding_a_move.md).
 All three kernels add the **storage multiscale sweep** (`storage_ms_sweep!`,
 probability 1/2 per sweep: plateau and shape moves over dyadic blocks), the **long-range
 storage sweep** (`storage_long_sweep!`, probability `storage_long` per sweep: `slong` plateaus
-over any cyclic interval and the level move `slevel`, per storage unit, cells in parallel;
+over any cyclic interval and the level move `slevel`, per storage unit, cells in parallel; then
+the interval storage pairs `sxlong` in rounds of disjoint footprints;
 [moves/storage.md](moves/storage.md)) and, in the adaptive kernel, the **learned temporal
 shapes** (`adaptive_block_sweep!`). Blocks of one length are updated in parallel by parity of
 the block index.
