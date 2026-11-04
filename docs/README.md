@@ -45,5 +45,8 @@ The other files are working notes, not a description of the system; where they a
 - [reactant_design.md](reactant_design.md): the design of the device port (its sections are
   cited from the device code); [reactant_phase3.md](reactant_phase3.md): the current phase of
   the port.
+- [replica_sampler.md](replica_sampler.md): the prototype of the replica Langevin sampler (M
+  weather replicas sharing the capacities, prior-reversible weather process, lag probe, stress
+  tilt), the prior-invariance argument and the measurements (2026-11-04).
 - [mixing_diagnosis.md](mixing_diagnosis.md): the diagnosis of the sampler's mixing at 40 nodes
   (2026-11-04) and the prototypes and measurements behind `kop` and the z0 block moves.

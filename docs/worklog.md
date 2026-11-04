@@ -12,15 +12,20 @@ concrete next steps. Update it at the end of every work session.
   its prior by refresh ([system/ensemble.md](system/ensemble.md) §3.1,
   [system/roadmap.md](system/roadmap.md) §1). Tested (ledger E19, E20): renewables meet from
   different starts, but the dispatch lag biases the stationary capacities unless the step per
-  operation sweep is ≲ 1e-4, and a weather refresh costs about 100 daily sweeps. Proposed
-  next: M weather replicas sharing k, a lag probe that tunes the step, weather by a
-  prior-reversible pCN process instead of refresh shocks. Then: rewrite ensemble.md §4 and sampler.md §6–7 for the new design, and retire the bias
+  operation sweep is ≲ 1e-4, and a weather refresh costs about 100 daily sweeps. Replica
+  prototype built and measured (ledger E21–E24, [replica_sampler.md](replica_sampler.md)):
+  prior-reversible weather process exact and tested; continuous pCN too slow at an acceptable
+  dispatch lag, so gated bursts; next: separate the weather lag from the capacity lag in the
+  probe (probe only replicas long after their burst, or subtract a θ = 0 reference), choose
+  the burst size and gate from a relaxation measurement per burst size, regime windows of
+  B ≥ 60 with their own gate, then move the sampler into `src/`. Then: rewrite ensemble.md §4 and sampler.md §6–7 for the new design, and retire the bias
   code (ĝ, ĥ, tables, lift, refits, trust region, post-correction, level-0 warmup,
   `device/src/bias_dev.jl`) and the capacity moves `kscale`/`kpeak`/`kop` as targets of the
   α = 0 density; record the learned bias in [retired.md](retired.md) with the reason (the
   precision it needs at r = 1e-3, ledger E16).
-- An explicit, controllable tilt of the weather toward expensive years (stress tests), as a
-  weight on the refresh draws.
+- An explicit, controllable tilt of the weather toward expensive years (stress tests): built in
+  the replica prototype as replica weights exp(λΦ) in the capacity drift (E24); to decide: the
+  functional Φ, and whether M = 4 replicas give usable weights (self-normalised, ESS).
 - Rao-Blackwellized capacity scores (averages over the exact line conditionals) to cut the
   per-sweep score noise.
 - Seasonal storage relaxes slowly at fixed (k, x) (τ ≳ 100 sweeps for hydro, PHS, H₂; ledger
@@ -57,6 +62,14 @@ concrete next steps. Update it at the end of every work session.
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 
 ## Log
+
+### 2026-11-04 (afternoon, replica prototype)
+
+- Replica Langevin sampler prototype (`scripts/replicas/`): M weather replicas sharing k,
+  prior-reversible weather process (pCN in the non-centred innovations, regime window draws),
+  compensated dispatch, gated weather bursts, lag probe with per-carrier step adaptation, stress
+  tilt; prior-invariance argument and tests, dispatch-lag scan, low/high run on chains40, tilt
+  demonstration (ledger E21–E24, [replica_sampler.md](replica_sampler.md)).
 
 ### 2026-11-04 (overnight session and morning)
 
