@@ -2175,11 +2175,14 @@ level, with the level's weather fixed. Needs the k fields and the units' v
 fields complete at the level. At α = 1 the bias change comes from the incremental
 bias cache `BC` (built from `s` if not given), which follows the committed moves.
 For tests: `select(kind, gi, i)` restricts the units, and `rec` (a vector) receives per
-move the drawn u, the line log density lf(u) − lf(0) and its log Jacobian part.
+move the drawn u, the line log density lf(u) − lf(0) and its log Jacobian part, the
+coordinate x of the sampler (u), its slice width `w` (NaN in the Metropolis form) and lower
+bound `lo`, and with `probe` (a function of x returning points y) lf(y) − lf(0) at those points,
+evaluated before the commit (`lfp`). `fix` replaces the slice draw by a given u (test_moves.jl).
 """
 function kscale_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC=nothing, κmin::Float64=1.0, w::Float64=0.3,
                        mh::Bool=false, σ::Float64=0.3, nprop::Int=1, order::Symbol=:shuffle, kinds::Symbol=:all,
-                       select=nothing, rec=nothing)
+                       select=nothing, rec=nothing, probe=nothing, fix=nothing)
     E = P.E
     ℓ = LM.ℓ
     lk, lv = P.lk[ℓ+1], P.lv[ℓ+1]
@@ -2238,10 +2241,12 @@ function kscale_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC
                 log(uu) < lf(up) - lf(u) && (u = up)
             end
         else
-            u = slice_scalar(rng, lf, 0.0, w, log(κmin / k0))
+            u = fix === nothing ? slice_scalar(rng, lf, 0.0, w, log(κmin / k0)) : Float64(fix)
         end
         rec === nothing || push!(rec, (; kind, gi, i, u, lf=lf(u) - lf(0.0),
-                                        logjac=kscale_logjac(n, u, kc0, clamp(k0 * exp(u), sp_.lo[i], sp_.hi[i]))))
+                                        logjac=kscale_logjac(n, u, kc0, clamp(k0 * exp(u), sp_.lo[i], sp_.hi[i])),
+                                        x=u, w=mh ? NaN : w, lo=log(κmin / k0),
+                                        lfp=probe === nothing ? nothing : [lf(y) - lf(0.0) for y in probe(u)]))
         u == 0.0 && continue
         nmoved += 1
         # commit: capacities, utilizations, residuals, cell sums, bias cache

@@ -5,6 +5,8 @@
 # against rebuilds, the reverse move with the opposite line density, the sweeps, and the
 # chain of repeated moves of one block against quadrature of its line density with the
 # Metropolis bias correction.
+# The density, reverse-move and cache checks of single block moves are also made by
+# test_moves.jl (wblock, B ≤ 4); this file keeps the directions, the VAR quadratic and the KS test.
 using Test, Random, LinearAlgebra, Statistics
 using ESMSampling
 const MW = ESMSampling
