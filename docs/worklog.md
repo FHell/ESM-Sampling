@@ -8,27 +8,21 @@ concrete next steps. Update it at the end of every work session.
 ## Open to-dos
 
 **Sampler design (decided direction, not yet built):**
-- Capacities by a Langevin step on the sampled scores instead of the learned bias, weather from
-  its prior by refresh ([system/ensemble.md](system/ensemble.md) §3.1,
-  [system/roadmap.md](system/roadmap.md) §1). Tested (ledger E19, E20): renewables meet from
-  different starts, but the dispatch lag biases the stationary capacities unless the step per
-  operation sweep is ≲ 1e-4, and a weather refresh costs about 100 daily sweeps. The user
-  approved the structure (2026-11-04). Replica prototype built and measured (ledger E22–E25,
-  [replica_sampler.md](replica_sampler.md)): prior-reversible weather process exact and tested;
-  continuous pCN too slow at an acceptable dispatch lag, so gated bursts; onwind and solar meet
-  from opposite starts, offwind, gas and batteries not yet, gas overbuilt by the dispatch lag.
-  Next: separate the weather lag from the capacity lag in the probe (probe only replicas long
-  after their burst, or subtract a θ = 0 reference) and average several probes; choose the
-  burst size and gate from a relaxation measurement per burst size; more replicas than active
-  ones; regime windows of B ≥ 60 with their own gate; a better gas score; then move the
-  sampler into `src/`. Then: rewrite ensemble.md §4 and sampler.md §6–7 for the new design, and retire the bias
-  code (ĝ, ĥ, tables, lift, refits, trust region, post-correction, level-0 warmup,
-  `device/src/bias_dev.jl`) and the capacity moves `kscale`/`kpeak`/`kop` as targets of the
-  α = 0 density; record the learned bias in [retired.md](retired.md) with the reason (the
-  precision it needs at r = 1e-3, ledger E16).
+- Replica–Langevin sampler in `src/replicas.jl` (`sampler = "replicas"`, sampler.md §11,
+  ensemble.md §4), with deterministic tests (`test/test_replicas.jl`, `:wproc` in
+  `test_moves.jl`). Next: campaign H4 on the cluster (prepared: low/high starts, 40 nodes daily
+  M = 8 and 4, 6-hourly M = 8; to be submitted on the rebuilt `model.h5` with the
+  wind-calibration fix, after which the prototype's carrier results, offwind in particular, are
+  rechecked); from its results the burst size and gate defaults, then 256 nodes
+  daily and the comparison with H2. Open: gas overbuilt in the prototype (a gas step of its own or
+  a Rao–Blackwellised score), the size of the gate's weather dependence, seasonal storage after a
+  burst. Then retire the bias code (ĝ, ĥ, tables, lift, refits, trust region, post-correction,
+  level-0 warmup, `device/src/bias_dev.jl`) and `kscale`/`kpeak`/`kop` as moves of the α = 0
+  density, and make `sampler = "replicas"` the default.
 - An explicit, controllable tilt of the weather toward expensive years (stress tests): built in
-  the replica prototype as replica weights exp(λΦ) in the capacity drift (E25); to decide: the
-  functional Φ, and whether M = 4 replicas give usable weights (self-normalised, ESS).
+  `src/replicas.jl` as replica weights exp(λΦ) in the capacity drift (`tilt_lambda`, Φ the
+  standardised annual mean residual load); to decide: the functional Φ, and whether M = 8
+  replicas give usable weights (self-normalised, ESS); campaign H9.
 - Rao-Blackwellized capacity scores (averages over the exact line conditionals) to cut the
   per-sweep score noise.
 - Seasonal storage at fixed (k, x) after the long-range moves and the storage pairs (ledger
@@ -63,8 +57,9 @@ concrete next steps. Update it at the end of every work session.
   once everything is built); the learned and adaptive families. Hand-written fused kernels
   deferred (the estimates promise large gains; feasibility note requested).
 - `:cellpairu1` compiles in about 290 s at 8 GB and stays out of the run set.
-- Device form of the Langevin capacity step (replaces the Metropolis capacity pass and the
-  planned `kop` port and per-carrier scales).
+- Device form of the replica sampler: the CPU reference is `src/replicas.jl` (weather process
+  with explicit noise, `langevin_update`, `follow_capacities!`; architecture.md §2); it replaces
+  the Metropolis capacity pass and the planned `kop` port and per-carrier scales.
 - Re-measure the compile times on a quiet machine (239 s / 149 s were measured under load).
 
 **HPC (PIK cluster, [system/hpc.md](system/hpc.md); campaigns H0–H9 in the ledger):**
@@ -147,6 +142,28 @@ concrete next steps. Update it at the end of every work session.
   on chain 4 for 3000 sweeps (ledger E27); the long runs as campaign H10 (`campaigns/H10/`,
   `scripts/mixing/opmix_hpc.jl`, smoke-tested locally through `hpc/run.sh` with a stop and a
   resume).
+
+### 2026-11-04 (replica–Langevin sampler in src/)
+
+Commits d833b50, f7d58c3, b7dcc27, a2e4c84, 515b1a1 (branch of the replica agent).
+
+- `src/replicas.jl`: the replica–Langevin sampler as the system's CPU sampler (`run_replicas`,
+  `sampler = "replicas"`): the prior-reversible weather process with explicit-noise building
+  blocks (pCN in the innovations, regime windows, FFBS option), the capacity score, the Langevin
+  update in w with its reflections, the dispatch-following maps, the gate on a measured
+  relaxation indicator (bounded by `replica_gate_max`), a lag probe of relaxed replicas averaged
+  over `replica_probe_avg` probes, 8 replicas by default, the stress tilt (λ = 0 bitwise
+  untilted), snapshots and resume, records and `summary_replicas.txt`. `operation_sweep!`
+  factored out of `fine_local_step` (bitwise the same steps). Config keys `sampler`,
+  `replica_*`, `langevin_*`, `tilt_*`.
+- Tests: `test/test_replicas.jl` (weather-process identities, score against finite differences,
+  Langevin update, following maps, gate/weights/adaptation, one step at λ = 0 and 2, snapshots);
+  the `:wproc` entry of `test_moves.jl`.
+- Campaign H4 prepared (`campaigns/H4/`), smoke-tested through `hpc/run.sh` in a simulated
+  layout (preempted twice, resumed from the snapshot).
+- Docs: ensemble.md §4 rewritten for the sampled ensemble (the bias in a retired note,
+  archived to `archive/learned_bias.md`, entry in retired.md), sampler.md §11, architecture,
+  config, data, testing §6, moves/weather.md, roadmap §1.
 
 ### 2026-11-04 (deterministic move checks)
 

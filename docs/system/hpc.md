@@ -253,6 +253,10 @@ a full-fidelity checkpoint: plain HDF5 data that survives code and Julia version
   creates the stop file, and the driver writes the snapshot at the next sweep boundary and
   exits with 75. The grace time must cover one sweep plus the write.
 
+The replica driver (`sampler = "replicas"`) follows the same contract with its own layout
+(every replica's state, the Langevin steps and the gates; [data.md](data.md) §5,
+[sampler.md](sampler.md) §11.5).
+
 > **Status: missing (device).** `run_device` writes no snapshot yet. On the device the state is
 > downloaded at each host checkpoint already; the snapshot adds the file write.
 

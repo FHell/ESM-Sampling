@@ -1,0 +1,25 @@
+# Campaign H4 (docs/campaigns.md, row H4; docs/system/hpc.md). Prepared locally; the commit of
+# the code is the one hpc/new_campaign.sh pins (it is recorded in every run.toml).
+id = "H4"
+question = "Does the replica–Langevin sampler (sampler = \"replicas\") bring chains from far-apart starts to the same capacities, and at what cost per step, at 40 nodes daily and 6-hourly?"
+design = """
+40 nodes (configs/chains40 model: haar basis, physical measure, heuristic start, no bias);
+one chain per run, low (heuristic ×0.5) and high (×2) starts; M = 8 weather replicas sharing k
+(staggered pCN bursts φ = 0.3 every 40 steps, regime windows B = 60 with half the bursts, gate on
+the relaxation indicator, lag probe every 20 steps averaged over 3 probes, Langevin step
+adapted in the warmup and frozen in production); all replica keys at their defaults.
+Lines (list.txt): daily M = 8 low/high (1500 + 3000 steps), daily M = 4 low/high (the same,
+against M = 8: more replicas than active ones), 6-hourly M = 8 low/high (800 + 1600 steps).
+8 cores each, preemptible array (resume from the snapshot). Estimated 6–10 h per daily line,
+12–20 h per 6-hourly line (local: 0.85 s and 3.1 s per replica step on 4 threads).
+Results: summary_replicas.txt per run (collected), out.h5 in the archive. Compare low and high
+per line: carrier totals over production, penalty-free cost, the probes' equilibrated scores
+r ŝ_eq/β_k∂K, active replicas, the replica weather features against the prior.
+Data: submit only on the rebuilt model.h5 (wind-calibration fix, docs/system/data_sources.md §2);
+on the current file 9 of 19 offwind nodes and 1 onwind node are calibrated into cut-out, which
+changes which carriers can meet. The local smoke test used the current file (mechanics only).
+Then (not in this submission): 256 nodes daily after the daily lines, and the comparison with
+the H2 LP optima.
+"""
+list = "campaigns/H4/list.txt"
+submit = "sbatch --array=1-6%6 hpc/jobs/cpu_array.sbatch H4 campaigns/H4/list.txt"

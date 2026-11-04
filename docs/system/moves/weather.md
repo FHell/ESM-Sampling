@@ -116,9 +116,18 @@ dispatchable units take up the change of the node residual). The dispatch lags a
 weather: a gap below 10 % of $\beta_k\partial K$ in the capacity scores needs $\theta\lesssim0.02$
 per operation sweep, about $10^4$ sweeps per independent weather year, while a single pCN step
 of $\varphi = 0.3$ relaxes in about 20 sweeps. The replica sampler therefore moves the weather in
-staggered bursts and gives a replica's scores zero weight for a fixed number of steps after its
-burst (a schedule that does not depend on the weather). The invariance argument, its tests and
-the measurements are in [../../replica_sampler.md](../../replica_sampler.md).
+staggered bursts on a fixed schedule and gives a replica's scores zero weight until its dispatch
+has relaxed ([../sampler.md](../sampler.md) §11.3); the gate acts on the drift weights only, never
+on the weather. The invariance argument and the prototype's measurements are in
+[../../replica_sampler.md](../../replica_sampler.md).
 
-> **Status: prototype.** In `scripts/replicas/replicas.jl` (`pcn_weather`, `regime_window`,
-> `weather_step`, `compensate!`), not in `src/` and not on the device.
+**Code** (`src/replicas.jl`): `z0_innovations`/`z0_from_innovations` (the innovation map, the
+recursion of `sample_weather`), `pcn_weather` (explicit normals or an rng: $\xi_e$ step by step,
+then $\xi_w$ per level), `regime_window` (explicit uniforms or an rng; `regime_window_messages`,
+`regime_window_probs`, `categorical`), `window_bounds` (uniform start from one uniform),
+`weather_process_step` (pCN, then the window, then FFBS), `compensate_weather!`. Tests:
+`test/test_replicas.jl` and the `:wproc` entry of `test/test_moves.jl`
+([../testing.md](../testing.md) §6).
+
+> **Status: missing (device).** Not on the device; the device port uses these functions as its
+> reference.

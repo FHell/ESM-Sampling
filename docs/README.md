@@ -7,10 +7,10 @@ onto the code. Agent and session rules are in [../CLAUDE.md](../CLAUDE.md).
 
 | document | content |
 |---|---|
-| [system/ensemble.md](system/ensemble.md) | the sampled measure: two temperatures, perfect-foresight dispatch per weather year, the learned bias, the reference measure, regularized constraints, zero-temperature limits |
+| [system/ensemble.md](system/ensemble.md) | the sampled measure: two temperatures, perfect-foresight dispatch per weather year, how it is sampled (weather replicas from the prior, a Langevin capacity step on the replica-averaged score, the stress tilt), the reference measure, regularized constraints, zero-temperature limits |
 | [system/model.md](system/model.md) | the energy model: fields, bases and levels, every cost term, the optional features, the data pipeline from PyPSA-Eur and the weather sources |
 | [system/weather_model.md](system/weather_model.md) | the multilevel weather model: anomalies, regime-switching VAR, detail models, non-centered coordinates, data map, fit and cache |
-| [system/sampler.md](system/sampler.md) | the sampler: exact line moves, invariance and compensation rules, sweeps, capacity and weather moves, bias learning and post-correction, adaptation, multi-chain runs |
+| [system/sampler.md](system/sampler.md) | the sampler: exact line moves, invariance and compensation rules, sweeps, capacity and weather moves, bias learning and post-correction (retired), adaptation, multi-chain runs, the replica–Langevin sampler (§11) |
 | [system/moves/README.md](system/moves/README.md) | index of the move families, with CPU and device availability |
 | [system/moves/coordinates.md](system/moves/coordinates.md) | atoms, single units, node angles, commitment |
 | [system/moves/pairs.md](system/moves/pairs.md) | same-node and cross-node pairs, localized re-routing, storage–generator pairs |
@@ -50,6 +50,7 @@ The other files are working notes, not a description of the system; where they a
   the port.
 - [replica_sampler.md](replica_sampler.md): the prototype of the replica Langevin sampler (M
   weather replicas sharing the capacities, prior-reversible weather process, lag probe, stress
-  tilt), the prior-invariance argument and the measurements (2026-11-04).
+  tilt), the prior-invariance argument and the measurements (2026-11-04); the sampler itself is
+  now `src/replicas.jl` ([system/sampler.md](system/sampler.md) §11).
 - [mixing_diagnosis.md](mixing_diagnosis.md): the diagnosis of the sampler's mixing at 40 nodes
   (2026-11-04) and the prototypes and measurements behind `kop` and the z0 block moves.
