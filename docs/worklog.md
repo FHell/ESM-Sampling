@@ -81,6 +81,10 @@ concrete next steps. Update it at the end of every work session.
 - Request `/p/projects` space; fill in the project and account names in hpc.md.
 
 **Tests and validation:**
+- Move-consistency suite `test/test_moves.jl` (agent, 2026-11-04): walk linearity, incremental =
+  global, curve reversibility, caches, for every family; it replaces `test_exact.jl` as the gate
+  (CLAUDE.md, testing.md, adding_a_move.md updated). No new statistical tests until the
+  performance work is much further (user, 2026-11-04).
 - Exactness tests do not detect small invariance violations (missed the `kpeak` width and the
   storage walk bug): longer reference runs (ledger P6).
 - Sweeps to equilibrium against network size and resolution; 256-node ERA5 run (ledger P7, P8).
@@ -88,8 +92,9 @@ concrete next steps. Update it at the end of every work session.
 **Housekeeping:**
 - `CLAUDE.md` still says many `Config` defaults are legacy values; check and update.
 - `docs/reactant_design.md` mentions archived notes by bare file name in its text.
-- Worktrees to remove when done: `.claude/worktrees/gpu-timing`,
-  `.claude/worktrees/agent-af45abb1d0d9c1d90` (review scripts, branch 72e12c2, to merge or drop).
+- Worktrees to remove when done: `.claude/worktrees/gpu-timing` (GPU timing copy), and the
+  locked worktrees of finished agents whose branches are merged (review 72e12c2, storage
+  09790f6; their outputs are copied to `results/review/` and `results/smix/`).
 - Julia MCP sessions of agents restart at nice 0 with 16 threads unless every call passes the
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 
