@@ -2,7 +2,7 @@
 # the same rounds, the same uniforms, one compiled program per family; prints the compile time and the
 # largest relative difference of the loop state. 40 nodes × 6 h, all model terms (CASE=A, LINEAR
 # families) or without line losses and lossy links (CASE=B, share-preserving), 2 chains.
-#   FAMS=tsoc,tpot (default: the case's families), NSITE (default 60) sites per round, NROUND (2).
+#   FAMS=tsoc,tpot (default: every family of the case), NSITE (default 60) sites per round, NROUND (2).
 # Run: cd device && nice -n 19 julia --project=. -t 4 test/test_reactant_fams.jl
 include("setup40.jl")
 using Test, Random
@@ -27,11 +27,26 @@ D.TDIR_SOURCE[] = (fam, τ, rng, c) -> begin
     d = randn(rng, sys.N); d .-= sum(d) / sys.N; d ./= sqrt(sum(abs2, d))
     D.tdir_g(sys, d)
 end
-deffams = CASE == "A" ? (:spair, :tsocL, :tpotL, :sblkL2, :sblkL8, :tdirL, :tdir0) : (:tsoc, :tpot, :sblk2, :sblk8, :tdir, :tdir0)
+Hθ = ML.haar_theta(P.E)                                      # sparse angle sites: atoms of random modes
+Dm = randn(MersenneTwister(5), P.E.sys.N, 4); Dm .-= sum(Dm; dims=1) ./ P.E.sys.N
+D.SPARSE_SOURCE[] = D.sparse_source(P, LM, ix; atoms=() -> Any[(Hθ, ML.localize(Dm, Hθ))])
+D.BLOCK_GROUPS[] = D.block_groups(P, ix)
+for L in D.BLOCK_LENGTHS
+    D.set_profiles!(L, hcat([vcat(0.0, rand(MersenneTwister(L + j), L - 1) .- 0.3, 0.0) for j in 1:2]...))
+end
+for L in D.DSHAPE_LENGTHS
+    Φ = randn(MersenneTwister(100 + L), L, 3); Φ .-= sum(Φ; dims=1) ./ L
+    D.set_dshapes!(L, Φ)
+end
+deffams = CASE == "A" ? (:spair, :tsocL, :tpotL, :sblkL2, :sblkL8, :sblkgL2, :tdirL, :tdir0, :tcutL, :tcutLw, :xloc, :xpair, :dshp4, :slongL) :
+          (:gen0, :pair0, :soc, :link, :theta3, :theta5, :theta, :gen, :uc, :pair, :spair0, :spair, :tsoc, :tpot, :sblk2, :sblk4, :sblk8,
+           :sblk16, :sblk32, :sblkg2, :sblkg8, :tdir, :tdir0, :tcut, :tcutw, :xloc, :xlocc, :xpair, :dshp2, :dshp8, :slong,
+           :cell1, :cellu1, :cell2, :cellu2, :cell3, :cellpairu2, :cellpairu3, :cellpairu1)
 fams = haskey(ENV, "FAMS") ? Tuple(Symbol.(split(ENV["FAMS"], ","))) : deffams
 
 @testset "Reactant (CPU backend) = Julia arrays, case $CASE" begin
     for f in fams
+      try
         pl = D.plan(M, S, P.βv; families=(f,), cls=cls, bmax=Dict(f => NSITE), cells=ci)
         f in pl.fams || (println("  $f: no sites"); continue)
         rounds = NamedTuple{(f,)}((pl.sched[f][1:min(NROUND, end)],))
@@ -55,5 +70,9 @@ fams = haskey(ENV, "FAMS") ? Tuple(Symbol.(split(ENV["FAMS"], ","))) : deffams
         flush(stdout)
         @test worst <= 1e-10
         GC.gc()
+      catch err
+        println("  $f: FAILED: ", first(sprint(showerror, err), 600)); flush(stdout)
+        @test false
+      end
     end
 end
