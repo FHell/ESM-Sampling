@@ -1064,7 +1064,7 @@ end
 """
     write_replica_snapshot(C, cfg, P, data) -> path
 
-Snapshot of the replica driver (`boundary!` writer): `sampler = "replicas"`, the step counter,
+Snapshot of the replica driver (`boundary!` writer): `driver = "replicas"`, the step counter,
 per chain its start kind, the monitored trace, the replica records and probe records so far,
 the Langevin steps, the gates and every replica's state.
 """
@@ -1074,7 +1074,7 @@ function write_replica_snapshot(C::Checkpointer, cfg::Config, P::Problem, data::
     atomic_write(C.path; sync=true) do tmp
         h5open(tmp, "w") do f
             f["version"] = SNAPSHOT_VERSION
-            f["sampler"] = "replicas"
+            f["driver"] = "replicas"
             f["phase"] = String(data.phase)
             f["it"] = data.it
             f["where"] = where_
@@ -1126,7 +1126,7 @@ the seed and the sizes.
 function read_replica_snapshot(path::String, cfg::Config, P::Problem)
     (isempty(path) || !isfile(path)) && return nothing
     h5open(path, "r") do f
-        (haskey(f, "sampler") && read(f["sampler"]) == "replicas") || error("snapshot $path is not a snapshot of the replica driver")
+        (haskey(f, "driver") && read(f["driver"]) == "replicas") || error("snapshot $path is not a snapshot of the replica driver")
         v = read(f["version"])
         v == SNAPSHOT_VERSION || error("snapshot $path: format version $v, the code reads $SNAPSHOT_VERSION")
         read(f["config/levels"]) == reduce(hcat, [[a, b] for (a, b) in cfg.levels]) || error("snapshot $path: levels differ from the configuration")

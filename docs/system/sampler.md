@@ -548,7 +548,10 @@ waits for its indicator again).
 > [../replica_sampler.md](../replica_sampler.md); its gate was a fixed step count and its probe
 > did not separate the weather lag): onwind and solar meet from starts 4× apart in 330 steps,
 > offwind, gas and batteries not yet, gas stays overbuilt (equilibrated marginal value ≈ 0 against
-> its capex). The `src/` sampler with the relaxation gate, the separated probe and 8 replicas is
+> its capex). These carrier results were obtained on a `model.h5` with a wind-calibration defect
+> (9 of 19 offwind nodes and 1 onwind node calibrated into turbine cut-out,
+> [data_sources.md](data_sources.md) §2) and are to be rechecked on the rebuilt data; the
+> statements about the sampler itself (prior invariance, lag, relaxation, cost per step) stand. The `src/` sampler with the relaxation gate, the separated probe and 8 replicas is
 > campaign H4 ([../campaigns.md](../campaigns.md)). Open: a Rao–Blackwellised score, a gas step of
 > its own, the relaxation of seasonal storage after a burst, and the device form of the whole
 > step ([device.md](device.md)).

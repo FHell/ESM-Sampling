@@ -147,6 +147,13 @@ the small number of active replicas and the short run.
 
 ## 5. Run on chains40 (E24)
 
+> **Data caveat.** These runs (and E22–E25 generally) used a `model.h5` in which 9 of the 19
+> offwind nodes and 1 onwind node were calibrated into turbine cut-out (they produce less as the
+> wind rises; fixed in [system/data_sources.md](system/data_sources.md) §2, files to be
+> rebuilt). The statements about the sampler (prior invariance, lag, relaxation, cost) stand;
+> which carriers meet from far starts, offwind in particular, is to be rechecked on the rebuilt
+> data.
+
 Setup: `configs/chains40.toml` without bias (40 nodes daily, physical measure); starts at the
 heuristic capacities ×0.5 (low) and ×2 (high), 3.3–3.97× apart per carrier; M = 4 replicas
 per chain with fresh prior weather draws, compensated, 40 operation sweeps each at fixed k;

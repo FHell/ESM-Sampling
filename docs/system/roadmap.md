@@ -9,8 +9,10 @@ when done, and the affected document is updated in the same change.
 
 - **The replica–Langevin sampler** ([ensemble.md](ensemble.md) §4, [sampler.md](sampler.md) §11;
   `src/replicas.jl`, `sampler = "replicas"`). Built on the CPU with deterministic tests; not yet
-  measured beyond the prototype (ledger E22–E25). Open: whether low and high starts meet in all
-  carriers (campaign H4), whether gas stays overbuilt (its equilibrated marginal value was ≈ 0
+  measured beyond the prototype (ledger E22–E25; its carrier results, offwind in particular,
+  came from the `model.h5` with the wind-calibration defect and are to be rechecked on the
+  rebuilt data). Open: whether low and high starts meet in all carriers (campaign H4, on the
+  rebuilt data), whether gas stays overbuilt (its equilibrated marginal value was ≈ 0
   against its capex in the prototype), the size of the gate's weather dependence (§4.4 of
   ensemble.md), a Rao–Blackwellised score, the relaxation of seasonal storage after a burst, the
   device form, the choice of $\Phi$ and $M$ for the stress tilt (campaign H9); then the retirement

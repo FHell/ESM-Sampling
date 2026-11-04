@@ -220,7 +220,7 @@ the state vectors against the configuration and the problem.
 function read_snapshot(path::String, cfg::Config, P::Problem)
     (isempty(path) || !isfile(path)) && return nothing
     h5open(path, "r") do f
-        haskey(f, "sampler") && error("snapshot $path was written by the $(read(f["sampler"])) driver, not by run_chains")
+        haskey(f, "driver") && error("snapshot $path was written by the $(read(f["driver"])) driver, not by run_chains")
         v = read(f["version"])
         v == SNAPSHOT_VERSION || error("snapshot $path: format version $v, the code reads $SNAPSHOT_VERSION")
         lv = read(f["config/levels"])

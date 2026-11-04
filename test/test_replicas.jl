@@ -307,7 +307,7 @@ if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
         @test length(A.states) == 2 && A.resume_states === nothing
         ηA = copy(A.sets[1].ηw)
         @test h5open(f -> read(f["chains/1/eta_w"]), c.checkpoint) == ηA
-        @test h5open(f -> (read(f["sampler"]), read(f["it"]), read(f["restarts"])), c.checkpoint) == ("replicas", 2, 0)
+        @test h5open(f -> (read(f["driver"]), read(f["it"]), read(f["restarts"])), c.checkpoint) == ("replicas", 2, 0)
         @test_throws ErrorException RP.read_snapshot(c.checkpoint, c, PR)             # not a run_chains snapshot
         c = rcfg()
         B = RP.run(c; hook=stop_at(4)(c))

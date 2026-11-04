@@ -15,6 +15,9 @@ against M = 8: more replicas than active ones), 6-hourly M = 8 low/high (800 + 1
 Results: summary_replicas.txt per run (collected), out.h5 in the archive. Compare low and high
 per line: carrier totals over production, penalty-free cost, the probes' equilibrated scores
 r ŝ_eq/β_k∂K, active replicas, the replica weather features against the prior.
+Data: submit only on the rebuilt model.h5 (wind-calibration fix, docs/system/data_sources.md §2);
+on the current file 9 of 19 offwind nodes and 1 onwind node are calibrated into cut-out, which
+changes which carriers can meet. The local smoke test used the current file (mechanics only).
 Then (not in this submission): 256 nodes daily after the daily lines, and the comparison with
 the H2 LP optima.
 """

@@ -11,7 +11,9 @@ concrete next steps. Update it at the end of every work session.
 - Replica–Langevin sampler in `src/replicas.jl` (`sampler = "replicas"`, sampler.md §11,
   ensemble.md §4), with deterministic tests (`test/test_replicas.jl`, `:wproc` in
   `test_moves.jl`). Next: campaign H4 on the cluster (prepared: low/high starts, 40 nodes daily
-  M = 8 and 4, 6-hourly M = 8); from its results the burst size and gate defaults, then 256 nodes
+  M = 8 and 4, 6-hourly M = 8; to be submitted on the rebuilt `model.h5` with the
+  wind-calibration fix, after which the prototype's carrier results, offwind in particular, are
+  rechecked); from its results the burst size and gate defaults, then 256 nodes
   daily and the comparison with H2. Open: gas overbuilt in the prototype (a gas step of its own or
   a Rao–Blackwellised score), the size of the gate's weather dependence, seasonal storage after a
   burst. Then retire the bias code (ĝ, ĥ, tables, lift, refits, trust region, post-correction,

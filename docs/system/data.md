@@ -122,7 +122,7 @@ every write. Vectors are the coefficient vectors of the state at its level (the 
 
 | path | content |
 |---|---|
-| `version`, `sampler` | layout version (1), `"replicas"` |
+| `version`, `driver` | layout version (1), `"replicas"` |
 | `phase`, `it`, `where`, `restarts`, `written`, `co2_price`, `config/seed`, `config/levels`, `nchains` | as above; `phase = "replicas"`, `it` the replica steps completed (above `mlda_warmup` is production; 0: after the initialisation) |
 | `chains/<c>/start`, `replicas`, `Q` | start kind, number of replicas, the monitored trace so far |
 | `chains/<c>/eta_w`, `since`, `window`, `active` | Langevin step per k field; per replica steps since its last burst, whether it had a regime window, active flag |
