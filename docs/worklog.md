@@ -2,7 +2,7 @@
 
 What was done, by date, with the commits, and the open to-dos that have not been tackled yet.
 Design-level open problems are in [system/roadmap.md](system/roadmap.md), experiments in
-[experiments.md](experiments.md); this file is the running record of the work and its
+[experiments.md](experiments.md) and campaigns in [campaigns.md](campaigns.md); this file is the running record of the work and its
 concrete next steps. Update it at the end of every work session.
 
 ## Open to-dos

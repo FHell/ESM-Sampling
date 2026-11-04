@@ -2,8 +2,8 @@
 
 How the sampler is run on the PIK cluster (HPC2024, Slurm): the environment, where code, data,
 caches and results live, the job types, checkpointing, how every run is recorded, and how
-results come back. The scripts are in `hpc/`; the campaigns are rows H0–H9 of the experiment
-ledger ([../experiments.md](../experiments.md)). User `hellmann`, project directory `coen`
+results come back. The scripts are in `hpc/`; the campaigns are the rows of the campaign
+list ([../campaigns.md](../campaigns.md)). User `hellmann`, project directory `coen`
 (`/p/projects/coen`), Slurm account `icone`.
 
 > **Status: partial.** The scripts exist, and the CPU driver's shared cache (§4) and state
@@ -203,7 +203,7 @@ of 4) and finished with exit 0.
   refuses files above 5 MB and a campaign above 50 MB (`ESM_COLLECT_MAX_MB`,
   `ESM_COLLECT_TOTAL_MB`), and commits in the clone. It never pushes: the user reviews and
   pushes from the cluster, and pulls locally. Large outputs stay in `archive/`.
-- **Experiment ledger** ([../experiments.md](../experiments.md)): one row per campaign, whose
+- **Campaign list** ([../campaigns.md](../campaigns.md)): one row per campaign, whose
   record column points to `campaigns/⟨id⟩/`. The work log notes what was submitted.
 
 ## 7. State snapshots and resume

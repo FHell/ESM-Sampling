@@ -1,9 +1,12 @@
 # Ledger of experiments
 
-One row per experiment: the question, the setup, the result in one line, and where the full
-record lives (notes, logs, commits). Results that changed the system are described in
-`docs/system/`; this ledger records how they were obtained. Add a row when an experiment is
-planned, and update it when it has run. Outputs under `results/` are not versioned.
+Experiments find out what to build: diagnostics, prototypes, and measurements that decide a
+design. Runs that produce results (validation, baselines, scaling, production) are measurement
+campaigns, listed in [campaigns.md](campaigns.md); the line is not strict. One row per
+experiment: the question, the setup, the result in one line, and where the full record lives
+(notes, logs, commits). Results that changed the system are described in `docs/system/`; this
+ledger records how they were obtained. Add a row when an experiment is planned, and update it
+when it has run. Outputs under `results/` are not versioned.
 
 ## Run
 
@@ -36,21 +39,9 @@ planned, and update it when it has run. Outputs under `results/` are not version
 | E25 | 2026-11-04 | stress tilt: capacities against ρ^x e^{λΦ} through replica weights | E24 low end state, 50 steps at ηw = 2e-4, λ = 0 and λ = 2 with the same streams; Φ = standardised annual mean residual load | weather paths bitwise identical; weighted Φ 0.27 → 0.56 sd; drift +5.8 % (gas), +4.3 % (offwind) of β_k∂K; gas +2.0 GW, onwind +1.6 GW after 50 steps; weight ESS 1.2 (1.5 active replicas); λ = 0 reproduces the plain scheme bitwise | [replica_sampler.md](replica_sampler.md) §4; `scripts/replicas/tilt_demo.sh`; `results/replicas/tilt_lam*.jls` |
 | E26 | 2026-11-04 | do the move families pass deterministic single-move exactness checks | `test/test_moves.jl`: every family, 20 sites, setup A (`haar_poc` level 1, bias) and B (5-node sub-network, flow basis, losses, lossy links, gas commitment, adapted modes); walk linearity, incremental = global, reversibility (same choices, excess, round trip, shifted density, inverse Jacobians, slice width), caches after a sweep | three failures on main, all in B: (1) `kop` ignored the commitment walls of its compensators (a solar move u = 0.01 changed the log target by 13 577 nats, its line density said −22); fixed (`kop_uc`); (2) with commitment, the storage mask of the walk was misaligned (the walls of a non-following generator entry come before the storage secondaries), so `spair`/`tsocL` interpolated balance roots across storage kinks, 0.18 and 0.79 nats; fixed (`MoveWS.soff`); (3) the event walk of requirement-tracking moves leaves up to ~1e-5 nats between points (weather moves), open. The reintroduced `kpeak` width, storage-split and `soc_qadj` bugs fail the suite | [system/testing.md](system/testing.md) §5; `test/test_moves.jl` |
 
-## Running and planned
+## Planned
 
 | id | status | question | design | record |
 |---|---|---|---|---|
 | P5 | planned | `tsoc` dense against slope-jump on the GPU; `tpot` without the padded commitment columns | `profile_families.jl` | [system/performance.md](system/performance.md) §7 |
-| P6 | planned | sensitivity of the exactness tests | longer reference runs, references equilibrated in the storage and dump directions | [system/roadmap.md](system/roadmap.md) §1 |
-| P7 | planned | sweeps to equilibrium against network size; wall time to stationarity against the finest step; memory for full Europe hourly | [system/roadmap.md](system/roadmap.md) §7 | — |
-| P8 | prepared | first full-resolution run, 256 nodes hourly with ERA5 | `configs/full256_era5.toml` | [archive/full_resolution_run.md](archive/full_resolution_run.md), [system/roadmap.md](system/roadmap.md) §6 |
-| H0 | GPU half passed; CPU half running (HPC) | does the environment work offline on CPU and GPU nodes | precompiled depot from a login node; `hpc/jobs/h0_cpu.sbatch` (offline load, CPU tests, smoke run through `run.sh`), `hpc/jobs/h0_gpu.sbatch` (Reactant on the H100, fast-family profile) | GPU (job 2902915, 4.6 min): offline, CUDA 13.1 runtime on driver 580.126 (CUDA 13.0), fast families 0.025 s/sweep at 40 × 6 h with 4 chains (laptop 0.57 s), compile 88 s then 4–12 s per family; XLA persistent compilation cache not exercised yet | `/p/tmp/hellmann/esm/runs/H0/h0_gpu_profile/report.txt`; [system/performance.md](system/performance.md) §7 |
-| H1 | planned (HPC) | CPU throughput per chain against threads and chains per node | 40 and 256 nodes, daily and 6 h; threads 4–64 per chain, 1–16 chains per node; sweeps/s and memory | [system/hpc.md](system/hpc.md) §5 |
-| H2 | planned (HPC) | reference LP optima (HiGHS) per network, resolution and weather year | 40, 256 nodes (later 512, 1024); daily, 6 h, 1 h; one build job per case; cached | [system/validation.md](system/validation.md) |
-| H3 | planned (HPC) | autocorrelation times of the operation at fixed (k, x), long runs | E17 protocol, 5000+ sweeps, job array over chains, sizes and resolutions | E17 |
-| H4 | planned (HPC) | the replica–Langevin sampler at scale | after the prototype is merged: 40 nodes daily → 6 h → 256 nodes; low/high starts; against H2 | [worklog.md](worklog.md) |
-| H5 | planned (HPC) | device throughput on the H100 | chains × replicas batch scaling, FP64 against the Float32 switch, memory per chain, 40 and 256 nodes, all families | [system/performance.md](system/performance.md) §7 |
-| H6 | planned (HPC) | sweeps to equilibrium against network size and finest step | 40, 256, 512, 1024 nodes; 24, 12, 6, 3, 1 h | P7, [system/roadmap.md](system/roadmap.md) §7 |
-| H7 | planned (HPC) | first full-resolution run, 256 nodes hourly with ERA5 | ERA5 from the cluster's ERA5 folder (`scripts/prepare_era5.py` as a build job), `configs/full256_era5.toml` | P8 |
-| H8 | planned (HPC) | sensitivity of the exactness tests | long reference runs as job arrays | P6 |
-| H9 | planned (HPC) | design under stressed weather | the explicit weather tilt (λ > 0) once built | [system/ensemble.md](system/ensemble.md) §3.1 |
+| P6 | deferred (no new statistical tests for now) | sensitivity of the exactness tests | longer reference runs, references equilibrated in the storage and dump directions | [system/roadmap.md](system/roadmap.md) §1 |

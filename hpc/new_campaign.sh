@@ -25,14 +25,14 @@ rec="$ESM_CODE/campaigns/$id"
 mkdir -p "$rec"
 if [ ! -f "$rec/campaign.toml" ]; then
     cat > "$rec/campaign.toml" <<EOF
-# Campaign $id (docs/experiments.md, row $id; docs/system/hpc.md)
+# Campaign $id (docs/campaigns.md, row $id; docs/system/hpc.md)
 id = "$id"
 commit = "$commit"
 created = "$(date -Iseconds)"
 code = "$cdir/code"
 runs = "$ESM_SCRATCH/runs/$id"
 archive = "$ESM_PROJ/archive/$id"
-question = ""        # fill in: the ledger row's question
+question = ""        # fill in: the question of the row in docs/campaigns.md
 design = ""          # fill in: configurations, sizes, seeds, resources
 EOF
 fi
