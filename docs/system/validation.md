@@ -172,20 +172,54 @@ LP of `solve_lp` (`src/lp.jl`), built by `lp_build` from one operation block per
 - **MGA** (`mga_sweep!`): on the solved model, the bound capex + Σ w opex ≤ (1 + ε) C* is
   added and, for each ε and carrier (k field), the total capacity Σ_i k_f[i] is minimised and
   maximised; the model is reused (only the bound and the objective change). The capacity per
-  country is recorded at every extreme. HiGHS's interior-point solver HiPO often ends these
-  capacity objectives with `OTHER_ERROR` (dual residuals after postsolve) at a primal-feasible
-  point; such a solve is repeated with IPX without presolve, which converges on them.
+  country is recorded at every extreme. The bound is written in units of
+  $S = 10^{\lfloor\log_{10}C^\ast\rfloor-5}$ €/a, so that its right-hand side is about 1e5 like the
+  other rows': unscaled (right-hand side 1e11), HiGHS's interior-point solvers HiPO and IPX
+  stall on the maximisations at 40 nodes daily ("no progress", an infeasible point). A solve
+  that does not end `OPTIMAL` is repeated with IPX without presolve; a primal-feasible point
+  within the bound (relative 1e-6) is kept with the status `feasible:<status>` (HiPO often
+  ends a capacity objective with `OTHER_ERROR` at such a point: dual residuals after
+  postsolve), anything else is recorded as failed.
+
+> **Status: partially verified.** On the 5-node test problem every MGA solve ends optimal. At
+> 40 nodes daily (2013, ε = 5 %) with the scaled bound: onwind min `OPTIMAL` (−45 %, 8 min),
+> onwind max (+50 %) and gas max (+117 %) feasible points exactly at the bound, HiPO status
+> `OTHER_ERROR`, 5–7 min each; the maxima of the other carriers are untested locally (three of
+> them together did not finish in 29 min on the loaded laptop). Without the scaling the
+> maxima failed. Untried: IPX with crossover, a dual-simplex re-solve warm-started from a
+> basis (it needs a crossover of the optimum first), tighter capacity boxes.
+
+**MGA with open solvers: what others report.** PyPSA's `optimize_mga` adds the same kind of
+budget, on `n.statistics` capex + opex with the fixed costs on both sides, and recommends
+slacks of 2–20 % ([PyPSA docs, MGA](https://docs.pypsa.org/latest/user-guide/optimization/modelling-to-generate-alternatives/));
+its `optimize_mga_in_direction` explores the near-optimal space along weighted directions.
+Neumann & Brown ([2021, EPSR 190](https://arxiv.org/abs/1910.01891)) bound carrier and region
+groups with an ε-constraint method on a PyPSA-Eur model; they
+report no open-solver settings. PyPSA's troubleshooting guide notes that HiGHS can struggle on
+large problems and recommends the interior-point method without crossover and clipping tiny
+`p_max_pu` values ([PyPSA troubleshooting](https://docs.pypsa.org/stable/user-guide/troubleshooting/)).
+Bröchin, Pickering, Tröndle & Pfenninger ([2022, arXiv:2211.12299](https://arxiv.org/abs/2211.12299))
+name the numerical range, sparsity and degeneracy as what makes energy-system LPs hard, and
+improve tractability with an automatic rescaling of the model; barrier without crossover is
+fast but changes the structure of the optimal solution. Funplex
+([2024, arXiv:2406.19809](https://arxiv.org/abs/2406.19809)) explores near-optimal spaces with
+a multi-objective simplex to avoid the independent re-solves of standard MGA. We found no
+report of HiGHS-specific MGA failures or fixes (searches of the PyPSA docs and issues, Calliope
+SPORES, HiGHS); the budget-row scaling above is our own fix, in line with the rescaling
+advice.
 - **Not in the LP:** line losses and soft thermal limits (hard limits; a configuration with
   them is solved without them and the summary lists them as ignored). Renewable curtailment is
   free in the LP; the sampler's energy model charges curtailed output as nodal dump at
-  $c_{m dump}$ plus the renewable's marginal cost, so the sampler's cost at the LP solution
+  $c_{
+m dump}$ plus the renewable's marginal cost, so the sampler's cost at the LP solution
   is the LP objective plus `curtail_cost_eur` (about 0.6 % of the cost at 40 nodes daily; the
   test checks the identity to 1e-5).
 
 **PyPSA-Eur's** (`scripts/pypsa_baseline.py`, campaign H2b). PyPSA solves the composed network
 of the build (`resources/esm256/networks/composed_2050.nc`, 2013) with HiGHS, configured to our
 scope (§2.2): lines and DC links at their current ratings, a load-shedding generator at every
-bus at our $c_{m shed}$, the build's CO₂ cap (or none, or a price), the time series averaged
+bus at our $c_{
+m shed}$, the build's CO₂ cap (or none, or a price), the time series averaged
 over blocks of 24, 6, 3 or 1 h (PyPSA-Eur's `average_every_nhours`). MGA as PyPSA's
 `optimize_mga` (budget on capex + opex including the fixed cost of the existing fleet), on one
 model with the budget's right-hand side and the objective changed per solve; carrier groups

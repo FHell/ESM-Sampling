@@ -145,7 +145,7 @@ end
     mga_sweep!(lpm, E, C, eps, fields; done, on_result, fallback) -> lpm
 
 MGA envelopes on a built and solved LP `lpm` (`lp_build`, optimum `C`): adds the cost bound
-`obj ≤ (1 + ε) C` and, for every ε in `eps` and k field `f` in `fields` (indices into
+`obj ≤ (1 + ε) C` (scaled to a right-hand side of about 1e5) and, for every ε in `eps` and k field `f` in `fields` (indices into
 `E.kspecs`), minimises and maximises the total capacity `Σ_i k_f[i]`. The model is reused:
 only the bound's right-hand side and the objective change between the solves (HiGHS's
 interior-point solver starts each solve afresh).
@@ -166,11 +166,14 @@ function mga_sweep!(lpm, E::EnergyModel, C::Float64, eps, fields; done=Set{Tuple
                     on_result=(a...) -> nothing, fallback=LP_FALLBACK)
     model = lpm.model
     c0 = constant(lpm.obj)
-    cb = @constraint(model, lpm.obj <= (1 + first(eps)) * C)
+    # the bound in units of S = 10^(⌊log₁₀ C⌋ − 5) €/a, so that its right-hand side is about 1e5
+    # like the other rows': unscaled (1e11) HiPO and IPX stall on the maximisations
+    S = 10.0^(floor(log10(abs(C))) - 5)
+    cb = @constraint(model, (1 / S) * lpm.obj <= (1 + first(eps)) * C / S)
     defaults = [k => get_attribute(model, k) for (k, _) in fallback]
     optimal(m) = termination_status(m) in (MOI.OPTIMAL, MOI.ALMOST_OPTIMAL)
     for ε in eps
-        set_normalized_rhs(cb, (1 + ε) * C - c0)
+        set_normalized_rhs(cb, ((1 + ε) * C - c0) / S)
         for f in fields, sense in (:min, :max)
             (Float64(ε), f, sense) in done && continue
             @objective(model, sense == :min ? MIN_SENSE : MAX_SENSE, sum(lpm.kv[f]))

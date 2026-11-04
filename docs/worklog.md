@@ -148,7 +148,13 @@ concrete next steps. Update it at the end of every work session.
 - Found: with `ESM_LP_THREADS` set, every HiGHS solve failed (`OTHER_ERROR`: "global scheduler
   has already been initialized"), so every LP on the cluster would have failed; fixed in
   `lp_model` (scheduler reset). HiPO ends MGA capacity objectives often with `OTHER_ERROR` at a
-  feasible point: retried with IPX without presolve.
+  feasible point: retried with IPX without presolve, feasible points within the bound kept.
+- Open: MGA maximisation at 40 nodes daily. With the budget unscaled (right-hand side 1e11)
+  HiPO and IPX stall ("no progress", infeasible point); with the budget in units of
+  10^(⌊log₁₀C⌋−5) onwind min ends optimal, onwind and gas max at feasible points on the bound
+  (5–8 min each); the other maxima untested (validation.md §2.7, with a short literature note).
+  Next if they fail on the cluster: IPX with crossover, dual simplex warm-started from a
+  crossed-over optimum, tighter boxes.
 
 ### 2026-11-04 (afternoon, device port)
 
