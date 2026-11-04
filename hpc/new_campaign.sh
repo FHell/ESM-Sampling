@@ -35,6 +35,15 @@ archive = "$ESM_PROJ/archive/$id"
 question = ""        # fill in: the question of the row in docs/campaigns.md
 design = ""          # fill in: configurations, sizes, seeds, resources
 EOF
+elif ! grep -q '^commit = ' "$rec/campaign.toml"; then
+    # a campaign prepared in the repository (question, design): add the cluster fields
+    cat >> "$rec/campaign.toml" <<EOF
+commit = "$commit"
+created = "$(date -Iseconds)"
+code = "$cdir/code"
+runs = "$ESM_SCRATCH/runs/$id"
+archive = "$ESM_PROJ/archive/$id"
+EOF
 fi
 echo "new_campaign: $id at $(git -C "$ESM_CODE" rev-parse --short "$commit"); code in $cdir/code"
 echo "Fill in $rec/campaign.toml, then submit jobs from hpc/jobs/ with CAMPAIGN=$id."

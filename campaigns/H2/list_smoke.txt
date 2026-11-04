@@ -1,0 +1,1 @@
+campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=2013 eps=0.05 carriers=onwind

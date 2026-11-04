@@ -1,0 +1,10 @@
+# Campaign H2b (docs/campaigns.md): PyPSA-Eur's own optimum and MGA on its composed network esm256
+# (256 clusters, the 10-country region, weather year 2013), configured to our scope
+# (scripts/pypsa_baseline.py; docs/system/validation.md §2.2, §2.7). The resolution is an argument
+# of each case (campaigns/H2b/list.txt).
+network = "${ESM_PYPSA_EUR}/resources/esm256/networks/composed_2050.nc"
+out = "results/h2b/pypsa256/out.h5"
+resolution = "24h"
+co2 = "cap"               # PyPSA-Eur's CO2Limit of the build (co2_budget 2050: 5e7 t); its dual is the CO2 price
+load_shedding = 3000.0    # our c_shed
+line_expansion = false    # AC lines and DC links at their current ratings

@@ -149,8 +149,95 @@ curtailment; line loading distributions and cross-border flows; the seasonal H�
 charge. Our uncertainties are the MCSE of §1 plus the ensemble spread; PyPSA's are the
 year-to-year spread and the MGA envelope.
 
-> **Status: missing.** None of §2 has been carried out. Missing pieces: the PyPSA-Eur
-> time-series import mode of the extractor, PyPSA-Eur solves of the imported networks,
-> stacked multi-year and MGA runs, ERA5 cutouts for many years (HPC), and the stabilization of
-> the $\alpha = 1$ bias. What exists: the convergence diagnostics and the multi-chain CPU driver, the
-> LP-dual output for §2.3, and the ERA5 weather import (`prepare_era5.py`).
+### 2.7 The LP baselines as built
+
+**Ours** (`src/lp_baseline.jl`, `scripts/lp_baseline.jl`, campaign H2). The capacity-expansion
+LP of `solve_lp` (`src/lp.jl`), built by `lp_build` from one operation block per weather year
+(`lp_operation!`) on shared capacities:
+
+- **Weather.** A historical year of the model file (`historical_weather`): the hourly fields
+  `weather/<field>/data` averaged over the steps of the level (`aggregate`, as in the
+  weather-model fit), then the data map (load ≥ 0, availabilities in [0, 1]). At a spatially
+  complete level this is the weather model's training data of that year at that level, to
+  round-off (`test/test_lp_baseline.jl`). The LP's level is the configuration's reference
+  level, the first spatially complete level of `levels`: a 6 h LP is a configuration with
+  `levels = [[10, 24], [40, 6]]` (the coarse level only makes the configuration valid).
+- **Stacked optimum** (`solve_lp_years`): capacities shared, dispatch per year, objective
+  capex + Σ_y w_y opex_y with equal weights $w_y = 1/Y$ (an annual cost). Storage and fleet
+  commitment are cyclic within each year: every year starts and ends at the same state of
+  charge, with no carry-over between years, as in a single-year LP and in the sampler's
+  annual weather draws; the years are exchangeable scenarios of the two-stage problem, not a
+  chronological sequence. The per-year duals are reported per unit weight (the year's own
+  prices). One year is the single-year LP; the same year twice gives the same optimum.
+- **MGA** (`mga_sweep!`): on the solved model, the bound capex + Σ w opex ≤ (1 + ε) C* is
+  added and, for each ε and carrier (k field), the total capacity Σ_i k_f[i] is minimised and
+  maximised; the model is reused (only the bound and the objective change). The capacity per
+  country is recorded at every extreme. The bound is written in units of
+  $S = 10^{\lfloor\log_{10}C^\ast\rfloor-4}$ €/a, so that its right-hand side is 1e4–1e5 like the
+  other rows': unscaled (right-hand side 1e11), HiGHS's interior-point solvers HiPO and IPX
+  stall on the maximisations at 40 nodes daily ("no progress", an infeasible point). A solve
+  that does not end `OPTIMAL` is repeated with IPX without presolve; a primal-feasible point
+  within the bound (relative 1e-6) is kept with the status `feasible:<status>` (HiPO often
+  ends a capacity objective with `OTHER_ERROR` at such a point: dual residuals after
+  postsolve), anything else is recorded as failed.
+
+> **Status: open (maximisation).** On the 5-node test problem every MGA solve ends optimal; on
+> the PyPSA network (H2b smoke, 14 days) too. At 40 nodes daily (2013, ε = 5 %) the
+> minimisation ends optimal (onwind −45 %, 8–9 min), the maximisation is not reliable: in an
+> interactive session onwind max (+50 %) and gas max (+117 %) ended at feasible points exactly on
+> the bound (HiPO `OTHER_ERROR`, 5–7 min each), but in the smoke run of `scripts/lp_baseline.jl`
+> onwind max did not finish in 17 min, and three other maxima together not in 29 min. Unscaled,
+> every maximisation failed. Untried: IPX with crossover, a dual-simplex re-solve warm-started
+> from a crossed-over optimum, tighter capacity boxes.
+
+**MGA with open solvers: what others report.** PyPSA's `optimize_mga` adds the same kind of
+budget, on `n.statistics` capex + opex with the fixed costs on both sides, and recommends
+slacks of 2–20 % ([PyPSA docs, MGA](https://docs.pypsa.org/latest/user-guide/optimization/modelling-to-generate-alternatives/));
+its `optimize_mga_in_direction` explores the near-optimal space along weighted directions.
+Neumann & Brown ([2021, EPSR 190](https://arxiv.org/abs/1910.01891)) bound carrier and region
+groups with an ε-constraint method on a PyPSA-Eur model; they
+report no open-solver settings. PyPSA's troubleshooting guide notes that HiGHS can struggle on
+large problems and recommends the interior-point method without crossover and clipping tiny
+`p_max_pu` values ([PyPSA troubleshooting](https://docs.pypsa.org/stable/user-guide/troubleshooting/)).
+Bröchin, Pickering, Tröndle & Pfenninger ([2022, arXiv:2211.12299](https://arxiv.org/abs/2211.12299))
+name the numerical range, sparsity and degeneracy as what makes energy-system LPs hard, and
+improve tractability with an automatic rescaling of the model; barrier without crossover is
+fast but changes the structure of the optimal solution. Funplex
+([2024, arXiv:2406.19809](https://arxiv.org/abs/2406.19809)) explores near-optimal spaces with
+a multi-objective simplex to avoid the independent re-solves of standard MGA. We found no
+report of HiGHS-specific MGA failures or fixes (searches of the PyPSA docs and issues, Calliope
+SPORES, HiGHS); the budget-row scaling above is our own fix, in line with the rescaling
+advice.
+- **Not in the LP:** line losses and soft thermal limits (hard limits; a configuration with
+  them is solved without them and the summary lists them as ignored). Renewable curtailment is
+  free in the LP; the sampler's energy model charges curtailed output as nodal dump at
+  $c_{
+m dump}$ plus the renewable's marginal cost, so the sampler's cost at the LP solution
+  is the LP objective plus `curtail_cost_eur` (about 0.6 % of the cost at 40 nodes daily; the
+  test checks the identity to 1e-5).
+
+**PyPSA-Eur's** (`scripts/pypsa_baseline.py`, campaign H2b). PyPSA solves the composed network
+of the build (`resources/esm256/networks/composed_2050.nc`, 2013) with HiGHS, configured to our
+scope (§2.2): lines and DC links at their current ratings, a load-shedding generator at every
+bus at our $c_{
+m shed}$, the build's CO₂ cap (or none, or a price), the time series averaged
+over blocks of 24, 6, 3 or 1 h (PyPSA-Eur's `average_every_nhours`). MGA as PyPSA's
+`optimize_mga` (budget on capex + opex including the fixed cost of the existing fleet), on one
+model with the budget's right-hand side and the objective changed per solve; carrier groups
+mapped to our k fields (onwind; solar and solar-hsat; the three offwind kinds; CCGT and OCGT
+as gas; the battery discharger and the H₂ fuel cell as the storage powers). PyPSA's budget includes the fixed cost of the existing fleet (`total_cost_eur_per_a`), ours does not (greenfield objective), so an ε of H2b corresponds to about ε · total/objective of H2; both numbers are in `summary_pypsa.toml`. The local smoke (14 daily snapshots) ends every MGA solve optimal with the scaled budget.
+
+Outputs: [data.md](data.md) §6. The two campaigns are independent; the comparison of their
+results is a separate step.
+
+> **Status: partial.** Built: the historical-year, stacked and MGA LPs of our model (H2) and
+> PyPSA's optimum and MGA on its network (H2b), prepared as cluster campaigns
+> ([campaigns.md](../campaigns.md)); not yet run on the cluster. Missing: the PyPSA-Eur
+> time-series import mode of the extractor (so that our LP runs on PyPSA's own time series
+> for §2.2; until then H2 uses the NASA POWER weather of our model files and H2b PyPSA's
+> own atlite series (ERA5, SARAH), and the comparison of the two mixes the weather source with the
+> formulation), PyPSA solves of several weather years (one composed network per year), the
+> stacked PyPSA optimum, ERA5 cutouts for many years (HPC), the comparison step itself, and the
+> stabilization of the $\alpha = 1$ bias. What exists besides: the convergence diagnostics and
+> the multi-chain CPU driver, the LP-dual output for §2.3, and the ERA5 weather import
+> (`prepare_era5.py`).

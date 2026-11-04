@@ -133,6 +133,35 @@ concrete next steps. Update it at the end of every work session.
 
 ## Log
 
+### 2026-11-04 (LP baselines: campaigns H2, H2b)
+
+- Our LP on the historical years of the model files, stacked over years (shared capacities,
+  storage cyclic per year, equal weights), and MGA envelopes per carrier at ε, on one reused
+  model (`src/lp_baseline.jl`, `scripts/lp_baseline.jl`; `solve_lp` split into
+  `lp_build`/`lp_operation!`/`lp_extract`, the same LP bitwise); PyPSA's optimum and MGA on its
+  composed network (`scripts/pypsa_baseline.py`); `hpc/run.sh` mode `python`; tests in
+  `test/test_lp_baseline.jl` (historical weather = the weather model's data; LP cost = the
+  sampler's cost at the LP solution plus the curtailment it prices; stacked with one year = the
+  single-year LP; MGA within the bound, re-optimized dispatch too, min ≤ optimum ≤ max).
+  Campaigns prepared: `campaigns/H2/` (104 lines in four arrays), `campaigns/H2b/` (15 lines);
+  validation.md §2.7, data.md §6, campaigns.md H2/H2b; to run on the rebuilt model files.
+- Found: with `ESM_LP_THREADS` set, every HiGHS solve failed (`OTHER_ERROR`: "global scheduler
+  has already been initialized"), so every LP on the cluster would have failed; fixed in
+  `lp_model` (scheduler reset). HiPO ends MGA capacity objectives often with `OTHER_ERROR` at a
+  feasible point: retried with IPX without presolve, feasible points within the bound kept.
+- Open: MGA maximisation at 40 nodes daily. With the budget unscaled (right-hand side 1e11)
+  HiPO and IPX stall ("no progress", infeasible point); with the budget in units of
+  10^(⌊log₁₀C⌋−4) onwind min ends optimal, onwind and gas max at feasible points on the bound
+  (5–8 min each) in a session, but in the smoke run through `hpc/run.sh` onwind max did not
+  finish in 17 min (validation.md §2.7, with a short literature note). The MGA lines are in
+  their own array (`campaigns/H2/list_mga.txt`), to submit once the maximisation works. Next:
+  IPX with crossover, dual simplex warm-started from a crossed-over optimum, tighter boxes.
+- Smoke tests in a simulated layout (`hpc/run.sh`, campaign worktrees, `ESM_JULIA_DEPOT=~/.julia`):
+  H2 line (40 × 24 h, 2013, ε 5 %, onwind): optimum 278 s, min optimal 538 s, max stopped after
+  17 min, run record and runs index written (status failed, exit 137 after the kill); H2b line
+  (14 days, ε 5 %, onwind and gas): 4 MGA solves optimal, 2 min, 0.84 GB; python mode with a
+  trivial script: finished, record and archive as in script mode.
+
 ### 2026-11-04 (afternoon, device port)
 
 - GPU form choice per backend (`JUMP_RATIO`: CPU 4, GPU 10: `tsoc` and `sblk2` dense on the

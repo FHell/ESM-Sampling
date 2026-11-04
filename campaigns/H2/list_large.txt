@@ -1,0 +1,9 @@
+campaigns/H2/configs/lp40_1h.toml script scripts/lp_baseline.jl years=2003 time_limit=240000
+campaigns/H2/configs/lp40_1h.toml script scripts/lp_baseline.jl years=2010 time_limit=240000
+campaigns/H2/configs/lp40_1h.toml script scripts/lp_baseline.jl years=2013 time_limit=240000
+campaigns/H2/configs/lp40_1h.toml script scripts/lp_baseline.jl years=2017 time_limit=240000
+campaigns/H2/configs/lp40_24h.toml script scripts/lp_baseline.jl years=all time_limit=240000
+campaigns/H2/configs/lp40_6h.toml script scripts/lp_baseline.jl years=2009-2013 time_limit=240000
+campaigns/H2/configs/lp40_6h.toml script scripts/lp_baseline.jl years=2004-2013 time_limit=240000
+campaigns/H2/configs/lp256_24h.toml script scripts/lp_baseline.jl years=2009-2013 time_limit=240000
+campaigns/H2/configs/lp256_6h.toml script scripts/lp_baseline.jl years=2013 time_limit=240000

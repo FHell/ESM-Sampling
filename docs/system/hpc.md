@@ -150,7 +150,7 @@ command line. The run record notes the thread plan.
 | `h0_cpu.sbatch`, `h0_gpu.sbatch` | 8 cores; 1 H100 + 16 cores | `priority`; `gpushort` | campaign H0: offline load, deterministic tests, a smoke run; Reactant on the H100, a family profile |
 | `cpu.sbatch` | 8 cores (`-c` to change), 24 h, requeued | `standby` | CPU sampler runs (the default) |
 | `cpu_array.sbatch` | one run per line of a list file, requeued | `standby` | many configurations or seeds (`--array=1-n%k`) |
-| `build.sbatch` | 16 cores, 12 h, requeued | `standby` | LP solves (e.g. `scripts/lp_reference.jl`), weather-model fits, data preparation, PyPSA-Eur solves; a preempted build starts over, finished cache entries are kept |
+| `build.sbatch` | 16 cores, 12 h, requeued | `standby` | LP solves (e.g. `scripts/lp_reference.jl`), weather-model fits, data preparation, PyPSA-Eur solves; a preempted build starts over, finished cache entries are kept (the MGA sweeps of `lp_baseline.jl` and `pypsa_baseline.py` skip their finished solves) |
 | `gpu.sbatch` | 1 H100, 16 cores, 160 GB, 24 h, requeued | `gpupreempt` | device runs |
 | `cpu_short.sbatch`, `gpu_short.sbatch` | as above, not preempted | `short`, `gpushort` | when preemption would hurt |
 | `analysis.sbatch` | 4 cores, 2 h | `priority` | diagnostics, summaries |
@@ -158,8 +158,19 @@ command line. The run record notes the thread plan.
 Every template calls the wrapper of the campaign's pinned code:
 
 ```bash
-sbatch hpc/jobs/cpu.sbatch <campaign> <config> [cpu | device | script <path> [args...]]
+sbatch hpc/jobs/cpu.sbatch <campaign> <config> [cpu | device | script <path> [args...] | python <path> [args...]]
 ```
+
+The modes: `cpu` (`scripts/run.jl`), `device` (`device/scripts/run_device.jl`), `script` (a Julia
+script of the root project, `julia --project=. -t <cores> <path> <config> <args>`) and `python`
+(`uv run --frozen python <path> <config> <args>` in the root project's environment,
+`UV_PROJECT_ENVIRONMENT` = `env/venv`, prepared by `prepare_env.sh`; it holds pypsa, linopy and
+highspy, so PyPSA solves of the composed networks, e.g. campaign H2b, need no PyPSA-Eur
+environment). The script receives the config as run (`out` set to the run directory) as its
+first argument. Run record, stop file, runs index and archive are the same in every mode; a
+Python script ignores the stop file, so a preempted Python job restarts from its beginning
+(or resumes from its own outputs). The recorded input file is the config's `data` key, or its
+`network` key, with `${VAR}` expanded from the environment.
 
 `hpc/run.sh` (paths in the config are relative to the campaign code):
 
@@ -344,7 +355,8 @@ current ones, with what each needs:
 | H0b (SIGTERM and snapshot tests) | D1: the snapshot test is skipped without `model.h5` | `bash hpc/new_campaign.sh H0b`; `sbatch hpc/jobs/h0_cpu.sbatch H0b` |
 | H4 (replica sampler, far-apart starts) | D1 rebuilt with the corrected wind calibration | `bash hpc/new_campaign.sh H4`; `sbatch --time=2-00:00:00 --array=1-6%6 hpc/jobs/cpu_array.sbatch H4 campaigns/H4/list.txt` (6-hourly lines estimated 12–20 h); `bash hpc/collect.sh H4` |
 | H10 (storage pairs) | D1 (rebuilt); the HiGHS scheduler reset for `ESM_LP_THREADS` (f2d09a3, LP-baseline branch) on main, else stage 1 fails; its start states and the reference LP are made by the campaign | `bash hpc/new_campaign.sh H10`; `sbatch --time=02:00:00 hpc/jobs/build.sbatch H10 configs/chains40.toml script scripts/lp_reference.jl` (stage 1, the LP into the cache); `sbatch --time=12:00:00 --dependency=afterok:<stage 1 job id> --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt`; `bash hpc/collect.sh H10 'summary*'` |
-| H2 and the other LP campaigns | D1 for 40 and 76 nodes, D2 for 256, D3 for ERA5 | as in their rows |
+| H2 (our LP baselines) | D1 (40 nodes) and D2 (256 nodes), rebuilt with the corrected wind calibration | as in its row |
+| H2b (PyPSA's optimum and MGA) | the esm256 PyPSA-Eur build (`composed_2050.nc`) | as in its row; independent of H2 |
 | the full-resolution run | D3 | not yet a campaign ([roadmap.md](roadmap.md) §6) |
 
 ### 8.5 Results back
