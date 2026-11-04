@@ -35,6 +35,7 @@ concrete next steps. Update it at the end of every work session.
   nominal storage requirement (`soc_qadj`) for `:tsoc` and `:sblk`.
 
 **Decisions taken:**
+- CPU move kernels frozen as the reference, retired after H5, the device exactness suite and the CPU-node question (user, 2026-11-04; roadmap.md §5).
 - The learned bias is retired as part of the target (user, 2026-11-04): work proceeds on the
   replica–Langevin structure. A learned weather-response term may return only as an optional
   control variate for the between-year variance of the Langevin drift (no effect on the

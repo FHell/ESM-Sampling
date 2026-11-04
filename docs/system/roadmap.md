@@ -88,6 +88,14 @@ when done, and the affected document is updated in the same change.
 
 ## 5. GPU port
 
+**CPU move kernels (decided 2026-11-04).** `src/` stays as the host library (data, model,
+weather, replica host loop, snapshots, LP). The CPU move kernels and the chains driver are
+frozen as the reference: no new CPU-only move families. They are retired once (1) campaign H5
+shows the GPU path delivers, (2) the exactness checks of `test_moves.jl` run on the device array
+code directly, and (3) CPU nodes no longer need the CPU kernel (enough GPU capacity, or the
+Reactant CPU backend, re-measured after the restructuring, close enough; 5.4·10⁴ against
+1.8·10⁵ line moves/s before). New moves are then written device-first.
+
 The remaining parts of [device.md](device.md) §7: scheduling the compensated families and the
 cell templates in the driver; the `kop` capacity move (a Metropolis form with per-carrier
 proposal scales in the capacity pass); templates for Haar angle atoms, localized modes and local

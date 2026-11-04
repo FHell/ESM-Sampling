@@ -62,6 +62,7 @@ The other files in `docs/` are development notes, not a description of the syste
 
 ## Testing rules
 
+- The CPU move kernels are frozen as the reference: no new CPU-only move families (docs/system/roadmap.md §5).
 - CPU: deterministic checks only (`test/runtests.jl`). The gate for every new or changed move
   family is the move-consistency suite `test/test_moves.jl` (about 10 s after its setups): the
   potential linear between the walk's points, incremental = global cost, reversibility of the
