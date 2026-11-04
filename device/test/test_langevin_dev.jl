@@ -3,10 +3,9 @@
 # code on Julia arrays against the CPU, with the same noise; (2) the same code compiled by
 # Reactant (CPU backend by default, REACTANT_BACKEND) against (1).
 #
-# CPU reference: `energy_cost(…; grad=true)` + `log_measure_grad` for the scores (through the
-# prototype's `lgv_scores`); the prototype's `lgv_knew`/`lgv_apply!` (scripts/replicas/replicas.jl)
-# for the step and the dispatch following, `compensate!` for the weather upload. To be switched to
-# the src/ functions of the replica sampler once they are merged.
+# CPU reference (src/replicas.jl): `capacity_scores` (`energy_cost(…; grad=true)` +
+# `log_measure_grad`), `langevin_capacities` and `follow_capacities!` for the step and the dispatch
+# following, `compensate_weather!` for the weather upload.
 #   julia --project=device -t 4 device/test/test_langevin_dev.jl
 using ESMDevice, ESMSampling, Random, Test, Printf, Reactant
 const ML = ESMSampling
@@ -14,10 +13,6 @@ const D = ESMDevice
 include(joinpath(@__DIR__, "mockrng.jl"))
 Random.randn(r::MockRNG, n::Integer) = [randn(r) for _ in 1:n]
 include(joinpath(@__DIR__, "setup_all_terms.jl"))       # 40 nodes × 6 h, all model terms, physical measure
-module Proto                                             # the prototype (reference until it is in src/)
-include(joinpath(@__DIR__, "..", "..", "scripts", "langevin", "langevin.jl"))
-include(joinpath(@__DIR__, "..", "..", "scripts", "replicas", "replicas.jl"))
-end
 LMc = ML.LocalModel(P, L)
 runits = D.ren_units(P)
 KP = D.KParams(M)
@@ -37,7 +32,7 @@ reps = ML.State[]
 for ch in 1:nch, j in 1:Mrep
     b = bases[ch]
     mm, z0, ws = ML.sample_weather(rng, P.W, L)
-    push!(reps, Proto.compensate!(P, LMc, copy(ML.LocalCost(P, LMc, b).r), ML.make_state(P, L, mm, z0, ws, copy(b.k), copy(b.v))))
+    push!(reps, ML.compensate_weather!(P, LMc, copy(ML.LocalCost(P, LMc, b).r), ML.make_state(P, L, mm, z0, ws, copy(b.k), copy(b.v))))
 end
 Sd = D.to_device(P, M, ix, reps)
 st0 = D.flat_state(M, Sd)
@@ -51,7 +46,7 @@ A_(x) = x isa Union{Number,AbstractArray} ? Array(x) : x
 function cmp_score(sc, ss)
     worst = Dict{Symbol,Float64}()
     for (c, s) in enumerate(ss)
-        sk, fk = Proto.lgv_scores(P, s)
+        sk, fk = ML.capacity_scores(P, s)
         for (blk, fblk, idx, kfof) in ((:sg, :fg, ix.gidx, g -> P.E.gens[g].kf), (:ss, :fs, ix.sidx, g -> P.E.stors[g].kf),
                                        (:sr, :fr, runits, g -> P.E.gens[g].kf))
             for (q, (g, i)) in enumerate(idx)
@@ -79,18 +74,18 @@ W = fill(1 / Mrep, C)
 rngξ = MersenneTwister(21)
 ξ = [[randn(rngξ, length(P.E.kspecs[f].lo)) for f in eachindex(P.E.kspecs)] for _ in 1:nch]
 
-"The prototype: per chain the weighted replica scores, `lgv_knew` with the given normals, `lgv_apply!` per replica."
+"The CPU sampler: per chain the weighted replica scores, `langevin_capacities` with the given normals, `follow_capacities!` per replica."
 function lgv_reference(reps, W, ξ; ηw, κs, clip=0.02, box=true, κmin=1.0)
-    units = Proto.lgv_units(P, LMc)
+    units = ML.capacity_units(P, LMc)
     out = ML.State[]
     for ch in 1:nch
         js = (ch - 1) * Mrep .+ (1:Mrep)
-        scs = [Proto.lgv_scores(P, reps[c]) for c in js]
+        scs = [ML.capacity_scores(P, reps[c]) for c in js]
         sk̄ = [sum(W[c] .* scs[a][1][f] for (a, c) in enumerate(js)) for f in eachindex(P.E.kspecs)]
         Kraw = ML.knodes(P, L, reps[js[1]].k)
         z = reduce(vcat, [ξ[ch][kf] for kf in unique(u[4] for u in units) if ηw[kf] != 0])
-        knew, _ = Proto.lgv_knew(MockRNG(z, Float64[]), P, units, Kraw, sk̄, scs[1][2]; ηw, κs, κmin, clip, box)
-        append!(out, [Proto.lgv_apply!(P, LMc, copy(reps[c]), units, Kraw, knew; κmin) for c in js])
+        knew, _ = ML.langevin_capacities(MockRNG(z, Float64[]), P, units, Kraw, sk̄, scs[1][2]; ηw, κs, κmin, clip, box)
+        append!(out, [ML.follow_capacities!(P, LMc, copy(reps[c]), units, Kraw, knew; κmin)[1] for c in js])
     end
     return out
 end
@@ -126,7 +121,7 @@ end
 step_args() = (st0, copy(Sd.kg), copy(Sd.ks), deepcopy(RS0), copy(Sd.dnet), copy(Sd.cren), copy(Sd.capren), KP, RP, LP, acc0, W,
                ξg, ξs, ξr, wsh, rg, sgp)
 out_a = dev_step(step_args()...)
-@testset "Langevin step + dispatch following (arrays) = prototype" begin
+@testset "Langevin step + dispatch following (arrays) = CPU" begin
     e = cmp_step(out_a, cpu_out)
     println("  step: ", e, "  clipped drifts per chain ", out_a[9].nclip)
     @test okstep(e)
@@ -145,7 +140,7 @@ for (c, s) in enumerate(reps)
         mm, z0, ws = ML.sample_weather(rngw, P.W, L)
         s1 = ML.make_state(P, L, mm, z0, ws, copy(s.k), copy(s.v))
         push!(new_states, s1)
-        push!(cpu_w, Proto.compensate!(P, LMc, copy(ML.LocalCost(P, LMc, s).r), copy(s1)))
+        push!(cpu_w, ML.compensate_weather!(P, LMc, copy(ML.LocalCost(P, LMc, s).r), copy(s1)))
     else
         push!(new_states, s); push!(cpu_w, copy(s))
     end
@@ -166,7 +161,7 @@ function cmp_weather(wout)
 end
 okw(e) = e.ω < 1e-12 && e.r < 1e-6 && e.dnet < 1e-6 && e.cren < 1e-12 && e.A == 0 && e.cls == 0 && e.κg == 0
 wout_a = wu(wu_args()...)
-@testset "weather upload with compensation (arrays) = prototype compensate!" begin
+@testset "weather upload with compensation (arrays) = CPU compensate_weather!" begin
     e = cmp_weather(wout_a)
     println("  weather: ", e)
     @test okw(e)

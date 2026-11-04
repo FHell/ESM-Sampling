@@ -303,15 +303,18 @@ output).
 
 **Verification** (`device/test/test_langevin_dev.jl`, 40 nodes × 6 h, all model terms, 2 chains ×
 2 replicas): on arrays against the CPU, the scores to $7\cdot10^{-13}$ (relative) and the forces to
-$10^{-15}$; the step with the same normals against the prototype's `lgv_knew`/`lgv_apply!`
+$10^{-15}$; the step with the same normals against `langevin_capacities`/`follow_capacities!`
 (capacities to $2\cdot10^{-14}$, utilizations $2\cdot10^{-14}$, residual $4\cdot10^{-11}$ MW, net load,
-running cost and capex to round-off); the weather upload against `compensate!` (utilizations
+running cost and capex to round-off); the weather upload against `compensate_weather!` (utilizations
 $2\cdot10^{-15}$, residual $2\cdot10^{-11}$ MW, proxy classes equal). Compiled by Reactant on the CPU
 backend, the same comparisons hold, and compiled and array outputs agree to round-off.
 
-> **Status: deviation.** The reference is the prototype (`scripts/replicas/replicas.jl`,
-> `scripts/langevin/langevin.jl`) until the replica sampler is in `src/`; the device driver also
-> runs the prototype's host weather process (module `ReplicaProto`).
+> **Status: deviation.** The tests compare against the CPU replica sampler (`src/replicas.jl`:
+> `capacity_scores`, `langevin_capacities`, `follow_capacities!`, `compensate_weather!`), but the
+> device driver still runs the prototype's host weather process and fixed-step gates (module
+> `ReplicaProto`, scripts/replicas/) and its own settings table `device_replica`, not the CPU
+> sampler's keys (`replicas`, `replica_*`, `langevin_*`), relaxation-indicator gate, lag probe and
+> snapshot layout (`write_replica_snapshot`). Moving the driver onto them is the next step.
 
 > **Status: missing.** The lag probe and the per-carrier adaptation of $\eta_w$ of the prototype;
 > the device driver runs at fixed $\eta_w$ (`eta_w`).
