@@ -937,6 +937,7 @@ function run_replicas(cfg::Config; hook=nothing)
         end
         res = chains_report(cfg, P, names, traces, kinds, nothing, nwarm, nprod, t0)
         write_replica_outputs(cfg, P, info, ctl, rtr, ptr, r, snap)
+        write_replica_summary(cfg, P, ctl, rtr, ptr, kinds, nwarm, res.passed, time() - t0)
         return (; res..., P, sets, info, status=:finished, exitcode=0, resume_states, restarts=r)
     catch e
         e isa CheckpointStop || rethrow()
@@ -972,7 +973,73 @@ function write_replica_outputs(cfg::Config, P::Problem, info, ctl::ReplicaCtl, r
     end
 end
 
+"Path of the text summary of a replica run: `summary_replicas.txt` next to `out` (collected by hpc/collect.sh)."
+replica_summary_path(cfg::Config) = joinpath(dirname(abspath(cfg.out)), "summary_replicas.txt")
+
+"""
+    write_replica_summary(cfg, P, ctl, rtr, ptr, kinds, nwarm, passed, t)
+
+Small text summary of a replica run (`replica_summary_path`), over the production steps (all
+steps if there are none) per chain: carrier totals (mean, sd, last), capex and the replicas'
+penalty-free cost, opex and shed, active replicas, the equilibrated scores of the probes
+⟨r ŝ_eq⟩/⟨β_k∂K⟩ and their gaps (mean, number of probes), the final Langevin steps, and the
+replica weather features (mean, sd over replicas and steps; prior mean and sd of Φ's residual
+load).
+"""
+function write_replica_summary(cfg::Config, P::Problem, ctl::ReplicaCtl, rtr, ptr, kinds, nwarm::Int, passed::Bool, t::Float64)
+    cars = [kcarrier(sp) for sp in P.E.kspecs]
+    fn = replica_feature_names(P)
+    fmt(x) = @sprintf("%.6g", x)
+    fmean(v) = (u = filter(isfinite, v); isempty(u) ? NaN : mean(u))
+    row(io, name, v) = println(io, rpad(name, 26), join((lpad(fmt(x), 13) for x in v), " "))
+    atomic_open(replica_summary_path(cfg)) do io
+        println(io, "# replica–Langevin run (src/replicas.jl): $(cfg.out)")
+        println(io, "# chains $(length(rtr)), replicas $(ctl.M), steps $(length(rtr[1]["ktot"])) (warmup $nwarm), ",
+                "λ $(ctl.λ), wall $(round(t; digits=0)) s, convergence $(passed ? "passed" : "not passed")")
+        ctl.Φ === nothing || println(io, @sprintf("# Φ: prior residual load mean %.4f GW, sd %.4f GW", ctl.Φ.μ, ctl.Φ.σ))
+        for c in eachindex(rtr)
+            d = rtr[c]
+            n = length(d["ktot"])
+            w = nwarm < n ? (nwarm+1:n) : (1:n)
+            M(k) = record_matrix(d[k])[:, w]
+            println(io, "\n## chain $c ($(kinds[c])), steps $(first(w))–$(last(w))")
+            println(io, rpad("", 26), join((lpad(x, 13) for x in cars), " "))
+            K = M("ktot") ./ 1e3
+            row(io, "k total GW, mean", vec(mean(K; dims=2))); row(io, "k total GW, sd", vec(std(K; dims=2)))
+            row(io, "k total GW, last", K[:, end])
+            row(io, "eta_w, last", d["eta_w"][end])
+            rs, fk = M("rs"), M("fk")
+            row(io, "drift r s̄/β_k∂K, mean", [fmean(rs[f, :] ./ fk[f, :]) for f in eachindex(cars)])
+            pr = ptr[c]
+            if haskey(pr, "gap")
+                it = record_matrix(pr["it"])[1, :]
+                sel = findall(>(first(w) - 1), it)
+                isempty(sel) && (sel = eachindex(it))
+                eq, fkp, gp = record_matrix(pr["rs_eq"])[:, sel], record_matrix(pr["fk"])[:, sel], record_matrix(pr["gap"])[:, sel]
+                fm(A) = [fmean(A[f, :]) for f in axes(A, 1)]
+                row(io, "probe r ŝ_eq/β_k∂K", fm(eq ./ fkp)); row(io, "probe gap/β_k∂K", fm(gp))
+                println(io, rpad("probes", 26), length(sel))
+            end
+            for (k, lab) in (("capex", "capex €/a"), ("pfcost", "pf cost €/a (replicas)"), ("op", "opex €/a (replicas)"),
+                             ("shed", "shed MWh (replicas)"))
+                A = M(k)
+                println(io, rpad(lab, 26), "mean ", fmt(mean(A)), "  sd ", fmt(std(vec(A))))
+            end
+            A = M("active")
+            println(io, rpad("active replicas", 26), "mean ", fmt(mean(sum(A; dims=1))), " of $(ctl.M)")
+            Fm = M("features")
+            nf = length(fn)
+            X = reshape(Fm, nf, :)
+            println(io, "replica weather features (all replicas and steps): mean, sd")
+            for i in 1:nf
+                println(io, "  ", rpad(fn[i], 24), lpad(fmt(mean(X[i, :])), 13), lpad(fmt(std(X[i, :])), 13))
+            end
+        end
+    end
+end
+
 # ======================================================================================
+# 7. snapshots# ======================================================================================
 # 7. snapshots of the replica driver (checkpoint.jl; layout in docs/system/data.md §5)
 # ======================================================================================
 
