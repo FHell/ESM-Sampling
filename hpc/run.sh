@@ -44,14 +44,17 @@ threads="${SLURM_CPUS_PER_TASK:-4}"
 
 # the config as given and as run (absolute paths into the run directory and the caches)
 [ -f "$rundir/config.orig.toml" ] || cp "$config" "$rundir/config.orig.toml"
+# only the keys this code version defines (older code rejects unknown keys)
+known=$(grep -oE '^[[:space:]]+(cache_dir|cache_mirror|checkpoint|stop_file)::' src/run.jl | tr -d ' :' | tr '\n' ',')
 julia --startup-file=no -e '
     using TOML
-    c = TOML.parsefile(ARGS[1]); rd = ARGS[2]
+    c = TOML.parsefile(ARGS[1]); rd = ARGS[2]; known = split(ARGS[5], ",")
     c["out"] = joinpath(rd, "out.h5")
-    c["cache_dir"] = ARGS[3]; c["cache_mirror"] = ARGS[4]
-    c["checkpoint"] = joinpath(rd, "checkpoint.jls"); c["stop_file"] = joinpath(rd, "STOP")
+    set(k, v) = k in known && (c[k] = v)
+    set("cache_dir", ARGS[3]); set("cache_mirror", ARGS[4])
+    set("checkpoint", joinpath(rd, "checkpoint.jls")); set("stop_file", joinpath(rd, "STOP"))
     open(io -> TOML.print(io, c), joinpath(rd, "config.toml"), "w")' \
-    "$rundir/config.orig.toml" "$rundir" "$ESM_CACHE_DIR" "$ESM_CACHE_MIRROR" || exit 2
+    "$rundir/config.orig.toml" "$rundir" "$ESM_CACHE_DIR" "$ESM_CACHE_MIRROR" "$known" || exit 2
 rm -f "$rundir/STOP"
 
 case "$mode" in
