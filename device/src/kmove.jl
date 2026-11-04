@@ -1,5 +1,6 @@
 # Capacity moves on the device (docs/reactant_design.md §3.6, phase 4): the scaling group
-# (k, y) ↦ (e^u k, e^{−u} y) of one investable unit, with Metropolis and fixed-scale
+# (k, y) ↦ (e^u k, y c(k)/c(e^u k)) of one investable unit (c the clamp to the capacity box;
+# (e^u k, e^{−u} y) inside the box), with Metropolis and fixed-scale
 # proposals u = σ z (the CPU reference is `kscale_sweep!(…; mh=true)`). Units run in a
 # fixed order (they share the balance of their node); chains are the batch dimension.
 #
@@ -73,6 +74,11 @@ end
 
 φbal_d(M, x) = ifelse.(x .> 0, M.c_shed .* x, -M.c_dump .* x)
 
+"Utilization factor c(k0)/c(k1) of the capacity moves (1 where the clamped capacity does not change; `kc_ratio`)."
+kc_ratio_d(kc0, kc1) = ifelse.(kc0 .== kc1, one.(kc0), kc0 ./ ifelse.(kc0 .== kc1, one.(kc1), kc1))
+"log(c(k0)/c(k1)), 0 where the clamped capacity does not change."
+kc_logratio_d(kc0, kc1) = log.(kc_ratio_d(kc0, kc1))
+
 """
 Log-ratio of the scaling move of unit q (kind 1: dispatchable, 2: storage) by u (C,):
 −β_k Δcapex − β_v ΔC + (1 − n) u (+ the physical-measure term), and the injection change
@@ -85,7 +91,7 @@ function kscale_logratio(M, S::DeviceState, rn, kind::Int, q, u; βk, βv, physi
     uu = reshape(u, :, 1)
     k1 = kraw .* exp.(uu)
     kc0, kc1 = clamp.(kraw, lo, hi), clamp.(k1, lo, hi)
-    sc = exp.(-uu)
+    sc = kc_ratio_d(kc0, kc1)
     if kind == 1
         isuc = r1(M.guc, q) .> 0
         Y, Uc = S.ω[:, :, q], S.uc[:, :, q]
@@ -102,7 +108,7 @@ function kscale_logratio(M, S::DeviceState, rn, kind::Int, q, u; βk, βv, physi
     end
     Δop = vec(sum((c1 .- c0) .+ M.Δt .* (φbal_d(M, rn .- d) .- φbal_d(M, rn)); dims=2))
     Δcap = vec(cap .* (k1 .- kraw) .+ M.γk .* cap .* (abs.(k1 .- kc1) .- abs.(kraw .- kc0)))
-    lr = -(βk .* Δcap .+ βv .* Δop) .+ vec((1 .- n) .* uu)
+    lr = -(βk .* Δcap .+ βv .* Δop) .+ vec(uu .+ n .* kc_logratio_d(kc0, kc1))
     physical && (lr = lr .+ vec(n .* (log.(kc1 .+ M.κ0) .- log.(kc0 .+ M.κ0))))
     return lr, d
 end
@@ -137,7 +143,8 @@ function kscale_mh!(M, S::DeviceState, r, Z, U; units, σ, βk, βv, physical::B
         end
         moved = ucur .!= 0
         nacc = nacc .+ moved
-        sc = reshape(exp.(-ucur), :, 1)
+        lo, hi = kind == 1 ? (r1(M.glo, q), r1(M.ghi, q)) : (r1(M.slo, q), r1(M.shi, q))
+        sc = reshape(kc_ratio_d(clamp.(kraw, lo, hi), clamp.(kraw .* exp.(ucur), lo, hi)), :, 1)
         if kind == 1
             S.kg[:, q] .= kraw .* exp.(ucur)
             S.ω[:, :, q] .= S.ω[:, :, q] .* sc
@@ -205,7 +212,8 @@ function kmove_unit!(M, S, r, Z, U, ::Val{kind}, q, j, ::Val{physical}, BD, BS, 
     if BD !== nothing
         set_bias_fields!(BS, bcur)
     end
-    sc = reshape(exp.(-ucur), :, 1)
+    lo, hi = kind == 1 ? (r1(M.glo, q), r1(M.ghi, q)) : (r1(M.slo, q), r1(M.shi, q))
+    sc = reshape(kc_ratio_d(clamp.(kraw, lo, hi), clamp.(kraw .* exp.(ucur), lo, hi)), :, 1)
     if kind == 1
         S.kg[:, q] = kraw .* exp.(ucur)
         S.ω[:, :, q] = S.ω[:, :, q] .* sc
@@ -220,8 +228,9 @@ end
 
 # ---------------------------------------------------------------------------
 # peak-set capacity moves (kpeak, absorb variant): k → k + δ; on the unit's peak steps the
-# output rises by A δ, elsewhere it stays (y ↦ (y k + δ)/(k + δ), y ↦ y k/(k + δ)); the
-# commitment follows the same affine map; Jacobian (1 + uc) T log(k/(k + δ)). The CPU
+# output rises by A (c(k + δ) − c(k)), elsewhere it stays (y ↦ (y c(k) + c(k+δ) − c(k))/c(k+δ),
+# y ↦ y c(k)/c(k + δ), c the clamp to the box); the commitment follows the same affine map;
+# Jacobian (1 + uc) T log(c(k)/c(k + δ)). The CPU
 # reference is `kpeak_sweep!(…; mh=true)`. Peak sets come from (x, k_ren): host input inS
 # (C, T, U_g) of Bools.
 # ---------------------------------------------------------------------------
@@ -235,7 +244,9 @@ function kpeak_logratio(M, S::DeviceState, rn, q, δ, inS, ::Val{physical}; βk,
     kc0, kc1 = clamp.(k0, lo, hi), clamp.(k1, lo, hi)
     isuc = r1(M.guc, q) .> 0
     Y, Uc = S.ω[:, :, q], S.uc[:, :, q]
-    amap(X) = ifelse.(inS, (X .* k0 .+ dd) ./ k1, X .* k0 ./ k1)
+    same = kc0 .== kc1
+    kd = ifelse.(same, one.(kc1), kc1)
+    amap(X) = ifelse.(same, X, ifelse.(inS, (X .* kc0 .+ (kc1 .- kc0)) ./ kd, X .* kc0 ./ kd))
     Y1, U1 = amap(Y), amap(Uc)
     c0, p0 = gen_unit_cost(M, q, kc0, Y, Uc)
     c1, p1 = gen_unit_cost(M, q, kc1, Y1, U1)
@@ -243,7 +254,7 @@ function kpeak_logratio(M, S::DeviceState, rn, q, δ, inS, ::Val{physical}; βk,
     Δop = vec(sum((c1 .- c0) .+ M.Δt .* (φbal_d(M, rn .- d) .- φbal_d(M, rn)); dims=2))
     Δcap = vec(cap .* dd .+ M.γk .* cap .* (abs.(k1 .- kc1) .- abs.(k0 .- kc0)))
     nu = 1 .+ isuc
-    lr = -βv .* Δop .- βk .* Δcap .+ vec(nu .* T .* log.(k0 ./ k1))
+    lr = -βv .* Δop .- βk .* Δcap .+ vec(nu .* T .* kc_logratio_d(kc0, kc1))
     physical && (lr = lr .+ vec(nu .* T .* (log.(kc1 .+ M.κ0) .- log.(kc0 .+ M.κ0))))
     return lr, d, Y1, U1
 end

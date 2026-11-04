@@ -8,14 +8,25 @@ operation `kop`, and the two capacity moves of the level-0 warmup chain. See [RE
 
 ## `kscale`: the scaling group of one unit
 
-**Direction.** For one investable unit at the complete level, the scaling group
-$(k, y_1,\dots,y_n)\mapsto(e^u k, e^{-u}y_1,\dots,e^{-u}y_n)$ acts on its capacity and all its
-utilization coordinates: $n = T$ for a dispatchable generator ($2T$ with unit commitment,
-whose commitment scales with the output), $T$ for storage in the SoC form ($3T$ in the LP
-form), $n = 0$ for a renewable unit treated as load. Inside the boxes every injection and state
-of charge is unchanged, so only capex, penalty weights, clamps and the bias change.
+**Direction.** For one investable unit at the complete level, with $c(k)$ the capacity
+clamped to its box $[\underline k,\bar k]$ (the capacity the operation sees,
+[../ensemble.md](../ensemble.md) §6), the scaling group
+$$
+(k, y_1,\dots,y_n)\mapsto\Big(e^u k,\ \frac{c(k)}{c(e^uk)}\,y_1,\dots,\frac{c(k)}{c(e^uk)}\,y_n\Big)
+$$
+acts on its raw capacity and all its utilization coordinates: $n = T$ for a dispatchable
+generator ($2T$ with unit commitment, whose commitment scales with the output), $T$ for storage
+in the SoC form ($3T$ in the LP form), $n = 0$ for a renewable unit treated as load. Inside the
+box it is $(e^uk, e^{-u}y)$. Because the utilizations scale against the clamped capacity, every
+injection and state of charge is unchanged (up to the clamps of the utilizations themselves),
+and only capex with its box penalty, the penalty weights, the clamps and the bias change. A raw
+capacity above its box therefore moves at fixed operation and returns toward the box under the
+penalty $\gamma_k$; a scaling against the raw capacity would change its output there and leave
+it held by its node balance. The maps are translations in $(\log k, \log y + \log c(k))$, a
+one-parameter group.
 
-**Conditional.** $u$ is drawn from $\propto\pi(g_u s)\,e^{(1-n)u}$ (Liu and Sabatti, 2000),
+**Conditional.** $u$ is drawn from $\propto\pi(g_u s)\,e^{u}\,\big(c(k)/c(e^uk)\big)^{n}$
+(Liu and Sabatti, 2000; $e^{(1-n)u}$ inside the box),
 including $\beta_k\Delta K$, $\beta_v\Delta C$, the bias change, and with
 `measure = "physical"` the change of $n\log(k+\kappa_0)$; by slice sampling (stepping out with
 width 0.3, shrinkage), truncated to $ke^u\ge\kappa_{\min}$ so that the selection rule
@@ -43,19 +54,22 @@ because they move the net load and therefore the peak sets.
 
 **Direction.** For one investable dispatchable unit at node $n$: the peak set $S$ is the top 5 %
 of the steps by the proxy requirement at $n$ (load minus renewable output $Ak$), which
-depends on $(x, k_{\rm ren})$ only and is unchanged by the move. Then
+depends on $(x, k_{\rm ren})$ only and is unchanged by the move. Then, with $c$ the clamp to
+the box as for `kscale`,
 $$
-k\to k+\delta,\qquad \omega'_\tau = \frac{\omega_\tau k+\delta}{k+\delta}\ (\tau\in S),\qquad
-\omega'_\tau = \frac{\omega_\tau k}{k+\delta}\ (\tau\notin S),
+k\to k+\delta,\qquad \omega'_\tau = \frac{\omega_\tau c(k)+c(k+\delta)-c(k)}{c(k+\delta)}\ (\tau\in S),\qquad
+\omega'_\tau = \frac{\omega_\tau c(k)}{c(k+\delta)}\ (\tau\notin S),
 $$
-so the output rises by $A\delta$ on the peak steps and is unchanged elsewhere; the commitment
-follows by the same affine map. On the peak steps either the residual absorbs the extra output
+so the output rises by $A\,(c(k+\delta)-c(k))$ on the peak steps ($A\delta$ inside the box) and
+is unchanged elsewhere; the commitment follows by the same affine map. Above the box only the
+raw capacity moves, as for `kscale`. On the peak steps either the residual absorbs the extra output
 (**absorb**) or the other units at the node give way with their learned deficit-class
 coefficients, renormalized over the positive ones (**learned**; only in the adaptive kernel,
 once the coefficients exist, with probability 1/2).
 
-**Conditional.** The maps form a one-parameter translation group, so $\delta$ is drawn from
-$\propto\pi(g_\delta s)\,(k/(k+\delta))^{T}$ ($2T$ with unit commitment), including capex, the
+**Conditional.** The maps form a one-parameter translation group (translations in
+$(k,\ p_S - A\,c(k),\ p_{\bar S})$), so $\delta$ is drawn from
+$\propto\pi(g_\delta s)\,(c(k)/c(k+\delta))^{T}$ ($2T$ with unit commitment), including capex, the
 operating cost, the bias and the measure term; by slice sampling in $u=\log((k+\delta)/k)$
 (Jacobian $e^u$) with the fixed width 0.1, truncated to $k+\delta\ge\kappa_{\min}$. (A width
 proportional to the current $k$ in $\delta$ would differ between the points of the line and

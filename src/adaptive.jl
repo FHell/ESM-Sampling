@@ -381,14 +381,21 @@ end
 # so moves of k at fixed dispatch do not mix capacities. The peak-set move changes k
 # together with the dispatch at the node's peak steps S (top `q` of the proxy
 # requirement load − renewable output, which depends on (x, k_ren) only and is
-# unchanged by the move):
-#   k → k + δ;  on S: p → p + A δ (ω' = (ωk + δ)/(k + δ));  off S: p fixed (ω' = ωk/(k + δ));
-#   at S either the residual absorbs (shed falls, `absorb`) or the other units at the
-#   node give way with the learned coefficients (`learned`; translations).
-# The maps form a one-parameter group, so δ is drawn from the generalized Gibbs
-# conditional ∝ π(g_δ x)·(k/(k + δ))^T, where π includes capex, the bias b̂(x, k)
-# and the reference measure (the α = 1 target). Slice sampling in δ, truncated to
-# k + δ ≥ κmin (the selection rule k ≥ κmin is then invariant).
+# unchanged by the move). With c = clamp to the capacity box (the capacity the
+# operation sees):
+#   k → k + δ;  on S: p → p + A (c(k+δ) − c(k)) (ω' = (ω c(k) + c(k+δ) − c(k))/c(k+δ));
+#   off S: p fixed (ω' = ω c(k)/c(k+δ)); inside the box c(k) = k, beyond it only the raw
+#   capacity moves; at S either the residual absorbs (shed falls, `absorb`) or the other
+#   units at the node give way with the learned coefficients (`learned`; translations).
+# The maps form a one-parameter group (translations in (k, p_S − A c(k), p_off)), so δ is
+# drawn from the generalized Gibbs conditional ∝ π(g_δ x)·(c(k)/c(k + δ))^T, where π
+# includes capex, the bias and the reference measure (the α = 1 target). Slice sampling
+# in u = log((k + δ)/k), truncated to k + δ ≥ κmin (the selection rule k ≥ κmin is then
+# invariant).
+
+"Utilization map of the peak-set move on a step in (`on`) or out of the peak set, for clamped capacities kc0 → kc1."
+@inline kpeak_map(x::Float64, on::Bool, kc0::Float64, kc1::Float64) =
+    kc0 == kc1 ? x : on ? (x * kc0 + (kc1 - kc0)) / kc1 : x * kc0 / kc1
 
 "Peak steps of node n: the top fraction q of the proxy requirement (load − renewable output)."
 function peak_set(P::Problem, LM::LocalModel, LC::LocalCost, Xn, n::Int; q::Float64=0.05)
@@ -411,10 +418,12 @@ end
 One peak-set move per investable dispatchable generator unit (random order) at a
 complete level, variant `absorb` or `learned` with probability 1/2 each (learned
 only once AM has been updated). At α = 1 the bias change comes from the incremental
-bias cache `BC` (built from `s` if not given).
+bias cache `BC` (built from `s` if not given). For tests: `select(1, gi, i)` restricts
+the units, and `rec` (a vector) receives per move δ, lf(δ) − lf(0) and its log Jacobian.
 """
 function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC=nothing, AM=nothing, q::Float64=0.05,
-                      w::Float64=0.1, κmin::Float64=1.0, mh::Bool=false, σk=nothing, nprop::Int=1, order::Symbol=:shuffle)
+                      w::Float64=0.1, κmin::Float64=1.0, mh::Bool=false, σk=nothing, nprop::Int=1, order::Symbol=:shuffle,
+                      select=nothing, rec=nothing)
     E = P.E
     ℓ = LM.ℓ
     lk, lv = P.lk[ℓ+1], P.lv[ℓ+1]
@@ -433,10 +442,11 @@ function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC=
         kf = g.kf
         sp = E.kspecs[kf]
         k0 = Kraw[kf][i]
+        sel = select === nothing || select(1, gi, i)
         # Metropolis form (the device kernel): proposals δ' = δ + σ_j z with a fixed per-unit scale σk[j],
         # absorb variant only; the draws of a unit are taken before any skip
         draws = mh ? [(randn(rng), rand(rng)) for _ in 1:nprop] : nothing
-        k0 >= κmin || continue
+        (sel && k0 >= κmin) || continue
         n = g.bus[i]
         S = peak_set(P, LM, LC, Xn, n; q=q)
         inS = falses(T); inS[S] .= true
@@ -474,13 +484,13 @@ function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC=
             for τ in 1:T
                 A = LC.A[gi][i, τ]
                 y0 = Ylast[i, τ]
-                y1 = inS[τ] ? (y0 * k0 + δ) / k1 : y0 * k0 / k1
+                y1 = kpeak_map(y0, inS[τ], kc0, kc1)
                 c0, p0 = gen_cost(g, i, A, kc0, kc0 + κ0, Δt, cv, y0)
                 c1, p1 = gen_cost(g, i, A, kc1, kc1 + κ0, Δt, cv, y1)
                 if g.ucf > 0                               # commitment moves like the output (same affine map)
                     τ1 = mod(τ, T) + 1
                     Uu = LC.Y[g.ucf]
-                    um(x, τ_) = inS[τ_] ? (x * k0 + δ) / k1 : x * k0 / k1
+                    um(x, τ_) = kpeak_map(x, inS[τ_], kc0, kc1)
                     c0 += uc_cost(g, i, A, kc0, kc0 + κ0, Δt, cv, clamp(y0, 0.0, 1.0), Uu[i, τ], Uu[i, τ1])
                     c1 += uc_cost(g, i, A, kc1, kc1 + κ0, Δt, cv, clamp(y1, 0.0, 1.0), um(Uu[i, τ], τ), um(Uu[i, τ1], τ1))
                 end
@@ -493,7 +503,7 @@ function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC=
                         κj = κunit(P, LM, LC, f, j, τ)
                         abs(κj) < 1e-9 && continue
                         yj = LC.Y[f][j, τ]
-                        yj1 = yj - wj * A * δ / κj
+                        yj1 = yj - wj * A * (kc1 - kc0) / κj
                         kj = LC.kgen[gj][j]
                         cj0, pj0 = gen_cost(gg, j, LC.A[gj][j, τ], kj, kj + κ0, Δt, cv, yj)
                         cj1, pj1 = gen_cost(gg, j, LC.A[gj][j, τ], kj, kj + κ0, Δt, cv, yj1)
@@ -513,10 +523,15 @@ function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC=
             Δcap = cap * δ + E.γk * cap * (abs(k1 - kc1) - abs(k0 - kc0))
             return Δ, Δcap
         end
+        # log Jacobian of the group in δ: (1 + uc) T log(c(k0)/c(k0 + δ))
+        function kpeak_logjac(δ)
+            kc0, kc1 = clamp(k0, sp.lo[i], sp.hi[i]), clamp(k0 + δ, sp.lo[i], sp.hi[i])
+            return kc0 == kc1 ? 0.0 : (g.ucf > 0 ? 2 : 1) * T * log(kc0 / kc1)
+        end
         function lf(δ)
             k0 + δ < κmin && return -Inf
             Δop, Δcap = opdelta(δ)
-            val = -P.βv * Δop - P.βk * Δcap + (g.ucf > 0 ? 2 : 1) * T * log(k0 / (k0 + δ))
+            val = -P.βv * Δop - P.βk * Δcap + kpeak_logjac(δ)
             nmeas > 0 && (val += nmeas * log(clamp(k0 + δ, sp.lo[i], sp.hi[i]) + κ0) - lm0)
             BC === nothing || (val -= bias_delta_k(BC, P.bias, E, lk, 1, gi, i, k0 + δ))
             return val
@@ -536,10 +551,12 @@ function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC=
             lfu(u) = lf(k0 * expm1(u)) + u
             δ = k0 * expm1(slice_scalar(rng, lfu, 0.0, w, log(κmin / k0)))
         end
+        rec === nothing || push!(rec, (; kind=1, gi, i, δ, lf=lf(δ) - lf(0.0), logjac=kpeak_logjac(δ)))
         δ == 0.0 && continue
         nmoved += 1
         # commit: capacity, utilizations, compensators, residuals and cell sums, bias cache
         k1 = k0 + δ
+        kq0, kq1 = clamp(k0, sp.lo[i], sp.hi[i]), clamp(k1, sp.lo[i], sp.hi[i])
         setk!(δ)
         BC === nothing || bias_delta_k(BC, P.bias, E, lk, 1, gi, i, k1; commit=true)
         Kraw[kf][i] = k1
@@ -551,7 +568,7 @@ function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC=
             Utu = E.vspecs[g.ucf].B.Ut
             for τ in 1:T
                 u0 = LC.Y[g.ucf][i, τ]
-                u1 = inS[τ] ? (u0 * k0 + δ) / k1 : u0 * k0 / k1
+                u1 = kpeak_map(u0, inS[τ], kq0, kq1)
                 LC.Y[g.ucf][i, τ] = u1
                 o = lv.off[g.ucf] + (τ - 1) * mu
                 for qq in nzrange(Utu, i)
@@ -562,10 +579,9 @@ function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC=
         end
         for τ in 1:T
             y0 = Ylast[i, τ]
-            y1 = inS[τ] ? (y0 * k0 + δ) / k1 : y0 * k0 / k1
+            y1 = kpeak_map(y0, inS[τ], kq0, kq1)
             A = LC.A[gi][i, τ]
-            kc0 = clamp(k0, sp.lo[i], sp.hi[i])
-            p0 = A * kc0 * clamp(y0, 0.0, 1.0); p1 = A * LC.kgen[gi][i] * clamp(y1, 0.0, 1.0)
+            p0 = A * kq0 * clamp(y0, 0.0, 1.0); p1 = A * LC.kgen[gi][i] * clamp(y1, 0.0, 1.0)
             dinj = p1 - p0
             Ylast[i, τ] = y1
             o = lv.off[g.vf] + (τ - 1) * m
@@ -579,7 +595,7 @@ function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC=
                     κj = κunit(P, LM, LC, f, j, τ)
                     abs(κj) < 1e-9 && continue
                     yj = LC.Y[f][j, τ]
-                    yj1 = yj - wj * A * δ / κj
+                    yj1 = yj - wj * A * (kq1 - kq0) / κj
                     kj = LC.kgen[gj][j]
                     dinj += LC.A[gj][j, τ] * kj * (clamp(yj1, 0.0, 1.0) - clamp(yj, 0.0, 1.0))
                     LC.Y[f][j, τ] = yj1
