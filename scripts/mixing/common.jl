@@ -17,6 +17,8 @@ function mix_setup(path::String; overrides...)
         s0 = ML.predescend(P, ML.restrict_state(P, sL, 0), cfg)
         s0, _, _, _ = ML.run_level0!(rng, P, s0, S0, cfg.warmup0, cfg; learn=true, label="warmup")
         P.bias.active = false
+        ML.lift_bias!(P, cfg)                      # the fine chains evaluate the bias at their level
+        sL = ML.evaluate!(P, sL)
     end
     return cfg, P, sL, info
 end
