@@ -29,19 +29,19 @@ How to add a family, with its tests and its device port: [adding_a_move.md](addi
 | `unit` | all | as `:gen` |
 | `potential` | all | `:theta` |
 | `pair` | all | `:pair` |
-| `xpair`, `xloc`, `xlocc` | all | missing (planned as local re-routing templates) |
+| `xpair`, `xloc`, `xlocc` | all | `:xpair`, `:xloc`, `:xlocc` (re-routing templates, generator units) |
 | `spair` | all (SoC form) | `:spair` |
 | `cell`, `cellpair` | all | `:cell{q}`, `:cellpair{q}` (level-bucketed cell templates) |
-| `tpot`, `tmode`, `tline`, `tcut`, `tmode0`, `tline0`, `tsoc` | flow, adaptive | `:tpot`, `:tsoc` (no requirement tracking); `tmode`, `tline` as `:tdir` and `tmode0`, `tline0` as `:tdir0` (dense angle directions drawn on the host); `tcut` missing |
-| `tpotL`, `tmodeL`, `tlineL`, `tcutL`, `tsocL` | adaptive | `:tpotL`, `:tsocL`; `tmodeL`, `tlineL` as `:tdirL`; coefficients learned on the host (`run_device(…; adapt=true)`); `tcutL` missing |
-| storage plateau and shape | all | `:sblk{L}`, `:sblkL{L}` (one unit; aggregates missing) |
-| `slong`, `slevel` | all, with `storage_long > 0` (SoC form, complete level) | missing |
+| `tpot`, `tmode`, `tline`, `tcut`, `tmode0`, `tline0`, `tsoc` | flow, adaptive | `:tpot`, `:tsoc` (no requirement tracking); `tmode`, `tline` as `:tdir` and `tmode0`, `tline0` as `:tdir0` (dense angle directions drawn on the host); `tcut` as `:tcut`, `:tcutw` (Haar atoms) |
+| `tpotL`, `tmodeL`, `tlineL`, `tcutL`, `tsocL` | adaptive | `:tpotL`, `:tsocL`; `tmodeL`, `tlineL` as `:tdirL`; coefficients learned on the host (`run_device(…; adapt=true)`); `tcutL` as `:tcutL`, `:tcutLw` |
+| storage plateau and shape | all | `:sblk{L}`, `:sblkL{L}` (one unit), `:sblkg{L}`, `:sblkgL{L}` (cell–class groups) |
+| `slong`, `slevel` | all, with `storage_long > 0` (SoC form, complete level) | `:slong`, `:slongL` (L ≥ 2) |
 | `sxpair` | all, with `storage_xpair > 0` (SoC form, complete level) | missing |
 | `sxlong` | all, in the long-range storage sweep with `storage_xlong > 0` | missing |
 | `amode`, `amode0`, `amodeL` | adaptive | as `:tdir`, `:tdir0`, `:tdirL` (modes learned on the host) |
-| `acut`, `acutL` | adaptive | missing |
+| `acut`, `acutL` | adaptive | atoms of the learned pieces in `:tcut…` |
 | learned storage shapes | adaptive | profile columns of `:sblk{L}` per season class, learned on the host |
-| learned dispatch shapes | adaptive | missing |
+| learned dispatch shapes | adaptive | `:dshp{L}` |
 | `kscale`, `kpeak` | all, at the complete level | Metropolis forms, renewables included (`kren`); the learned `kpeak` variant missing |
 | `kop` | all, at the complete level, with `kop = true` | not planned: the capacity moves are replaced by a Langevin step on the sampled scores (its device form comes later; [../../worklog.md](../../worklog.md)) |
 | fine-level weather moves | all, with `fine_weather > 0` | not planned: the weather moves to a prior-reversible pCN process on the host ([../../worklog.md](../../worklog.md)) |

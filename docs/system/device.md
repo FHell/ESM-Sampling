@@ -167,6 +167,11 @@ and $r$.
 | `:cellpair{q}`, `:cellpairu{q}` | `cellpair` at level q | balanced |
 | `:sblk{L}`, `:sblkL{L}` ($L$ = 2, 4, 8, 16, 32) | storage plateau and shapes (`prep_storage_ms!`), one unit; learned shapes per season class | share-preserving, linear |
 | `:tdir`, `:tdirL`, `:tdir0` | `tmode`, `tline`, `amode` and their `…L` and `…0` variants (`prep_tdir!`, `prep_tline!`, `prep_amode!`): one dense angle direction per step | share-preserving, linear, none |
+| `:tcut`, `:tcutw`, `:tcutL`, `:tcutLw` | `tcut`, `acut`, `tcutL`, `acutL` (`prep_tsparse!`): one Haar atom, small (≤ `SPARSE_NS` node slots) or wide | share-preserving, linear |
+| `:xloc`, `:xlocc`, `:xpair` | `xloc`, `xlocc` (`prep_xloc!`), `xpair` (global re-routing): a generator pair at two nodes with re-routed flows | none, share-preserving (leak), none |
+| `:sblkg{L}`, `:sblkgL{L}` | storage blocks of a cell–class group (`prep_storage_ms!` with the group's units) | share-preserving, linear |
+| `:dshp{L}` | learned dispatch shapes of a generator pair at one node (`prep_adshape!`) | none (balanced) |
+| `:slong`, `:slongL` | `slong`, `slevel` (`prep_slong!`): a cyclic plateau of one unit, or its level | share-preserving, linear |
 
 **Choices made on the host.** Choices that do not depend on the state are drawn when the
 schedule is built: the unit pair of `:spair`, the carriers of the cell moves, and the block
@@ -190,6 +195,20 @@ need per-site line lists (`Status`).
 
 **Cell families.** They are bucketed by level and padded to the level's largest cell. Level q
 gets rounds ∝ (cells)^(cell_power−1), which reproduces the CPU's level probabilities.
+
+**Sparse angle families** (`device/src/sparse.jl`). A site is one step with a sparse angle
+direction: its node slots (the nodes whose angle moves and the far ends of the lines that move; a
+pair's two nodes first), the angle change and the requirement change per slot, and the pair units.
+Every moving line is listed at both its ends (injection at the near end, half its overload cost at
+each, `sline(…; wc)`), so the balance slots are static. The sites come from a host source
+(`SPARSE_SOURCE`, `sparse_source`: atoms ∝ c² of the frames' and the learned pieces, `xloc`
+partners and units, `xpair` pairs) and are packed per step into rounds of disjoint node slots.
+
+**Long-range storage moves** (`device/src/slong.jl`). A site holds every step of the cycle in the
+order a, b, then the others: the SoC term of each step with the site's 0/1 profile of raised
+instants (host data), the node's balance slot at each step, and the G compensation columns at the
+two end steps with the nominal requirement (`soc_qadj4`). The level move uses the same template
+without compensation.
 
 **Block profiles.** The profile table holds the plateau and optional shapes with zero ends
 (`set_profiles!`), each with a season class (0: any). A site draws its profile among those of its
@@ -330,7 +349,7 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | cell templates (all partition levels) | verified on arrays; compiled except `:cellpairu1` (see §3); scheduled with `families = :all` except `:cellpairu1` |
 | storage blocks, one unit (plateau, shapes) | verified on arrays ($L$ = 2–32) and compiled; scheduled with `families = :all` |
 | nominal storage requirement of the share-preserving `:tsoc`, `:sblk{L}` (CPU `soc_qadj`, [moves/storage.md](moves/storage.md)) | done (`soc_qadj4`); verified on arrays against the CPU |
-| long-range storage moves `slong`, `slevel` | missing |
+| long-range storage moves `slong`, `slevel` (`:slong`, `:slongL`) | verified on arrays against the CPU (`test_comp.jl` M, N); L drawn on 2 … T−1 (the CPU includes L = 1, the `tsoc` move) |
 | storage pairs `sxpair`, `sxlong` (re-routing templates, leak and loss compensation, footprint rounds) | missing |
 | memory cap of a round (`DENSE_BUDGET`) | done |
 | slope-jump form of the line sampler, per-family choice (`JUMP_RATIO`) | done; verified on arrays against the CPU and the dense form, Reactant (CPU backend) against arrays |
@@ -338,11 +357,11 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | commitment columns of non-committable units left out (`UC_COLS`); balance jumps on the column entries; entry-axis-first global part; two-level scans; sort networks for short lists | done; verified on arrays against the CPU and the dense form |
 | one program per checkpoint (operation sweeps + capacity pass) | done (`sweep_program`, `merged = true`); not the default (compile time) |
 | capacity pass (`kren`, `kscale`, `kpeak` absorb) with the bias, host loop | done |
-| templates for Haar angle atoms and localized proxy and learned modes (`tcut`, `acut`) | missing |
-| local re-routing templates in place of `xpair`, `xloc(c)`, `tline` | missing |
-| block aggregates (cell–class groups) | missing |
+| sparse angle templates: Haar atoms of the proxy and learned modes (`:tcut`, `:tcutw`, `:tcutL`, `:tcutLw` for `tcut`, `acut`, `tcutL`, `acutL`) | verified on arrays against the CPU (`test_comp.jl` H, I) |
+| local re-routing templates (`:xloc`, `:xlocc`, `:xpair`; `tline` as `:tdir`) | verified on arrays against the CPU (`test_comp.jl` H, I); generator units only (the CPU draws any unit of `LM.units`, which are the generators) |
+| block aggregates (cell–class groups: `:sblkg{L}`, `:sblkgL{L}`) | verified on arrays against the CPU (`test_comp.jl` K, L) |
 | learned storage shapes (profile columns per season class) | done |
-| learned dispatch shapes (`adshape`) | missing |
+| learned dispatch shapes (`adshape`: `:dshp{L}`) | verified on arrays against the CPU (`test_comp.jl` J) |
 | dense angle directions `:tdir`, `:tdirL`, `:tdir0` (`tmode`, `tline`, `amode` and variants) | verified on arrays against the CPU (`test_comp.jl` cases F, G); scheduled with `families = :all` and `adapt = true` |
 | adaptation on the host with table uploads (modes, shapes, response coefficients) | done (`adapt = true`); the learned `kpeak` variant missing |
 | weather moves with compensation as a device family | not planned: the weather moves to a prior-reversible pCN process on the host, the capacities to a Langevin step ([../worklog.md](../worklog.md)); `kop` and the device bias (`bias_dev.jl`, kept as it is until it is retired) are not extended |
