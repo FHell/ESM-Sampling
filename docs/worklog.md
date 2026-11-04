@@ -77,7 +77,8 @@ concrete next steps. Update it at the end of every work session.
   templates, H0 checks; wrapper mechanics tested locally); cluster values filled in (user
   hellmann, project and account coen, julia/1.12.2, CUDA 13 → Reactant 13.1, ERA5 at
   /p/projects/climate_data_central/reanalysis/ERA5, clone at /p/projects/coen/esm/ESM-Sampling).
-  Next on the cluster: pull, prepare_env.sh, copy the model files, H0; then H2 with
+  Model files built on the cluster (`hpc/prepare_data.sh`, `hpc/jobs/data.sbatch`), no manual
+  copy. Next on the cluster: pull, prepare_env.sh, data.sbatch small, H0; then H2 with
   `scripts/lp_reference.jl` (MGA alternatives still to be scripted).
 - Device driver checkpoint (after the device agent's work).
 

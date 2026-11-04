@@ -30,6 +30,7 @@ export REACTANT_GPU_VERSION=${REACTANT_GPU_VERSION:-13.1}
 # --- Python (data preparation, PyPSA-Eur) ---------------------------------------------------
 export UV_CACHE_DIR=$ESM_PROJ/env/uv_cache
 export UV_PROJECT_ENVIRONMENT=$ESM_PROJ/env/venv
+export UV_PYTHON_INSTALL_DIR=$ESM_PROJ/env/uv_python               # uv-managed Python builds
 export XDG_CACHE_HOME=$ESM_PROJ/env/xdg_cache
 export MPLCONFIGDIR=$ESM_PROJ/env/mpl
 

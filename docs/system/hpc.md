@@ -89,8 +89,16 @@ overridden before sourcing it); `hpc/prepare_env.sh [<code dir>]` prepares a cod
 
 ## 4. Inputs and caches
 
-- **Model files** (`data/processed/model*.h5`, 0.1–0.6 GB each) are built locally or in a build
-  job and copied to `/p/projects/coen/esm/data/processed/` with `rsync -avzP`.
+- **Model files** (`data/processed/model*.h5`, 0.1–0.6 GB each) are built on the cluster from
+  public sources, so their provenance is a commit plus recorded inputs
+  ([data_sources.md](data_sources.md) §5): `hpc/prepare_data.sh small` (the example network,
+  OPSD data and NASA POWER points: `model.h5`, `model76.h5`) and `hpc/prepare_data.sh pypsa256`
+  (PyPSA-Eur at the pinned revision in `configs/pypsa-eur/REVISION`, its Python environment
+  recreated from `configs/pypsa-eur/requirements.txt`, the snakemake target
+  `composed_2050.nc` of `config.esm.yaml`, then `model256.h5`). Both need internet and run in
+  the `io` QOS (`hpc/jobs/data.sbatch`, requeued if interrupted; downloads, POWER points and
+  snakemake outputs are kept, so a rerun continues). Every built file is recorded in
+  `data/processed/PROVENANCE.toml` (path, hash, size, commit, command, date, host).
 - **ERA5** is read in place from `/p/projects/climate_data_central/reanalysis/ERA5` (`ESM_ERA5`)
   by `scripts/prepare_era5.py` in a build job: only the variables, years and region it needs,
   sequentially, one such job at a time, never a recursive scan of the folder (no `find` or
@@ -124,6 +132,7 @@ command line. The run record notes the thread plan.
 | template (`hpc/jobs/`) | resources | QOS | used for |
 |---|---|---|---|
 | `prepare.sbatch` | 4 cores on a login node | `io` | environment preparation (§3) |
+| `data.sbatch` | 4 cores on a login node, 3 days, requeued | `io` | building the model files (§4) |
 | `h0_cpu.sbatch`, `h0_gpu.sbatch` | 8 cores; 1 H100 + 16 cores | `priority`; `gpushort` | campaign H0: offline load, deterministic tests, a smoke run; Reactant on the H100, a family profile |
 | `cpu.sbatch` | 8 cores (`-c` to change), 24 h, requeued | `standby` | CPU sampler runs (the default) |
 | `cpu_array.sbatch` | one run per line of a list file, requeued | `standby` | many configurations or seeds (`--array=1-n%k`) |
@@ -201,7 +210,8 @@ device driver's snapshots.
 
 1. After the next push: `git -C /p/projects/coen/esm/ESM-Sampling pull` on a login node.
 2. `bash hpc/prepare_env.sh` on a login node (or `sbatch hpc/jobs/prepare.sbatch`).
-3. Copy the model files: `rsync -avzP data/processed/ hpc.pik-potsdam.de:/p/projects/coen/esm/data/processed/`.
+3. Build the model files: `sbatch hpc/jobs/data.sbatch small` (hours), and later
+   `sbatch hpc/jobs/data.sbatch pypsa256` (the PyPSA-Eur build, longer).
 4. `bash hpc/new_campaign.sh H0`, then `sbatch hpc/jobs/h0_cpu.sbatch H0` and
    `sbatch hpc/jobs/h0_gpu.sbatch H0`; read the logs in `/p/tmp/hellmann/esm/logs/`.
 5. H2 (reference LPs): `bash hpc/new_campaign.sh H2`, then per configuration
