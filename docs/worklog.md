@@ -73,12 +73,13 @@ concrete next steps. Update it at the end of every work session.
 - `cache_dir` key or `ESM_CACHE_DIR`: one shared, content-addressed cache with atomic writes
   (now per run directory).
 - Checkpoint and resume with SIGTERM handling in `run_chains` and `run_device`.
-- `hpc/` scripts: environment preparation on a login node, the run wrapper, job templates, the
-  run record and the runs index.
-- Julia 1.12 on the cluster (the guide lists 1.11.7; the Manifests need 1.12); the Reactant CUDA
-  artifact fetched on a login node without a GPU; the ERA5 folder's path (the user will look it
-  up).
-- Request `/p/projects` space; fill in the project and account names in hpc.md.
+- `hpc/` scripts built (env, prepare, campaigns, run wrapper, collection into git, job
+  templates, H0 checks; wrapper mechanics tested locally); cluster values filled in (user
+  hellmann, project and account coen, julia/1.12.2, CUDA 13 → Reactant 13.1, ERA5 at
+  /p/projects/climate_data_central/reanalysis/ERA5, clone at /p/projects/coen/esm/ESM-Sampling).
+  Next on the cluster: pull, prepare_env.sh, copy the model files, H0; then H2 with
+  `scripts/lp_reference.jl` (MGA alternatives still to be scripted).
+- Device driver checkpoint (after the device agent's work).
 
 **Tests and validation:**
 - Move-consistency suite `test/test_moves.jl` (agent, 2026-11-04): walk linearity, incremental =

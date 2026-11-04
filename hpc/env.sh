@@ -21,9 +21,11 @@ export JULIA_CPU_TARGET=${JULIA_CPU_TARGET:-"generic;znver4,clone_all"}   # logi
 export JULIA_HISTORY=$ESM_PROJ/env/julia_history
 # Reactant chooses its XLA runtime variant (CPU only / CUDA) when it is installed, from the GPU it
 # sees; login nodes have none, so the CUDA variant is requested explicitly (prepare_env.sh also
-# writes it into device/LocalPreferences.toml). 12.9 for CUDA 12.x drivers, 13.1 for 13.x.
+# writes it into device/LocalPreferences.toml). 12.9 for CUDA 12.x drivers, 13.1 for 13.x; the
+# cluster's CUDA module is cuda/13.4.3, so the GPU nodes' driver serves CUDA 13 (H0 checks it with
+# nvidia-smi). Reactant brings its own CUDA runtime: the jobs do not load the cuda module.
 export REACTANT_GPU=${REACTANT_GPU:-cuda}
-export REACTANT_GPU_VERSION=${REACTANT_GPU_VERSION:-12.9}
+export REACTANT_GPU_VERSION=${REACTANT_GPU_VERSION:-13.1}
 
 # --- Python (data preparation, PyPSA-Eur) ---------------------------------------------------
 export UV_CACHE_DIR=$ESM_PROJ/env/uv_cache
