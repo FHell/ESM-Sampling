@@ -7,6 +7,12 @@ when done, and the affected document is updated in the same change.
 
 ## 1. Correctness of the ensemble
 
+- **Capacities without a learned bias.** Under [ensemble.md](ensemble.md) §3.1 the capacity
+  density need not be exact, only near-optimal and cost-monotone. Planned: a Langevin step on
+  $k$ driven by the sampled capacity scores ($-\beta_k\partial K + r\,s_k$), with the weather
+  drawn from its prior by refresh rather than corrected by a bias; a prototype and a review of
+  the learned bias's scale problem exist (2026-11-04). The two items below then concern only
+  what is kept of the bias.
 - **Bias convergence at $\alpha = 1$.** Short runs stay bounded with the safeguards
   ([sampler.md](sampler.md) §7.1), but the bias is far from converged: refits change it by
   $10^6$ nats over the visited states and the post-correction weight ESS is 1. Open: an $\hat h$

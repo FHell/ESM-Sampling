@@ -2,7 +2,10 @@
 
 This document derives the probability measure the sampler targets: the joint law of
 weather $x$, capacities $k$ and operation $v$ in a two-temperature ensemble with a learned
-bias. It covers the operational Gibbs measure per weather year, the investment measure, the
+bias. Which properties of this measure are fixed and which are modelling choices is stated in
+§3.1: only the weather prior is fixed; the decisions need a near-optimal density in which
+more expensive configurations are less likely, not one exact density. It covers the
+operational Gibbs measure per weather year, the investment measure, the
 role of the bias $\hat b(x,k)$, the reference measure, the regularized constraints and the
 zero-temperature limits. The terms of the cost are listed in [model.md](model.md), the
 weather prior in [weather_model.md](weather_model.md), and how the measure is sampled in
@@ -63,6 +66,30 @@ operation is Gibbs given $(x,k)$, and the capacities follow the expected-cost me
 is the model: perfect-foresight dispatch per weather year, investment chosen against the
 weather distribution, each at its own temperature.
 
+### 3.1 What is fixed and what is a modelling choice
+
+The density of the decisions is not a ground truth. The aim is a near-optimal ensemble:
+configurations close to the cost optimum, with more expensive ones less likely. The
+temperatures, the reference measure (§5) and the regularized constraints (§6) are modelling
+choices, and $\rho_K\,\pi$ is one reasonable member of a family of such ensembles, not the
+law the sampler must reproduce to the nat. Approximations and adaptations that change the
+sampled density of $(k,v)$ are therefore acceptable as long as they keep its defining
+properties:
+
+- the density decreases with the expected total cost $K(k)+\mathbb E_xF_x(k)$ (capacities)
+  and with the operating cost given $(x,k)$ (operation), at the stated temperatures;
+- it concentrates near the optimum;
+- chains from different starts agree on it, and it is stable under the sampler.
+
+A sampler design is judged by these properties, not by its distance from one exact density
+(for example the weight ESS of a reweighting to $\rho_1$).
+
+**The weather is the exception.** Its marginal must be the prior $\rho^x$: tilting it toward
+cheap years would change the climate the system is designed against, not the cost
+preference. A deliberate bias toward expensive weather (stress tests) is planned; it is to be
+an explicit, controllable tilt with a known weight, separate from the capacity and operation
+steps, never a side effect of them.
+
 ## 4. Why a bias is needed
 
 ### 4.1 The ensemble without bias ($\alpha = 0$)
@@ -105,6 +132,13 @@ enters undamped: its weather-dependent part tilts the weather marginal and its
 capacity-dependent part distorts $\rho_K$. The second bracket, the error of the
 weather-averaged term, is damped by $r = 10^{-3}$. The bias therefore has to reproduce
 differences of $\log Z_x(k)$ across the visited weather and capacities to about one nat.
+
+Under §3.1 the capacity part of this requirement is stricter than the model needs: a
+distortion $e^{-\varepsilon}$ of $\rho_K$ is acceptable if the result still prefers cheaper
+capacities near the optimum. It is not acceptable when $\varepsilon$ reverses that preference;
+a bias error of millions of nats did so on `chains40`, where the frozen bias paid a chain to
+shed load ([roadmap.md](roadmap.md) §1). The weather part of the requirement stands in full,
+since the weather marginal must be $\rho^x$.
 
 ### 4.4 The learned bias $\hat b$
 

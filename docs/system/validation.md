@@ -41,7 +41,12 @@ equilibrium**, the measure of sampler efficiency against network size, is that f
 during adaptation, so at $\alpha = 1$ the online bias and the adaptive modes must be frozen
 before the measurement window starts. The post-correction weights enter the weighted
 estimates; their ESS is reported next to the chain ESS, and a weight ESS below 30 % of the
-samples counts as not converged (`convergence/post_weight_ess_ok`). The CPU driver freezes the
+samples counts as not converged (`convergence/post_weight_ess_ok`). The weights compare the
+bias in use with a refit of it, not with the exact $b$, so a high weight ESS does not show
+that the bias is right. Since the decisions have no exact target density
+([ensemble.md](ensemble.md) §3.1), the criteria that matter are that the sampled density
+decreases with cost, concentrates near the optimum, agrees between chains from different
+starts, and leaves the weather at its prior. The CPU driver freezes the
 bias, the canonical CO₂ price and the adaptive modes at the end of the warmup; the device
 driver has no adaptive modes and freezes the bias.
 
