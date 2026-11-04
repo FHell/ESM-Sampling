@@ -179,8 +179,10 @@ sbatch hpc/jobs/cpu.sbatch <campaign> <config> [cpu | device | script <path> [ar
    Slurm instead. Runs longer than 24 hours are such chains, not `medium`/`long` jobs (`long`
    allows only 32 cores per job).
 
-The wrapper's mechanics (records, indexes, archive, the stop file on SIGTERM, exit 75) were
-tested locally with a stand-in driver on 2026-11-04.
+The wrapper was tested locally on 2026-11-04 with the CPU driver on `hpc/configs/h0_smoke.toml`:
+a SIGTERM to the wrapper during the fine warmup gave a snapshot, exit 75 and the status
+`checkpointed`; the same run id started again resumed from the snapshot (fine warmup, sweep 1
+of 4) and finished with exit 0.
 
 ## 6. Records, the ledger, and results through git
 
