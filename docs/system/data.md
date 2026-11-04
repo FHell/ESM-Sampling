@@ -63,9 +63,34 @@ h5py). `quantity_names` names the rows.
 | `weather/transition`, `weather/em_loglik` | fitted regime transition matrix and EM trace |
 | `calibration/beta`, `lp_objective`, `lp_capacity` | temperatures $(\beta_k,\beta_v)$ and the reference LP |
 | `config/levels` | the levels |
+| `run/restarts`, `run/resumed_at_sweep` | resumes from a snapshot (0 for a straight run) and the fine sweep counter of the last one (−1: none, or resumed in the level-0 warmup) |
 
 ## 4. Caches
 
-`<dirname(out)>/cache/weather_<hash>.jls` (fitted weather model) and
-`<dirname(out)>/cache/lp_<hash>.h5` (reference LP solution); see
+`<cache>/weather_<hash>.jls` (fitted weather model, Julia Serialization) and
+`<cache>/lp_<hash>.h5` (reference LP solution), where `<cache>` is `ESM_CACHE_DIR`, else
+`cache_dir`, else `<dirname(out)>/cache` ([config.md](config.md)); see
 [architecture.md](architecture.md) §5 for the keys. Deleting them forces a refit or re-solve.
+A miss is first looked up in the mirror (`ESM_CACHE_MIRROR`, `cache_mirror`) and copied in.
+Entries are written as `.<name>.tmp-<pid>-<random>` in the same directory and renamed into
+place; leftover temporary files are from killed writers and can be deleted.
+
+## 5. State snapshots
+
+The file `checkpoint` of the CPU driver ([hpc.md](hpc.md) §7), HDF5, replaced atomically at
+every write. Vectors are the coefficient vectors of the state at its level (the layouts of
+[model.md](model.md) §2).
+
+| path | content |
+|---|---|
+| `version` | layout version (1) |
+| `phase`, `it`, `where` | `"level0"` or `"fine"`; sweeps completed in the phase (fine: above `mlda_warmup` is production); a readable description |
+| `restarts`, `written` | resumes before the run that wrote it; Unix time of the write |
+| `co2_price` | the CO₂ price μ at the time (tuned during the fine warmup with `co2_cap > 0`) |
+| `config/seed`, `config/levels` | checked on resume |
+| `nchains` | number of saved chain states (1 in the level-0 warmup) |
+| `chains/<c>/level`, `m`, `z0`, `w/<j>`, `k`, `v` | the state: level ℓ, regimes, level-0 weather, innovations of levels 1…ℓ, capacity and operation coefficients |
+| `chains/<c>/logtarget` | its log target at the time (for checks; recomputed on resume) |
+| `chains/<c>/start`, `chains/<c>/Q` | fine phase: start kind and the monitored trace so far (quantity × sweep) |
+| `co2/price_trace` | the CO₂ price trace of the fine warmup so far |
+| `sampler/sigma_scale`, `sampler/gibbs/{wv,wz,wk}` | level-0 phase: carrier-scaling step sizes and slice widths |

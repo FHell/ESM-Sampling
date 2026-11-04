@@ -4,6 +4,8 @@
 # curve: the reverse move returns to the start, the line densities of the two directions are
 # antisymmetric (the Jacobians are inverse), and the pro-rata coordinates (σ, e) of the
 # compensating generators are unchanged.
+# The density, reverse-move, pro-rata and cache checks are also made by test_moves.jl (kop, kopC),
+# there also with fleet unit commitment.
 using Test, Random, LinearAlgebra, Statistics
 using ESMSampling
 const MK = ESMSampling

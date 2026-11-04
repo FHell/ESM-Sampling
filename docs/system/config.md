@@ -39,9 +39,23 @@ the 256-node network.
 | key | default | meaning |
 |---|---|---|
 | `data` | `"data/processed/model.h5"` | model input file ([data.md](data.md)) |
-| `out` | `"results/run.h5"` | output file; caches go to `<dirname(out)>/cache/` |
-| `seed` | 1 | master seed (chains use derived seeds) |
+| `out` | `"results/run.h5"` | output file |
+| `cache_dir` | `""` | directory of the weather-model and LP caches; `""`: `<dirname(out)>/cache/`; the environment variable `ESM_CACHE_DIR`, if set and non-empty, overrides it ([hpc.md](hpc.md) §4) |
+| `cache_mirror` | `""` | read-only fallback of the caches: an entry missing in the cache but present here is copied in instead of recomputed; `""`: none; overridden by `ESM_CACHE_MIRROR` |
+| `checkpoint` | `""` | CPU driver: the state snapshot file, written at sweep boundaries and resumed from if it exists at start ([hpc.md](hpc.md) §7, layout in [data.md](data.md) §5); `""`: off |
+| `checkpoint_minutes` | 30.0 | ... a snapshot every this many minutes of wall time (and once after the level-0 warmup) |
+| `stop_file` | `""` | ... if this file exists at a sweep boundary: write a snapshot, remove the file, exit with code 75 |
+| `seed` | 1 | master seed (chains use derived seeds; after the r-th resume, re-seeded from seed and r) |
 | `verbose` | `true` | progress messages |
+
+**Environment variables** (they are not keys; [hpc.md](hpc.md) §3–§7):
+
+| variable | effect |
+|---|---|
+| `ESM_CACHE_DIR` | overrides `cache_dir` when set and non-empty |
+| `ESM_CACHE_MIRROR` | overrides `cache_mirror` when set and non-empty |
+| `ESM_LP_THREADS` | HiGHS's `threads` option in the reference LP (`solve_lp`); unset: HiGHS's default |
+| `ESM_IGNORE_SIGTERM` | `1`: `scripts/run.jl` ignores SIGTERM (the job wrapper stops the run through the stop file) |
 
 **Hierarchy and bases.**
 

@@ -70,6 +70,17 @@ end
     return c, mc - pc                              # injection: discharge minus charge
 end
 
+"""
+Commitment cost of compensator i of generator group gj at step τ with output utilization y and
+its commitment fixed (0 without unit commitment): the walls see the output.
+"""
+@inline function kop_uc(P::Problem, LM::LocalModel, LC::LocalCost, gj::Int, i::Int, k::Float64, τ::Int, y::Float64)
+    g = P.E.gens[gj]
+    g.ucf > 0 || return 0.0
+    U = LC.Y[g.ucf]
+    return uc_cost(g, i, LC.A[gj][i, τ], k, k + P.E.κ0, LM.Δt, P.E.c_viol, clamp(y, 0.0, 1.0), U[i, τ], U[i, mod(τ, LM.T)+1])
+end
+
 "Terms of unit (kind, gi, i) of a kop move from the current caches."
 function kop_term(P::Problem, LM::LocalModel, LC::LocalCost, Kraw, kind::Int, gi::Int, i::Int; κmin::Float64=1.0)
     E = P.E
@@ -107,7 +118,8 @@ function kop_term(P::Problem, LM::LocalModel, LC::LocalCost, Kraw, kind::Int, gi
             abs(κ) >= κmin || continue
             push!(comp[τ], (Float64(f), Float64(ii), Float64(gj), κ, κ * LC.Y[f][ii, τ] / Pτ))
             kj = LC.kgen[gj][ii]
-            compc0[τ] += gen_cost(gg, ii, LC.A[gj][ii, τ], kj, kj + κ0, Δt, cv, LC.Y[f][ii, τ])[1]
+            compc0[τ] += gen_cost(gg, ii, LC.A[gj][ii, τ], kj, kj + κ0, Δt, cv, LC.Y[f][ii, τ])[1] +
+                         kop_uc(P, LM, LC, gj, ii, kj, τ, LC.Y[f][ii, τ])
         end
     end
     return KopTerm(kind, gi, i, kf, n, c, LM.ncell[c], k0, sp.lo[i], sp.hi[i], f_capex(E, kf)[i], nmeas,
@@ -140,7 +152,7 @@ function kop_eval(P::Problem, LM::LocalModel, LC::LocalCost, kt::KopTerm, k1::Fl
                 kj = LC.kgen[gj][ii]
                 y0 = LC.Y[f][ii, τ]
                 y1 = σ * P1 / κ
-                cc += gen_cost(E.gens[gj], ii, LC.A[gj][ii, τ], kj, kj + κ0, Δt, cv, y1)[1]
+                cc += gen_cost(E.gens[gj], ii, LC.A[gj][ii, τ], kj, kj + κ0, Δt, cv, y1)[1] + kop_uc(P, LM, LC, gj, ii, kj, τ, y1)
                 dS -= κ * (clamp(y1, 0.0, 1.0) - clamp(y0, 0.0, 1.0))
                 if commit
                     LC.Y[f][ii, τ] = y1

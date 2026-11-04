@@ -117,7 +117,7 @@ the exact weather moves.
 
 `weather_model_cached` fits the model with its own random stream (seed + 7919, so a cached
 and a fresh fit agree) and stores the fitted parameters in
-`<dirname(out)>/cache/weather_<hash>.jls`. The key is a hash of a content fingerprint of
+`<cache>/weather_<hash>.jls` (the cache directory of [architecture.md](architecture.md) §5). The key is a hash of a content fingerprint of
 the weather tensors in the data file, the levels, `K`, the seed and the spatial bases, so
 additive changes to the data file do not invalidate it. The fit uses all years.
 

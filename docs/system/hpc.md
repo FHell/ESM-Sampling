@@ -1,13 +1,14 @@
 # Runs on the PIK HPC cluster
 
 How the sampler is run on the PIK cluster (HPC2024, Slurm): the environment, where code, data,
-caches and results live, the job types, checkpointing, and how every run is recorded. The
-campaigns themselves are rows H0–H9 of the experiment ledger
-([../experiments.md](../experiments.md)). Facts about the cluster are from the HPC2024 user
-guide; values marked ⟨…⟩ are to be filled in.
+caches and results live, the job types, checkpointing, how every run is recorded, and how
+results come back. The scripts are in `hpc/`; the campaigns are rows H0–H9 of the experiment
+ledger ([../experiments.md](../experiments.md)). User `hellmann`, project directory `coen`
+(`/p/projects/coen`), Slurm account `icone`.
 
-> **Status: missing.** Nothing of this exists yet; this document is the intended shape. The
-> code changes it needs are listed in §8.
+> **Status: partial.** The scripts exist, and the CPU driver's shared cache (§4) and state
+> snapshots with resume (§7) are built; the device driver has no snapshots yet (§7). Nothing
+> has run on the cluster yet; campaign H0 is the first check.
 
 ## 1. The cluster in brief
 
@@ -15,173 +16,243 @@ guide; values marked ⟨…⟩ are to be filled in.
 |---|---|---|
 | login nodes `login[01-03]` | 64 cores (EPYC 9354, Zen 4), 768 GB, **internet** | interactive work, compiling, short tests; QOS `io` (partition `io`) runs batch jobs there: 4 cores, 3 days, 5 concurrent jobs |
 | CPU nodes (`standard`, 180; `priority`, 60) | 128 cores (2 × EPYC 9554, Zen 4), 768 GB, no internet | QOS `short` 24 h (default), `medium` 7 days, `long` 30 days but at most 32 cores per job; `priority` 24 h, starts within minutes, at most 64 cores and 5 jobs; `standby` preemptible |
-| GPU nodes (`gpu`, 12) | 4 × H100 80 GB, 128 cores, 1.5 TB, `/localscratch` NVMe ~3 TB | QOS `gpushort` 24 h, `gpumedium` 7 days, `gpulong` 30 days, `gpupreempt` preemptible; request GPUs with `--gres=gpu:N` |
+| GPU nodes (`gpu`, 12) | 4 × H100 80 GB, 128 cores, 1.5 TB, `/localscratch` NVMe ~3 TB | QOS `gpushort` 24 h, `gpumedium` 7 days, `gpulong` 30 days, `gpupreempt` preemptible; `--gres=gpu:N` |
 | `$HOME` | backed up, small quota | no job I/O |
-| `/p/projects/⟨project⟩` | backed up, by ticket | the permanent home of this project on the cluster |
-| `/p/tmp/$USER` | fast parallel FS, not backed up, **inactive files are deleted** | job working directories |
-| `/localscratch` (GPU nodes) | per job, cleared at job end | staging and compile scratch |
-| ERA5 folder ⟨path⟩ | read-only, shared on the cluster | the ERA5 cut-outs for the weather inputs (§4) |
+| `/p/projects/coen` | backed up | the permanent home of this project on the cluster |
+| `/p/tmp/hellmann` | fast parallel FS, not backed up, **inactive files are deleted** | job working directories |
+| `/localscratch` (GPU nodes) | per job, cleared at job end | temporary and compile files |
+| `/p/projects/climate_data_central/reanalysis/ERA5` | shared, read-only | ERA5 for the weather inputs (§4) |
 
 Fair share charges *allocated* cores × wall time (memory is free, default ~6 GB per core) with
-a 7-day half-life. Preemption (standby, gpupreempt, and cancellation at the time limit) sends
-SIGTERM, then SIGKILL 5 minutes later. Licensed solvers are not available: every LP is solved
-with HiGHS (the Julia code uses JuMP + HiGHS; PyPSA-Eur's `config.esm.yaml` sets
-`solving: solver: highs`).
+a 7-day half-life. Preemption (standby, gpupreempt) and cancellation send SIGTERM, then SIGKILL
+5 minutes later. Licensed solvers are not available: every LP is solved with HiGHS (the Julia
+code uses JuMP + HiGHS; PyPSA-Eur's `config.esm.yaml` sets `solving: solver: highs`). Software:
+`module load julia/1.12.2` (the Manifests' version), `cuda/13.4.3` (not loaded: Reactant
+brings its own CUDA runtime), a local `uv`.
 
 ## 2. Storage layout
 
 ```
-/p/projects/⟨project⟩/esm/                 permanent, backed up
-├── code/                                  git clone; one worktree per campaign, pinned commit
+/p/projects/coen/esm/                       permanent, backed up        ($ESM_PROJ)
+├── ESM-Sampling/                           the git clone (main): code, and the committed results  ($ESM_CODE)
+│   ├── data -> /p/projects/coen/esm/data   (link made by prepare_env.sh; git-ignored)
+│   └── campaigns/⟨id⟩/                     committed: campaign.toml, runs.jsonl, runs/⟨run id⟩/ (records, small results)
+├── campaigns/⟨id⟩/
+│   ├── code/                               git worktree of the clone at the campaign's pinned commit
+│   └── runs.jsonl                          the campaign's runs index
 ├── env/
-│   ├── julia_depot/                       JULIA_DEPOT_PATH (packages, artifacts incl. XLA/CUDA, precompile caches)
-│   ├── uv_cache/  venv/                   UV_CACHE_DIR, the Python environment (data preparation)
-│   └── ENVIRONMENT.toml                   module versions, Julia version, Manifest hashes, prepared on, by
-├── data/
-│   ├── raw/                               downloaded inputs (OPSD, PyPSA-Eur bundles)
-│   └── processed/                         model*.h5 (40, 76, 256 nodes, ERA5 variants), read-only for jobs
-├── cache/                                 durable mirror of the computed caches (weather models, reference LPs)
-├── archive/⟨campaign⟩/⟨run_id⟩/           finished runs: outputs, run record, logs (no checkpoints)
-└── ledger/runs.jsonl                      one line per run (§6)
+│   ├── julia_depot/                        JULIA_DEPOT_PATH (packages, artifacts incl. XLA/CUDA, precompile caches)
+│   ├── uv_cache/  venv/  xdg_cache/  mpl/  Python environment and tool caches
+│   └── ENVIRONMENT.toml                    one entry per prepared code directory (§3)
+├── data/{raw,processed}/                   inputs, read-only for jobs
+├── cache/                                  durable mirror of the computed caches ($ESM_CACHE_MIRROR)
+├── archive/⟨id⟩/⟨run id⟩/                  finished runs without checkpoints
+└── ledger/runs.jsonl                       runs index of all campaigns
 
-/p/tmp/$USER/esm/                          fast, purged when inactive
-├── cache/                                 the caches jobs read and write (content-hashed keys)
-└── runs/⟨run_id⟩/                         working directory: config copy, checkpoints, logs, outputs
+/p/tmp/hellmann/esm/                        fast, purged when inactive  ($ESM_SCRATCH)
+├── cache/                                  the cache jobs read and write ($ESM_CACHE_DIR)
+├── runs/⟨id⟩/⟨run id⟩/                     working directory of a run: configs, log, outputs, checkpoint, run.toml
+└── logs/                                   Slurm output files
 ```
 
 - **Code, environment and data never live on `/p/tmp`:** its automatic deletion would remove a
-  depot or a data file that has not been touched for a while, and jobs would fail offline.
-- **Caches are content-addressed** (hash of the model options, levels, weather seed), so all
-  runs share one cache directory, and a purged cache is recomputed, not wrong. At the end of a
-  campaign the cache entries it used are copied to the durable mirror; jobs fall back to the
-  mirror before recomputing.
-- **Outputs are written to the run directory** on `/p/tmp`; the job epilogue copies the
-  outputs and the run record (not the checkpoints) to `archive/`, and appends the ledger line.
-- **GPU jobs** stage the model file to `/localscratch/$USER/$SLURM_JOB_ID` (it is read once,
-  so this matters little) and put scratch files of the compiler there.
+  depot or a data file, and offline jobs would fail.
+- **One pinned code version per campaign:** `hpc/new_campaign.sh` makes a worktree of the clone
+  at a commit; every run of the campaign uses it, and `hpc/run.sh` refuses to run if it has
+  uncommitted changes. The clone itself can move on (and receives the results).
+- **Caches are content-addressed,** so all runs share one cache; a purged entry is recomputed,
+  not wrong. The mirror on `/p/projects` is the durable fallback.
 
 ## 3. Environment, prepared on a login node
 
 Compute nodes have no internet, so everything is downloaded, instantiated and precompiled on a
-login node, and jobs run with downloads switched off.
+login node, and jobs run offline. `hpc/env.sh` holds every path and variable (each can be
+overridden before sourcing it); `hpc/prepare_env.sh [<code dir>]` prepares a code directory:
 
-**Julia.** The Manifests are resolved with Julia 1.12.2 and the projects require stdlib
-versions of 1.12, so the cluster needs a Julia 1.12 module (`module avail julia`; the guide
-lists 1.11.7). If none exists, install a 1.12 binary with juliaup into `env/` on the login node
-(the cluster has internet there), or ask for the module.
+1. clones the repository if the clone does not exist;
+2. links `data/` to the project's data;
+3. writes `device/LocalPreferences.toml` with `[Reactant_jll] gpu = "cuda"`, `gpu_version =
+   "13.1"`: Reactant picks its XLA runtime (CPU only or CUDA) when it is installed, from the GPU
+   it detects, and a login node has none (`REACTANT_GPU`, `REACTANT_GPU_VERSION` in `env.sh`;
+   12.9 for CUDA 12 drivers);
+4. `Pkg.instantiate()` and `Pkg.precompile()` for both projects, with
+   `JULIA_CPU_TARGET="generic;znver4,clone_all"` (login and compute nodes are Zen 4) and 8
+   precompile tasks;
+5. `uv sync --frozen` for the Python environment;
+6. appends the record to `env/ENVIRONMENT.toml`: commit, Julia version and module, Manifest
+   and lock hashes, the Reactant variant, date, host.
 
-```bash
-# login node, once per environment version
-module load julia/⟨1.12.x⟩
-export JULIA_DEPOT_PATH=/p/projects/⟨project⟩/esm/env/julia_depot
-export JULIA_CPU_TARGET="generic;znver4,clone_all"   # login (EPYC 9354) and compute (9554) are both Zen 4
-export JULIA_NUM_PRECOMPILE_TASKS=8                   # be gentle with the shared login node
-cd /p/projects/⟨project⟩/esm/code
-julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
-julia --project=device -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
-```
-
-- **Reactant on the GPU.** Reactant fetches its XLA runtime (and the CUDA libraries) as
-  artifacts when the project is instantiated, and chooses the variant by the platform it
-  detects. On a login node without a GPU it may pick the CPU-only variant; the CUDA variant
-  must be selected explicitly (a Reactant preference in `device/LocalPreferences.toml`) before
-  instantiating. ⟨To verify in H0.⟩ The cluster's `module load cuda/12.6.0` is not needed if
-  Reactant brings its own CUDA runtime; the NVIDIA driver on the GPU nodes must be new enough.
-- **In jobs:** the same `JULIA_DEPOT_PATH`, plus `JULIA_PKG_OFFLINE=true` (a missing package
-  fails loudly instead of trying the network), `julia -t $SLURM_CPUS_PER_TASK`, and the run
-  wrapper of §5.
-- **Precompile once per code version:** a changed `src/` triggers precompilation of
-  ESMSampling in the first job, which is fine (a minute) but concurrent array tasks would all
-  do it. The preparation script therefore precompiles after every checkout of a campaign
-  commit.
-
-**Python** (data preparation, PyPSA-Eur): with the local `uv`, `UV_CACHE_DIR` and the venv in
-`env/`, `uv sync` on the login node; jobs set `UV_OFFLINE=1`. PyPSA-Eur's retrieval rules need
-internet: run them in a job with `--partition=io --qos=io` (or locally, then `rsync`); the
-solving rules run on compute nodes with HiGHS.
-
-**Record.** `env/ENVIRONMENT.toml` holds the Julia and module versions, the Manifest hashes,
-the uv lock hash, the date and who prepared it; every run record refers to it (§6).
+`hpc/jobs/prepare.sbatch` runs the same as a batch job in the `io` QOS. Jobs set
+`JULIA_PKG_OFFLINE=true` and `UV_OFFLINE=1`.
 
 ## 4. Inputs and caches
 
-- **Model files** (`data/processed/model*.h5`, 0.1–0.6 GB each) are built locally or in a
-  preparation job and copied to `data/processed/` with `rsync -avzP`.
-- **ERA5.** The cluster has a shared, read-only ERA5 folder (⟨path⟩), so no ERA5 download is
-  needed: `scripts/prepare_era5.py` runs as a build job on a compute node, reads only the
-  variables, years and region it needs, sequentially, and writes the processed weather into
-  `data/processed/` (e.g. `model256_era5.h5`). It never scans the folder recursively (no
-  `find` or `grep` over it) and runs one such job at a time, to keep the load on the shared
-  storage low.
-- **Weather-model and LP caches.** The code now writes them to `dirname(cfg.out)/cache`, i.e.
-  per run directory. **Status: missing:** a `cache_dir` configuration key (or `ESM_CACHE_DIR`
-  environment variable) so that all runs share `/p/tmp/$USER/esm/cache`, with a read-only
-  fallback to the durable mirror, and writes to a temporary name followed by an atomic rename
-  so that concurrent array tasks cannot read half-written entries.
-- **Reference LPs** (the zero-temperature optimum per network, resolution and weather year,
-  for validation and for the starts) are computed once per campaign in a preparation job
-  (HiGHS, one job per case, threads = cores requested) and cached.
-- **Compilation.** A Reactant process spends 2–4 minutes tracing and compiling before the
-  first sweep (most of it once per process; [performance.md](performance.md) §7). GPU jobs are
-  therefore long-lived processes that batch many chains and replicas, not arrays of short
-  jobs. Whether XLA's persistent compilation cache can be used (on `/localscratch` or the
-  depot) is to be checked in H0.
+- **Model files** (`data/processed/model*.h5`, 0.1–0.6 GB each) are built on the cluster from
+  public sources, so their provenance is a commit plus recorded inputs
+  ([data_sources.md](data_sources.md) §5): `hpc/prepare_data.sh small` (the example network,
+  OPSD data and NASA POWER points: `model.h5`, `model76.h5`) and `hpc/prepare_data.sh pypsa256`
+  (PyPSA-Eur at the pinned revision in `configs/pypsa-eur/REVISION`, its Python environment
+  recreated from `configs/pypsa-eur/requirements.txt`, the snakemake target
+  `composed_2050.nc` of `config.esm.yaml`, then `model256.h5`). Both need internet and run in
+  the `io` QOS (`hpc/jobs/data.sbatch`, requeued if interrupted; downloads, POWER points and
+  snakemake outputs are kept, so a rerun continues). Every built file is recorded in
+  `data/processed/PROVENANCE.toml` (path, hash, size, commit, command, date, host).
+- **ERA5** is read in place from `/p/projects/climate_data_central/reanalysis/ERA5` (`ESM_ERA5`)
+  by `scripts/prepare_era5.py` in a build job: only the variables, years and region it needs,
+  sequentially, one such job at a time, never a recursive scan of the folder (no `find` or
+  `grep` over it). Its layout (files per variable and year) is to be looked up once, by hand,
+  for the variables needed.
+- **Weather-model and LP caches** (`weather_<hash>.jls`, `lp_<hash>.h5`, content-hashed
+  keys; [architecture.md](architecture.md) §5). Their directory is the environment variable
+  `ESM_CACHE_DIR` if set and non-empty, else the key `cache_dir`, else `dirname(out)/cache`;
+  jobs set `ESM_CACHE_DIR=/p/tmp/hellmann/esm/cache`, so all runs share it. The read-only
+  mirror is `ESM_CACHE_MIRROR` (or the key `cache_mirror`), set to
+  `/p/projects/coen/esm/cache`: an entry missing in the cache but present in the mirror
+  is copied into the cache and used, instead of being recomputed. Every entry is written
+  under a temporary name in the cache directory (`.<name>.tmp-<pid>-<random>`) and renamed
+  into place, so concurrent array tasks see a complete entry or none; a task that is killed
+  while writing leaves only its temporary file, which is never read (and can be deleted). Two
+  tasks that miss the same entry at once both compute it and the later rename wins (the
+  entries are identical). An unreadable entry is recomputed and replaced, with a warning.
+  The wrapper sets both in the run's config as well. At the end of a campaign its cache
+  entries are copied to the mirror (`rsync -a /p/tmp/hellmann/esm/cache/ /p/projects/coen/esm/cache/`).
+- **Compilation.** A Reactant process spends 2–4 minutes tracing and compiling before the first
+  sweep, so GPU jobs are long-lived processes that batch many chains and replicas.
 
-## 5. Job types
+## 5. Job types and the wrapper
 
-| type | resources | QOS | used for |
+**Preemptible by default.** Jobs run in `standby` (CPU) or `gpupreempt` (GPU) whenever possible,
+with `--requeue`: a preempted job is requeued automatically, keeps its run id and resumes from
+the latest state snapshot (§7); a bit of lost work does not matter. Every job is constructed so
+that it can be restarted this way. Guaranteed-runtime templates exist for the cases where
+preemption would hurt.
+
+**Shared nodes.** Jobs take a part of a node, not the whole node. Thread counts therefore follow
+the allocation (`hpc/run.sh`), because libraries that size themselves from the node's 128 cores
+would oversubscribe the cores the job was given: Julia threads = `--cpus-per-task`
+(`ESM_JULIA_THREADS` to change); BLAS (`OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`) and OpenMP
+single-threaded unless a job sets `ESM_BLAS_THREADS` / `ESM_OMP_THREADS` (their parallel
+regions would multiply with Julia's threads); HiGHS `threads` = `--cpus-per-task`
+(`ESM_LP_THREADS`). Memory: the default of ~6 GB per core, or `--mem-per-cpu` / `--mem` on the
+command line. The run record notes the thread plan.
+
+| template (`hpc/jobs/`) | resources | QOS | used for |
 |---|---|---|---|
-| **prepare** | login node or `io` job (4 cores) | `io` | instantiate, precompile, downloads, PyPSA-Eur retrieval |
-| **build** | 1 node part, 16–64 cores | `short` | PyPSA-Eur solves (HiGHS), weather-model fits, reference LPs |
-| **CPU chain** | 1 task, `--cpus-per-task` = threads of the chain (4–32, from H1), memory by model size | `short`, with restart chaining; `standby` when restartable | CPU sampler runs; job arrays over chains, seeds or configurations |
-| **GPU** | `--gres=gpu:1`, 16 cores, 128–256 GB | `gpushort`, `gpumedium`; `gpupreempt` when restartable | device runs: C chains × M weather replicas batched on one H100 |
-| **analysis** | 1–4 cores | `priority` | diagnostics, summaries, plots |
+| `prepare.sbatch` | 4 cores on a login node | `io` | environment preparation (§3) |
+| `data.sbatch` | 4 cores on a login node, 3 days, requeued | `io` | building the model files (§4) |
+| `h0_cpu.sbatch`, `h0_gpu.sbatch` | 8 cores; 1 H100 + 16 cores | `priority`; `gpushort` | campaign H0: offline load, deterministic tests, a smoke run; Reactant on the H100, a family profile |
+| `cpu.sbatch` | 8 cores (`-c` to change), 24 h, requeued | `standby` | CPU sampler runs (the default) |
+| `cpu_array.sbatch` | one run per line of a list file, requeued | `standby` | many configurations or seeds (`--array=1-n%k`) |
+| `build.sbatch` | 16 cores, 12 h, requeued | `standby` | LP solves (e.g. `scripts/lp_reference.jl`), weather-model fits, data preparation, PyPSA-Eur solves; a preempted build starts over, finished cache entries are kept |
+| `gpu.sbatch` | 1 H100, 16 cores, 160 GB, 24 h, requeued | `gpupreempt` | device runs |
+| `cpu_short.sbatch`, `gpu_short.sbatch` | as above, not preempted | `short`, `gpushort` | when preemption would hurt |
+| `analysis.sbatch` | 4 cores, 2 h | `priority` | diagnostics, summaries |
 
-**The run wrapper** (`hpc/run.sh`, missing) is the only entry point of a job:
+Every template calls the wrapper of the campaign's pinned code:
 
-1. loads the modules and the environment of §3, creates `runs/⟨run_id⟩/` on `/p/tmp`, copies
-   the configuration there, and refuses to run from a dirty or unpinned code tree;
-2. writes the start of the run record (§6);
-3. runs the driver with the run directory as its output and checkpoint location, and forwards
-   SIGTERM to it (Slurm's 5-minute grace) so that it writes a checkpoint and exits;
-4. on exit, completes the run record with `sacct` (elapsed, MaxRSS, CPU efficiency,
-   ConsumedEnergy), copies outputs and record to `archive/`, and appends the ledger line.
+```bash
+sbatch hpc/jobs/cpu.sbatch <campaign> <config> [cpu | device | script <path> [args...]]
+```
 
-**Longer than 24 hours.** Runs that exceed a QOS limit are a chain of jobs
-(`sbatch --dependency=afterany:⟨jobid⟩`) that resume from the checkpoint, rather than
-`medium`/`long` jobs (`long` allows only 32 cores per job). The same mechanism makes
-`standby` and `gpupreempt` usable: a preempted job is requeued and resumes.
+`hpc/run.sh` (paths in the config are relative to the campaign code):
 
-## 6. Run records and the ledger
+1. checks that the campaign code has no uncommitted changes to tracked files (untracked files
+   are fine), loads `julia/1.12.2`, sets the offline variables and
+   `ESM_IGNORE_SIGTERM=1`;
+2. makes the run directory `runs/⟨id⟩/⟨run id⟩/` with the run id `⟨id⟩-⟨config⟩-⟨job id⟩[_⟨task⟩]`
+   (or `$RUN_ID`), which a Slurm requeue keeps, so a requeued job resumes;
+3. copies the config (`config.orig.toml`) and writes the config as run (`config.toml`: `out`,
+   `cache_dir`, `cache_mirror`, `checkpoint`, `stop_file` set to the run directory and caches);
+4. appends the start of an attempt to `run.toml`: run id, campaign, config and its hash,
+   commit, Julia version, the input data file and its hash (the model files are not in git),
+   mode, command, job id, array task, partition, QOS, nodes, cores, GPUs, memory,
+   restart count, start;
+5. sets the threads from the allocation (§5) and runs the driver under `srun`; SIGTERM
+   (preemption, `scancel`) and SIGUSR1 (the templates' `--signal=B:USR1@⟨lead⟩` before the time
+   limit) create the stop file;
+6. at the end completes the attempt: exit code, status (`finished`, `checkpointed` = exit 75 after a
+   snapshot, `preempted` = signalled without a snapshot, `failed`), the `sacct` figures (elapsed, MaxRSS, CPU time, energy) and the output files;
+   appends one line to the runs indexes (global and the campaign's, under a lock); archives
+   finished and failed runs without checkpoints;
+7. a run stopped by the time limit (exit 75) with `RESUBMIT=n > 0` submits its own
+   continuation (afterany dependency, same run id, `n−1` left); a preempted run is requeued by
+   Slurm instead. Runs longer than 24 hours are such chains, not `medium`/`long` jobs (`long`
+   allows only 32 cores per job).
 
-- **Run id:** `⟨campaign⟩-⟨config⟩-⟨yyyymmdd-hhmm⟩-⟨jobid⟩[_⟨array index⟩]`.
-- **Run record** (`runs/⟨run_id⟩/run.toml`): campaign id (ledger H-row), configuration (copy
-  and hash), git commit, environment record, Slurm job id, partition, QOS, nodes, cores, GPUs,
-  memory, seeds, start, end, exit status, checkpoint/resume count, the `sacct` summary, and
-  the output files with their sizes.
-- **Runs index** (`ledger/runs.jsonl`): one JSON line per finished or failed run, the record's
-  fields; the campaign's analysis reads it to select runs. Failed runs are recorded too.
-- **Experiment ledger** ([../experiments.md](../experiments.md)): one row per campaign (H0–H9),
-  with the question, the design, the one-line result and the record (archive path, the runs
-  index filter). Results summaries are copied back to the local repository under
-  `results/hpc/⟨campaign⟩/` with `rsync`; the work log ([../worklog.md](../worklog.md)) notes
-  what was submitted and when.
+The wrapper was tested locally on 2026-11-04 with the CPU driver on `hpc/configs/h0_smoke.toml`:
+a SIGTERM to the wrapper during the fine warmup gave a snapshot, exit 75 and the status
+`checkpointed`; the same run id started again resumed from the snapshot (fine warmup, sweep 1
+of 4) and finished with exit 0.
 
-## 7. Checkpoints
+## 6. Records, the ledger, and results through git
 
-**Status: missing.** Neither driver writes a restartable checkpoint. Needed: every ~15–30
-minutes and on SIGTERM, an atomic write (temporary file, then rename) to the run directory of
-everything a resumed run needs — chain states, sampler adaptation (step sizes, learned modes),
-RNG states, the Langevin step sizes and lag-probe state, replica weather and weights, the
-sweep counter and the monitored traces so far — and at start-up a resume when a checkpoint
-exists. On the device, the state is downloaded at each host checkpoint already; the checkpoint
-adds the file write and the RNG keys.
+- **Run record** `run.toml` (one `[[attempt]]` per job attempt) and **runs index** lines in
+  `ledger/runs.jsonl` and `campaigns/⟨id⟩/runs.jsonl`, failed runs included.
+- **Campaign:** `hpc/new_campaign.sh ⟨id⟩ [⟨commit⟩]` makes the pinned worktree, prepares it, and
+  starts `campaigns/⟨id⟩/campaign.toml` in the clone (id, commit, paths; question and design to
+  fill in from the ledger row).
+- **Results come back through git.** `hpc/collect.sh ⟨id⟩ [globs]` copies, for every archived
+  run, `run.toml`, the configs and the small result files (default `summary*`, `*.csv`,
+  `*.txt`) into `campaigns/⟨id⟩/runs/⟨run id⟩/` of the clone, with the campaign's runs index,
+  refuses files above 5 MB and a campaign above 50 MB (`ESM_COLLECT_MAX_MB`,
+  `ESM_COLLECT_TOTAL_MB`), and commits in the clone. It never pushes: the user reviews and
+  pushes from the cluster, and pulls locally. Large outputs stay in `archive/`.
+- **Experiment ledger** ([../experiments.md](../experiments.md)): one row per campaign, whose
+  record column points to `campaigns/⟨id⟩/`. The work log notes what was submitted.
 
-## 8. Code changes needed before the first campaign
+## 7. State snapshots and resume
 
-1. `cache_dir` key or `ESM_CACHE_DIR`, shared cache with atomic writes (§4).
-2. Checkpoint and resume in `run_chains` and `run_device`, with SIGTERM handling (§7).
-3. `hpc/` scripts: `prepare_env.sh` (login node), `run.sh` (wrapper), job templates per type
-   (§5), `record.jl` or a small Python helper for the run record and ledger line (§6).
-4. A Julia 1.12 module or binary on the cluster, and the Reactant CUDA artifact on a login
-   node (§3), verified in H0.
+The jobs run preemptible (`standby`, requeued automatically), and losing the work since the
+last snapshot is acceptable, so the CPU driver writes **snapshots of the chain states**, not
+a full-fidelity checkpoint: plain HDF5 data that survives code and Julia versions (layout in
+[data.md](data.md) §5).
+
+- **Keys** ([config.md](config.md)): `checkpoint` (the snapshot file; empty: off),
+  `checkpoint_minutes` (30), `stop_file`. The wrapper points `checkpoint` at
+  `runs/⟨id⟩/⟨run id⟩/snapshot.h5` and `stop_file` at a file in the run directory.
+- **When** (`run_chains`, at sweep boundaries: after a level-0 warmup iteration or a fine
+  sweep over all chains): every `checkpoint_minutes` of wall time; once after the level-0
+  warmup, before the first fine sweep; and when the stop file exists, after which the driver
+  removes the stop file and exits with **code 75** (`scripts/run.jl` exits with the driver's
+  code: 0 finished, 75 stopped after a snapshot, anything else a failure). The snapshot is
+  written to a temporary name, flushed (`fsync`) and renamed over the previous one.
+- **Contents:** the phase (`level0` or `fine`; a fine sweep counter above `mlda_warmup` is
+  production) and the sweep counter; per chain the state (level, regimes `m`, `z0`, the
+  innovations `w` per level, `k`, `v`) and its start kind; the monitored traces so far; the
+  CO₂ price and its tuning trace; in the level-0 warmup the step sizes of the carrier scaling
+  and the slice widths. Not the learned modes, the bias, the online-bias observations, the
+  post-correction records or the price accumulators.
+- **Resume:** if the snapshot file exists at start, the driver sets up as usual (the caches
+  make that quick), loads the states, logs the restart count and the position, and continues
+  the phase and the sweep counter: the chains restart from exactly the saved states, with
+  random streams re-seeded from `seed` and the restart count (never a replay of the old
+  stream), kernels rebuilt (adaptation starts afresh in the rest of the warmup and is frozen
+  in production) and the caches recomputed from the states. A resume after the level-0
+  warmup lifts the set-up bias, not the one learned in the warmup (the bias is being
+  retired); the sampled prices and the post-correction cover the production sweeps since the
+  last start; the output records `run/restarts` and `run/resumed_at_sweep`. A snapshot is
+  refused if its levels or seed differ from the configuration.
+- **SIGTERM.** Slurm sends SIGTERM to every process of a preempted job and SIGKILL after the
+  grace time. With `ESM_IGNORE_SIGTERM=1`, `scripts/run.jl` ignores SIGTERM
+  (`ESMSampling.ignore_sigterm`: `SIG_IGN` and SIGTERM unblocked on the main thread; Julia's
+  own signal listener would otherwise receive it with `sigwait` and exit); the wrapper's trap
+  creates the stop file, and the driver writes the snapshot at the next sweep boundary and
+  exits with 75. The grace time must cover one sweep plus the write.
+
+> **Status: missing (device).** `run_device` writes no snapshot yet. On the device the state is
+> downloaded at each host checkpoint already; the snapshot adds the file write.
+
+Snapshots are also outputs: a later experiment can start from them. They stay in the run
+directory and are not archived (their size grows with the model).
+
+## 8. First steps on the cluster
+
+1. After the next push: `git -C /p/projects/coen/esm/ESM-Sampling pull` on a login node.
+2. `bash hpc/prepare_env.sh` on a login node (or `sbatch hpc/jobs/prepare.sbatch`).
+3. Build the model files: `sbatch hpc/jobs/data.sbatch small` (hours), and later
+   `sbatch hpc/jobs/data.sbatch pypsa256` (the PyPSA-Eur build, longer).
+4. `bash hpc/new_campaign.sh H0`, then `sbatch hpc/jobs/h0_cpu.sbatch H0` and
+   `sbatch hpc/jobs/h0_gpu.sbatch H0`; read the logs in `/p/tmp/hellmann/esm/logs/`.
+5. H2 (reference LPs): `bash hpc/new_campaign.sh H2`, then per configuration
+   `sbatch hpc/jobs/build.sbatch H2 <config> script scripts/lp_reference.jl`, then
+   `bash hpc/collect.sh H2 'summary*'` and push.

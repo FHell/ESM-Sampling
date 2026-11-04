@@ -1,4 +1,6 @@
 # Tests of the sparse graph-Haar bases and the local move machinery (src/local.jl).
+# The incremental-cost, recorded-evaluation, cache, walk-linearity and reversibility checks of
+# this file are also made, for every family on one site table, by test_moves.jl.
 using Test, Random, LinearAlgebra, Statistics, SparseArrays
 using ESMSampling
 const ML = ESMSampling

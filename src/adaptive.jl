@@ -250,6 +250,33 @@ function prep_amode!(rng, ws, P, LM, LC, FF, AM::AdaptiveModes, τ, jac; comp::B
 end
 
 """
+Learned dispatch-pair shape (`adshape`) of units u1, u2 at one node on the steps b0 … b0+L−1:
+u1 changes its output by φ_j t and u2 by −φ_j t at step b0+j−1 (balance-neutral, no
+compensation); steps where either unit has |κ| < κmin are left out. Returns false if empty.
+"""
+function prep_adshape!(bm::BlockMove, P, LM, LC, u1, u2, φ, b0::Int, L::Int; κmin=1.0)
+    bm.n = L
+    resize!(bm.τs, L)
+    empty!(bm.bps)
+    nonempty = false
+    for j in 1:L
+        τ = b0 + j - 1
+        bm.τs[j] = τ
+        ws = bm.wss[j]
+        clear!(ws)
+        κ1, κ2 = κunit(P, LM, LC, u1..., τ), κunit(P, LM, LC, u2..., τ)
+        if abs(κ1) >= κmin && abs(κ2) >= κmin && φ[j] != 0.0
+            prep_node!(ws, P, LM, u1[1], u1[2], φ[j] / κ1, τ)
+            prep_node!(ws, P, LM, u2[1], u2[2], -φ[j] / κ2, τ)
+        end
+        finalize!(ws, P, LM, LC, τ)
+        append!(bm.bps, ws.bps)
+        nonempty |= !isempty(ws.ent)
+    end
+    return nonempty
+end
+
+"""
     adaptive_block_sweep!(rng, P, LM, AM, s; nmoves, LC, pools) -> (s, stats)
 
 Block moves with the learned temporal shapes: storage shapes (`ashape`, unit or
@@ -307,25 +334,8 @@ function adaptive_block_sweep!(rng, P::Problem, LM::LocalModel, AM::AdaptiveMode
                         u1, u2 = rand(r, gu), rand(r, gu)
                         u1 == u2 && continue
                         φ = view(Φg, :, rand(r, 1:size(Φg, 2)))
-                        bm.n = L
-                        resize!(bm.τs, L)
-                        empty!(jac); empty!(bm.bps)
-                        nonempty = false
-                        for j in 1:L
-                            τ = b0 + j - 1
-                            bm.τs[j] = τ
-                            ws = bm.wss[j]
-                            clear!(ws)
-                            κ1, κ2 = κunit(P, LM, LCc, u1..., τ), κunit(P, LM, LCc, u2..., τ)
-                            if abs(κ1) >= κmin && abs(κ2) >= κmin && φ[j] != 0.0
-                                prep_node!(ws, P, LM, u1[1], u1[2], φ[j] / κ1, τ)
-                                prep_node!(ws, P, LM, u2[1], u2[2], -φ[j] / κ2, τ)
-                            end
-                            finalize!(ws, P, LM, LCc, τ)
-                            append!(bm.bps, ws.bps)
-                            nonempty |= !isempty(ws.ent)
-                        end
-                        nonempty || continue
+                        empty!(jac)
+                        prep_adshape!(bm, P, LM, LCc, u1, u2, φ, b0, L; κmin=κmin) || continue
                         fam = 2
                     end
                     t = sample_line!(r, bm, P.βv, secprev)
@@ -425,11 +435,16 @@ One peak-set move per investable dispatchable generator unit (random order) at a
 complete level, variant `absorb` or `learned` with probability 1/2 each (learned
 only once AM has been updated). At α = 1 the bias change comes from the incremental
 bias cache `BC` (built from `s` if not given). For tests: `select(1, gi, i)` restricts
-the units, and `rec` (a vector) receives per move δ, lf(δ) − lf(0) and its log Jacobian.
+the units, and `rec` (a vector) receives per move δ, lf(δ) − lf(0) and its log Jacobian, the
+peak set `S`, the variant (`learned`) and its compensators (`comps`), the coordinate x of the
+sampler (u = log((k0 + δ)/k0) for the slice form, δ for the Metropolis form) with its slice
+width `w` (NaN for Metropolis) and lower bound `lo`, and with `probe` (a function of x returning
+points y) the sampler's log density at y minus that at 0 (`lfp`), evaluated before the commit.
+`fix` replaces the slice draw by a given u (test_moves.jl).
 """
 function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC=nothing, AM=nothing, q::Float64=0.05,
                       w::Float64=0.1, κmin::Float64=1.0, mh::Bool=false, σk=nothing, nprop::Int=1, order::Symbol=:shuffle,
-                      select=nothing, rec=nothing)
+                      select=nothing, rec=nothing, probe=nothing, fix=nothing)
     E = P.E
     ℓ = LM.ℓ
     lk, lv = P.lk[ℓ+1], P.lv[ℓ+1]
@@ -555,9 +570,14 @@ function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC=
             # depend on the state: a width w·k0 in δ would differ between the points of the line,
             # and the stepping-out rule would then not be reversible
             lfu(u) = lf(k0 * expm1(u)) + u
-            δ = k0 * expm1(slice_scalar(rng, lfu, 0.0, w, log(κmin / k0)))
+            us = fix === nothing ? slice_scalar(rng, lfu, 0.0, w, log(κmin / k0)) : Float64(fix)
+            δ = k0 * expm1(us)
         end
-        rec === nothing || push!(rec, (; kind=1, gi, i, δ, lf=lf(δ) - lf(0.0), logjac=kpeak_logjac(δ)))
+        if rec !== nothing
+            x, lfs, lo = mh ? (δ, lf, κmin - k0) : (us, lfu, log(κmin / k0))
+            push!(rec, (; kind=1, gi, i, δ, lf=lf(δ) - lf(0.0), logjac=kpeak_logjac(δ), S, learned, comps,
+                        x, w=mh ? NaN : w, lo, lfp=probe === nothing ? nothing : [lfs(y) - lfs(0.0) for y in probe(x)]))
+        end
         δ == 0.0 && continue
         nmoved += 1
         # commit: capacity, utilizations, compensators, residuals and cell sums, bias cache

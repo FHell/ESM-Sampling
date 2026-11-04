@@ -44,6 +44,7 @@ include("sampler.jl")
 include("diagnostics.jl")
 include("convergence.jl")
 include("run.jl")
+include("checkpoint.jl")
 include("chains.jl")
 
 export Config, load_config, run, setup

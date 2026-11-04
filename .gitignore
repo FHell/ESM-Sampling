@@ -9,3 +9,10 @@ external/pypsa-eur/
 work/
 *.log
 .uv-cache/
+
+# agent worktrees (Claude Code)
+.claude/worktrees/
+
+# cluster checkout: data link and the Reactant GPU preference written by hpc/prepare_env.sh
+/data
+device/LocalPreferences.toml

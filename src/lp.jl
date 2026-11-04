@@ -25,7 +25,8 @@ end
     solve_lp(E, lk, lv, W)
 
 `W[f]` are node-level weather values after the data map at the level of
-`lv` (which must be complete in space).
+`lv` (which must be complete in space). The environment variable `ESM_LP_THREADS`, if
+set, is HiGHS's `threads` option (otherwise HiGHS's default).
 """
 function solve_lp(E::EnergyModel, lk::Layout, lv::Layout, W; silent=true, time_limit=Inf,
                   kfixed=nothing, crossover=false, return_model=false, solver="ipm")
@@ -36,6 +37,8 @@ function solve_lp(E::EnergyModel, lk::Layout, lv::Layout, W; silent=true, time_l
     set_attribute(model, "solver", solver)
     set_attribute(model, "run_crossover", crossover ? "on" : "off")
     isfinite(time_limit) && set_attribute(model, "time_limit", Float64(time_limit))
+    lpth = get(ENV, "ESM_LP_THREADS", "")          # shared nodes: HiGHS must not take every core (docs/system/hpc.md §3)
+    isempty(lpth) || set_attribute(model, "threads", parse(Int, lpth))
 
     kv = Dict{Int,Any}()
     for (f, s) in enumerate(E.kspecs)
@@ -248,19 +251,29 @@ function to_modes(lay::Layout, specs, vals)
     return z
 end
 
-"Solve the LP or load it from an HDF5 cache keyed by `key`."
-function solve_lp_cached(E::EnergyModel, lk::Layout, lv::Layout, W, path::String)
-    if isfile(path)
-        return h5open(path, "r") do f
-            nk, nv = read(f["nk"]), read(f["nv"])
-            LPSolution(read(f["objective"]), read(f["capex"]), [read(f["k$i"]) for i in 1:nk],
-                       [read(f["v$i"]) for i in 1:nv], read(f["n_v_free"]), read(f["n_v_total"]),
-                       read(f["n_k_free"]), read(f["n_k_total"]),
-                       [read(f["dX$i"]) for i in 1:read(f["nw"])], [read(f["dk$i"]) for i in 1:nk])
-        end
+"""
+Solve the LP or load it from the HDF5 cache entry `path` (or from the read-only `mirror`
+directory, copied in). The entry is written atomically (`atomic_write`).
+"""
+function solve_lp_cached(E::EnergyModel, lk::Layout, lv::Layout, W, path::String; mirror::String="")
+    rd(p) = h5open(p, "r") do f
+        nk, nv = read(f["nk"]), read(f["nv"])
+        LPSolution(read(f["objective"]), read(f["capex"]), [read(f["k$i"]) for i in 1:nk],
+                   [read(f["v$i"]) for i in 1:nv], read(f["n_v_free"]), read(f["n_v_total"]),
+                   read(f["n_k_free"]), read(f["n_k_total"]),
+                   [read(f["dX$i"]) for i in 1:read(f["nw"])], [read(f["dk$i"]) for i in 1:nk])
     end
+    lp0 = cache_read(rd, path, mirror)
+    lp0 === nothing || return lp0
     lp = solve_lp(E, lk, lv, W)
-    mkpath(dirname(path))
+    atomic_write(path) do tmp
+        write_lp_entry(tmp, lp)
+    end
+    return lp
+end
+
+"Write an LP solution as an HDF5 cache entry."
+function write_lp_entry(path::String, lp::LPSolution)
     h5open(path, "w") do f
         f["nk"], f["nv"] = length(lp.k), length(lp.v)
         f["objective"], f["capex"] = lp.objective, lp.capex
@@ -271,5 +284,5 @@ function solve_lp_cached(E::EnergyModel, lk::Layout, lv::Layout, W, path::String
         foreach(i -> (f["dX$i"] = lp.dF_dX[i]), eachindex(lp.dF_dX))
         foreach(i -> (f["dk$i"] = lp.dF_dk[i]), eachindex(lp.dF_dk))
     end
-    return lp
+    return path
 end

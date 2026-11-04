@@ -384,15 +384,17 @@ function bias_delta_weather(BC::BiasCache, b::BiasModel, E::EnergyModel, bm::Blo
 end
 
 """
-One exact weather coordinate move (innovation of level ℓ ≥ 1, or z0 with ℓ = 0). Returns t.
-At α = 1 (`BC` the bias cache of the state) the exact draw of the bias-free line
-conditional is followed by a Metropolis correction with e^{−Δb̂}; on acceptance the cache
-follows the move (per-step values; the sums are recomputed by the caller).
+    weather_coord_prepare!(P, LM, LC, s, bm, jac, ℓ, q; comp) -> (ch, quad, iz) or nothing
+
+Prepare the weather coordinate move of coordinate q of level ℓ (an innovation for ℓ ≥ 1, z0
+for ℓ = 0): the chain of changes to the finest level, the block move `bm` with its
+compensation, the prior quadratic (κ, b) of the line, and for z0 the index of the coordinate.
 """
-function weather_coord_move!(rng, P::Problem, LM::LocalModel, LC::LocalCost, s::State, bm::BlockMove, jac,
-                             secprev, ℓ::Int, q::Int; comp::Bool=true, BC=nothing)
+function weather_coord_prepare!(P::Problem, LM::LocalModel, LC::LocalCost, s::State, bm::BlockMove, jac, ℓ::Int, q::Int;
+                                comp::Bool=true)
     W = P.W
     L = s.ℓ
+    iz = 0
     if ℓ == 0
         lay = W.lays[1]
         T0 = lay.T
@@ -416,22 +418,42 @@ function weather_coord_move!(rng, P::Problem, LM::LocalModel, LC::LocalCost, s::
         quad = (1.0, s.ws[ℓ][q])
     end
     ch = wdelta_chain(W, s.m, d0, L)
-    prep_weather_move!(bm, P, LM, LC, ch, jac; comp=comp) === nothing && return 0.0
-    t = sample_line!(rng, bm, P.βv, secprev; quad=quad)
-    t == 0.0 && return 0.0
-    logα = isempty(jac) ? 0.0 : logjac(jac, t, bm)
-    BC === nothing || (logα -= bias_delta_weather(BC, P.bias, P.E, bm, t))
-    (isfinite(logα) && log(rand(rng)) < logα) || return 0.0
+    prep_weather_move!(bm, P, LM, LC, ch, jac; comp=comp) === nothing && return nothing
+    return ch, quad, iz
+end
+
+"Commit the prepared weather coordinate move at t: operation, caches, the bias cache (per-step values) and the weather state."
+function weather_coord_commit!(P::Problem, s::State, bm::BlockMove, ch, iz::Int, ℓ::Int, q::Int, t::Float64; BC=nothing)
     commit_block!(bm, s.v, t)
     BC === nothing || bias_delta_weather(BC, P.bias, P.E, bm, t; commit=true)
     if ℓ == 0
         s.z0[iz] += t
         s.xs[1] === s.z0 || (s.xs[1][iz] += t)
-        apply_wdelta!(s, W, ch[2:end], t)
+        apply_wdelta!(s, P.W, ch[2:end], t)
     else
         s.ws[ℓ][q] += t
-        apply_wdelta!(s, W, ch, t)
+        apply_wdelta!(s, P.W, ch, t)
     end
+    return s
+end
+
+"""
+One exact weather coordinate move (innovation of level ℓ ≥ 1, or z0 with ℓ = 0). Returns t.
+At α = 1 (`BC` the bias cache of the state) the exact draw of the bias-free line
+conditional is followed by a Metropolis correction with e^{−Δb̂}; on acceptance the cache
+follows the move (per-step values; the sums are recomputed by the caller).
+"""
+function weather_coord_move!(rng, P::Problem, LM::LocalModel, LC::LocalCost, s::State, bm::BlockMove, jac,
+                             secprev, ℓ::Int, q::Int; comp::Bool=true, BC=nothing)
+    pr = weather_coord_prepare!(P, LM, LC, s, bm, jac, ℓ, q; comp=comp)
+    pr === nothing && return 0.0
+    ch, quad, iz = pr
+    t = sample_line!(rng, bm, P.βv, secprev; quad=quad)
+    t == 0.0 && return 0.0
+    logα = isempty(jac) ? 0.0 : logjac(jac, t, bm)
+    BC === nothing || (logα -= bias_delta_weather(BC, P.bias, P.E, bm, t))
+    (isfinite(logα) && log(rand(rng)) < logα) || return 0.0
+    weather_coord_commit!(P, s, bm, ch, iz, ℓ, q, t; BC=BC)
     return t
 end
 

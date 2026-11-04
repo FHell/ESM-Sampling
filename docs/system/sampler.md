@@ -106,6 +106,13 @@ corrected by the secant through the current point and the extrapolated one (the 
 carries the round-off of a difference over a step of $10^{-7}$ of the segment), evaluated, and
 becomes the new current point (`walk!`, the `nonlin` branch).
 
+> **Status: deviation.** The secant is exact only if the event's quantity is linear between
+> the current point and the extrapolated one; where it, or a quantity it depends on, bends at
+> the root, the point lands about $10^{-7}$ of the segment off the kink, and the potential is up
+> to about $10^{-5}$ nats off its linear interpolation there (weather moves with many events,
+> `test/test_moves.jl`; [testing.md](testing.md) §5). Repeating the secant from the new point
+> made it worse on other lines (up to 9e-4 nats; not analysed).
+
 ### 3.4 The Jacobian step
 
 For curves whose parametrization has a non-constant Jacobian (share-preserving
