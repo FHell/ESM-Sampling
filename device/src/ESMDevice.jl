@@ -28,7 +28,6 @@ const FT = Float64
 ftconv(x) = x
 
 include("core.jl")
-include("precompile.jl")    # precompile workload (off unless the preference `precompile_workload` is true)
 
 """
     ft32(ex)

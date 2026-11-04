@@ -2,7 +2,7 @@
 
 julia_version = "1.12.2"
 manifest_format = "2.0"
-project_hash = "f0b4cd12c02e8bd89fb7f8782deb16795bd6d33c"
+project_hash = "7e5513d6954fe2490bd7e02e5a1adeed42a18bc1"
 
 [[deps.Adapt]]
 deps = ["LinearAlgebra"]
@@ -143,7 +143,7 @@ uuid = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
 version = "1.7.0"
 
 [[deps.ESMDevice]]
-deps = ["ESMSampling", "LinearAlgebra", "PrecompileTools", "Preferences", "Printf", "Random", "Reactant", "Statistics", "Test"]
+deps = ["ESMSampling", "LinearAlgebra", "Random", "Reactant", "Statistics", "Test"]
 path = "."
 uuid = "5b1e6c2e-9d1a-4c6b-8f3e-2a7d0c4e9b11"
 version = "0.1.0"

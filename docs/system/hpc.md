@@ -74,11 +74,7 @@ overridden before sourcing it); `hpc/prepare_env.sh [<code dir>]` prepares a cod
 3. writes `device/LocalPreferences.toml` with `[Reactant_jll] gpu = "cuda"`, `gpu_version =
    "13.1"`: Reactant picks its XLA runtime (CPU only or CUDA) when it is installed, from the GPU
    it detects, and a login node has none (`REACTANT_GPU`, `REACTANT_GPU_VERSION` in `env.sh`;
-   12.9 for CUDA 12 drivers); and `[ESMDevice] precompile_workload = true`: the precompile
-   workload of `device/src/precompile.jl` traces and compiles the device programs of a tiny
-   synthetic model on the CPU backend, so the package image holds the Julia code of the tracing
-   and a job's first trace is shorter (measurements in [performance.md](performance.md) §7; off
-   by default on development machines, where every edit of the device code would pay it);
+   12.9 for CUDA 12 drivers);
 4. `Pkg.instantiate()` and `Pkg.precompile()` for both projects, with
    `JULIA_CPU_TARGET="generic;znver4,clone_all"` (login and compute nodes are Zen 4) and 8
    precompile tasks;
