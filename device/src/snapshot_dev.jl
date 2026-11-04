@@ -1,12 +1,13 @@
-# State snapshots and resume of the device drivers (docs/system/hpc.md §7): the contract of the
-# CPU driver (src/checkpoint.jl). At a host checkpoint the state is on the host already (it is
+# State snapshots and resume of the Metropolis device driver (docs/system/hpc.md §7): the
+# contract of the CPU driver (src/checkpoint.jl). The replica driver writes the CPU replica
+# driver's layout instead (`write_replica_snapshot`, replica_run.jl). At a host checkpoint the state is on the host already (it is
 # downloaded for the monitored quantities), so a snapshot is the file write:
 #
 # * every `checkpoint_minutes` of wall time, and when `stop_file` exists (then the stop file is
 #   removed and the driver returns exit code 75);
 # * the layout of the CPU snapshots (phase `fine`, the counter `it` = host checkpoints done, the
-#   states of every chain or replica, their start kinds, the monitored traces), plus the device
-#   group `device/` (driver, replicas, and per driver the scalars it needs to continue);
+#   states of every chain, their start kinds, the monitored traces), plus the device group
+#   `device/` (the driver);
 # * written under a temporary name, flushed and renamed over the previous snapshot;
 # * resume: the states are read back (`read_snapshot`, evaluated under the current target), the
 #   device arrays and programs are rebuilt from them, the random streams (host and Reactant's)

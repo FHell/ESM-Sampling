@@ -556,5 +556,6 @@ waits for its indicator again).
 > [data_sources.md](data_sources.md) §2) and are to be rechecked on the rebuilt data; the
 > statements about the sampler itself (prior invariance, lag, relaxation, cost per step) stand. The `src/` sampler with the relaxation gate, the separated probe and 8 replicas is
 > campaign H4 ([../campaigns.md](../campaigns.md)). Open: a Rao–Blackwellised score, a gas step of
-> its own, the relaxation of seasonal storage after a burst, and the device form of the whole
-> step ([device.md](device.md)).
+> its own, the relaxation of seasonal storage after a burst. The device form of the whole step is
+> built (`device_sampler = "replicas"`, [device.md](device.md) §5.2, §6.2) and verified on arrays;
+> its compiled check is pending.

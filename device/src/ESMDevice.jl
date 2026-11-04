@@ -341,6 +341,7 @@ include("cells.jl")        # phase 3: cell templates (cell, cellpair)
 include("blocks.jl")       # phase 3: storage block moves (plateau, shapes)
 export TermBatch, sample_dense, eval_terms, FlatState, plan, run_rounds, check_conflicts, unflat!
 
+include("ren.jl")           # renewable units: index, parameters, state, write-back
 include("kmove.jl")
 include("bias_dev.jl")
 include("kren.jl")

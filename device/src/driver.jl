@@ -111,19 +111,6 @@ function device_families(M::DeviceModel, ci)
             (blksym(L, tr) for L in BLOCK_SCHED)..., cells...)
 end
 
-"Write the renewable capacities of chain c (device order `ren_units`) into the State `s` (coefficients)."
-function ren_to_host!(P::ML.Problem, kr::AbstractMatrix, c::Int, s::ML.State)
-    E = P.E
-    lk = P.lk[s.ℓ+1]
-    units = ren_units(P)
-    for (gi, g) in enumerate(E.gens)
-        (g.vf == 0 && g.kf > 0) || continue
-        qs = [q for (q, (a, i)) in enumerate(units) if a == gi]
-        ML.fieldview(s.k, lk, E.kspecs, g.kf) .= ML.cols(E.kspecs[g.kf].B, lk.m[g.kf])' * reshape(kr[c, qs], :, 1)
-    end
-    return s
-end
-
 "The fields of the kmove parameters that `chain_params_dev` needs (a NamedTuple view)."
 KP_model_view(KP) = KP
 
@@ -221,8 +208,8 @@ checkpoints, each after `device_sweeps` operation sweeps and one capacity pass.
 # the two calls, test/test_program.jl), but compiles ≈ 5× longer (295 s against 50 + 11 s at 40
 # nodes daily) for one dispatch saved per checkpoint; the alternation is the default.
 function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST)
-    cfg.device_sampler == "replica" && return run_replicas_device(cfg; families=families)
-    cfg.device_sampler == "mh" || error("device_sampler = \"$(cfg.device_sampler)\": \"mh\" or \"replica\"")
+    cfg.device_sampler == "replicas" && return run_replicas_device(cfg; families=families)
+    cfg.device_sampler == "mh" || error("device_sampler = \"$(cfg.device_sampler)\": \"mh\" or \"replicas\"")
     t0 = time()
     Ck = ML.Checkpointer(cfg)                       # snapshots and resume (snapshot_dev.jl; docs/system/hpc.md §7)
     D = device_setup(cfg; families=families, resume=ML.enabled(Ck))

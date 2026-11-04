@@ -13,20 +13,9 @@ init = "heuristic"
 use_bias = false
 nchains = 4
 chain_starts = ["low", "high"]
-mlda_warmup = 10
-nsamples = 30
+mlda_warmup = 100              # replica steps (multiples of device_sweeps)
+nsamples = 300
 device_backend = "gpu"
 device_sweeps = 10              # replica steps per host checkpoint
-device_sampler = "replica"
-
-[device_replica]
-M = 4
-eta_w = 5e-4
-clip = 0.02
-inner = 1
-burst_every = 40
-phi = 0.3
-gate = 25
-burst_regime = 0.5
-reg_window = 30
-init_sweeps = 40
+device_sampler = "replicas"
+replicas = 4

@@ -122,8 +122,7 @@ Base.@kwdef mutable struct Config
     kmove_nprop::Int = 2            # Metropolis proposals per unit and capacity pass
     kmove_sigma::Float64 = 0.3      # kscale proposal scale (log capacity)
     kpeak_sigma::Float64 = 0.05     # kpeak proposal scale, fraction of the unit's initial capacity (≥ 100 MW)
-    device_sampler::String = "mh"   # "mh": Metropolis capacity pass (kscale, kren, kpeak); "replica": replica–Langevin sampler
-    device_replica::Dict{String,Any} = Dict{String,Any}()   # ... its settings (TOML table; ESMDevice.ReplicaCtl, docs/system/config.md)
+    device_sampler::String = "mh"   # "mh": Metropolis capacity pass (kscale, kren, kpeak); "replicas": the replica–Langevin sampler (its replica_*, langevin_*, tilt_* keys)
     verbose::Bool = true
 end
 
