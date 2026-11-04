@@ -241,7 +241,7 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
         fl(t) = ln.f0 .+ ln.df .* t
         u0 = absd.(ln.f0) ./ ln.s
         dloss(f) = ln.α .* ln.s .^ 2 .* (hinge(k.Lq, absd.(f) ./ ln.s) .- hinge(k.Lq, u0))
-        addgroup!(P, pe -> (cv * Δt) .* (ln.s .* (hinge(k.ψ, absd.(fl(pe)) ./ ln.s) .- hinge(k.ψ, u0))))
+        addgroup!(P, pe -> (cv * Δt) .* linewc(ln, ln.s .* (hinge(k.ψ, absd.(fl(pe)) ./ ln.s) .- hinge(k.ψ, u0))))
         push!(roles, (length(gP), ln.near, pe -> (f = fl(pe); (f .- ln.f0) .+ 0.5 .* dloss(f))))
         push!(roles, (length(gP), ln.far, pe -> (f = fl(pe); .-(f .- ln.f0) .+ 0.5 .* dloss(f))))
     end

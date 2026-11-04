@@ -246,15 +246,19 @@ function uc4s(st, cp, sp, z4, q, ucq, sets, T2::Bool)
     cols(f) = reduce(hcat2, [s[f] for s in sets])
     qq = reduce(hcat2, fill(q, ns))
     zx = 0.0 .* ucq .+ z4
-    slope(f) = all(s[f] === nothing for s in sets) ? nothing : cat((s[f] === nothing ? zx : s[f] for s in sets)...; dims=4)
+    islin(s) = !T2 || get(s, :lin, false)                # a set with linear slopes (in T2: e.g. the pair units of `sparse.jl`)
+    pick(s, f, lin) = (s[f] === nothing || islin(s) != lin) ? nothing : s[f]
+    slope(f, lin) = all(pick(s, f, lin) === nothing for s in sets) ? nothing :
+                    cat((pick(s, f, lin) === nothing ? zx : s[f] for s in sets)...; dims=4)
     cnt(f) = vcat((fill(s[f] === nothing ? 0 : 1, nU) for s in sets)...)
-    kid(f, kf) = vcat((s[f] === nothing ? zeros(Int, nU) : s[kf] for s in sets)...)
+    kid(f, kf) = vcat((pick(s, f, false) === nothing ? zeros(Int, nU) : s[kf] for s in sets)...)
     common = (y0=G4(st.ω, cols(:cy)), u0=G4(st.uc, cols(:cu)), u10=G4(st.uc, cols(:cu1)), κ=G4(cp.κg, qq), w=G4(cp.wg, qq),
               gmin=S4(sp.gmin, qq), su=S4(sp.su, qq), nl=S4(sp.nl, qq), on=cat(fill(ucq, ns)...; dims=4),
               cy=cnt(:y), cu=cnt(:u), cu1=cnt(:u1))
-    T2 && return suc(z4, ns * nU; common..., aky=slope(:y), kidy=kid(:y, :ky), aku=slope(:u), kidu=kid(:u, :ku),
-                     aku1=slope(:u1), kidu1=kid(:u1, :ku1))
-    return suc(z4, ns * nU; common..., ay=slope(:y), au=slope(:u), au1=slope(:u1))
+    T2 && return suc(z4, ns * nU; common..., ay=slope(:y, true), au=slope(:u, true), au1=slope(:u1, true),
+                     aky=slope(:y, false), kidy=kid(:y, :ky), aku=slope(:u, false), kidu=kid(:u, :ku),
+                     aku1=slope(:u1, false), kidu1=kid(:u1, :ku1))
+    return suc(z4, ns * nU; common..., ay=slope(:y, true), au=slope(:u, true), au1=slope(:u1, true))
 end
 
 "Commitment flags (1, B, 1, nU) of the unit columns `uj` of q (B, n) with the column mask gon (1, B, 1, n)."

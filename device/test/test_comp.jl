@@ -53,6 +53,10 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
         d = randn(rng, sys.N); d .-= sum(d) / sys.N; d ./= sqrt(sum(abs2, d))      # unit norm, as the modes
         D.tdir_g(sys, d)
     end
+    # sparse angle directions: Haar atoms of random modes (as `localize` of the proxy and learned modes)
+    Hθ = ML.haar_theta(E)
+    Dm = randn(MersenneTwister(5), E.sys.N, 4); Dm .-= sum(Dm; dims=1) ./ E.sys.N
+    D.SPARSE_SOURCE[] = D.sparse_source(P, LM, ix; atoms=() -> Any[(Hθ, ML.localize(Dm, Hθ))])
     pl = D.plan(M, S, β; families=fams, cpumap=true, cls=cls, bmax=Dict(f => NSITE for f in fams), cells=ci)
     qof = Dict(ix.gidx[q] => q for q in eachindex(ix.gidx))
     for n in eachindex(AM.runits), (j, (f, i)) in enumerate(AM.runits[n])
@@ -68,7 +72,7 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
         B, R = size(tabs[f].on)
         x = reshape(weyl(C * B * 3 * R, off[]), C, B, 3, R); off[] += length(x); x
     end for f in pl.fams))
-    learnof(f, c) = (f in (:tsocL, :tpotL, :tdirL) || startswith(string(f), "sblkL")) ? (AM=AM, FF=FFs[c]) : nothing
+    learnof(f, c) = (f in (:tsocL, :tpotL, :tdirL, :tcutL, :tcutLw) || startswith(string(f), "sblkL")) ? (AM=AM, FF=FFs[c]) : nothing
     cpumove(c, LC, f, site) = (jac = NTuple{5,Float64}[];
                               bm = cpu_move(P, LM, LC, ix, f, site; jac=jac, learn=learnof(f, c), chain=c); (bm, jac))
     ok_conf = all(D.check_conflicts(f, D.host_table(f, pl.tp, pl.sched[f]))[1] for f in pl.fams)
@@ -145,6 +149,12 @@ if get(ENV, "CASE", "ABC") in ("F",)
 end
 if get(ENV, "CASE", "ABC") in ("G",)
     comp_case("G (all terms; dense angle directions, LINEAR and none)"; tracking_model=true, fams=(:tdirL, :tdir0))
+end
+if get(ENV, "CASE", "ABC") in ("H",)
+    comp_case("H (no losses; sparse angle directions, T2 and none)"; tracking_model=false, fams=(:tcut, :tcutw, :xloc, :xlocc, :xpair))
+end
+if get(ENV, "CASE", "ABC") in ("I",)
+    comp_case("I (all terms; sparse angle directions, LINEAR and none)"; tracking_model=true, fams=(:tcutL, :tcutLw, :xloc, :xpair))
 end
 if get(ENV, "CASE", "ABC") in ("C", "ABC")
     # cell templates: every partition level, one round per level (cell_power = 1) and time class

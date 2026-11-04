@@ -39,9 +39,16 @@ function suc(z4, n; y0, ay=nothing, u0, au=nothing, u10, au1=nothing, κ, w, gmi
             cy=copy(cy), cu=copy(cu), cu1=copy(cu1))
 end
 
-"Stacked line terms: flows f = f0 + df t (oriented near → far), static slots `near`, `far` (0: none)."
-sline(z4; f0, df, s, α, near, far, mv=fill(df !== nothing, length(near))) =
-    (f0=f0 .+ z4, df=df === nothing ? nothing : df .+ z4, s=s .+ z4, α=α .+ z4, near=copy(near), far=copy(far), mv=collect(mv))
+"""
+Stacked line terms: flows f = f0 + df t (oriented near → far), static slots `near`, `far` (0: none) and
+static weights `wc` of the overload cost (0.5 for a line listed at both its ends, `sparse.jl`).
+"""
+sline(z4; f0, df, s, α, near, far, mv=fill(df !== nothing, length(near)), wc=nothing) =
+    (f0=f0 .+ z4, df=df === nothing ? nothing : df .+ z4, s=s .+ z4, α=α .+ z4, near=copy(near), far=copy(far), mv=collect(mv),
+     wc=wc === nothing ? nothing : collect(Float64, wc))
+
+"The overload cost x (C, B, K, n) of the line columns, weighted by their static `wc` (if any)."
+linewc(ln, x) = (haskey(ln, :wc) && ln.wc !== nothing) ? x .* reshape(ln.wc, 1, 1, 1, :) : x
 
 "Stacked SoC terms: (e, e₁) each linear with slopes ae, ae1 (`nothing`: static), static slots."
 function ssoc(z4, n; e0, ae=nothing, e10, ae1=nothing, k, w, h, ηin, ηout, qt, mc, slot,

@@ -7,7 +7,7 @@ function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], 
     T = LM.T
     ws, wa = ML.MoveWS(P), ML.MoveWS(P); wa.follow = false
     fam == :spair0 && (fam = :spair)                          # the same CPU move (spair)
-    τ = fam == :spair ? site[2] : fam in D.TDIR_FAMILIES ? site[1] : site[end]; τm = mod1(τ - 1, T)   # spair: (s, τ, q1, q2); tdir: (τ, d, g)
+    τ = fam == :spair ? site[2] : (fam in D.TDIR_FAMILIES || haskey(D.SPARSE_FAMILIES, fam)) ? site[1] : site[end]; τm = mod1(τ - 1, T)   # spair: (s, τ, q1, q2); tdir: (τ, d, g)
     gi(q) = ix.gidx[q]
     sf = string(fam)
     if startswith(sf, "sblk")                                  # storage block (plateau or shape profile)
@@ -19,6 +19,30 @@ function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], 
         bm = ML.BlockMove(wss, 0, Int[], P, LM, LC, Float64[], Float64[])
         shape = p == 1 ? nothing : D.profiles(L)[:, p]
         ML.prep_storage_ms!(bm, P, LM, LC, [(si, i)], b0, L, shape, jac; κmin=κmin, learn=learn) || return nothing
+        return bm
+    end
+    if haskey(D.SPARSE_FAMILIES, fam)                         # sparse angle direction (τ, (nodes, d, g, pair))
+        τd, (nodes, d, g, pq) = site
+        rule, pair, _ = D.SPARSE_FAMILIES[fam]
+        if pair                                                # the pair units (as `prep_xloc!`, `prep_random!(:xpair)`)
+            (g1, i1), (g2, i2) = gi(pq[1]), gi(pq[2])
+            κ1 = LC.A[g1][i1, τd] * LC.kgen[g1][i1]; κ2 = LC.A[g2][i2, τd] * LC.kgen[g2][i2]
+            (abs(κ1) < κmin || abs(κ2) < κmin) && return nothing
+            ML.prep_node!(ws, P, LM, E.gens[g1].vf, i1, 1 / κ1, τd)
+            ML.prep_node!(ws, P, LM, E.gens[g2].vf, i2, -1 / κ2, τd)
+        end
+        for (n, a) in zip(nodes, d)
+            a != 0.0 && ML.prep_node!(ws, P, LM, E.fθ, n, a, τd)
+        end
+        if rule != :none
+            for (n, gg) in zip(nodes, g)
+                gg != 0.0 && ML.prorata!(ws, jac, P, LM, LC, n, gg, τd; κmin=κmin, learn=learn)
+            end
+        end
+        ML.finalize!(ws, P, LM, LC, τd)
+        bm = ML.BlockMove([wa, ws], 2, [mod1(τd - 1, T), τd], P, LM, LC, Float64[], Float64[])
+        ML.finalize!(wa, P, LM, LC, mod1(τd - 1, T)); ML.link_soc!(wa, ws, LM)
+        append!(bm.bps, wa.bps); append!(bm.bps, ws.bps)
         return bm
     end
     if fam in D.TDIR_FAMILIES                                  # dense angle direction (τ, d, g) of chain `chain`
