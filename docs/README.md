@@ -30,6 +30,7 @@ onto the code. Agent and session rules are in [../CLAUDE.md](../CLAUDE.md).
 | [system/formulations.md](system/formulations.md) | sampling-friendly forms of components not yet modelled (ramping, line expansion, sector coupling, CO₂ caps, …) |
 | [system/validation.md](system/validation.md) | convergence criteria and the comparison strategy with PyPSA-Eur |
 | [system/testing.md](system/testing.md) | exactness tests on the CPU and the verification of the device port |
+| [system/hpc.md](system/hpc.md) | runs on the PIK HPC cluster: environment, storage layout, caches, job types, checkpoints, run records |
 | [system/roadmap.md](system/roadmap.md) | open problems, missing pieces and planned experiments |
 | [system/glossary.md](system/glossary.md) | symbols and terms |
 

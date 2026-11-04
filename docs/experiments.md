@@ -38,3 +38,13 @@ planned, and update it when it has run. Outputs under `results/` are not version
 | P6 | planned | sensitivity of the exactness tests | longer reference runs, references equilibrated in the storage and dump directions | [system/roadmap.md](system/roadmap.md) §1 |
 | P7 | planned | sweeps to equilibrium against network size; wall time to stationarity against the finest step; memory for full Europe hourly | [system/roadmap.md](system/roadmap.md) §7 | — |
 | P8 | prepared | first full-resolution run, 256 nodes hourly with ERA5 | `configs/full256_era5.toml` | [archive/full_resolution_run.md](archive/full_resolution_run.md), [system/roadmap.md](system/roadmap.md) §6 |
+| H0 | planned (HPC) | does the environment work offline on CPU and GPU nodes | precompiled depot from a login node; one short CPU run and one GPU run with `JULIA_PKG_OFFLINE=true`; checks: no download attempted, Reactant finds the H100, CUDA variant of the XLA artifact, compile time, XLA persistent cache usable | [system/hpc.md](system/hpc.md) §3 |
+| H1 | planned (HPC) | CPU throughput per chain against threads and chains per node | 40 and 256 nodes, daily and 6 h; threads 4–64 per chain, 1–16 chains per node; sweeps/s and memory | [system/hpc.md](system/hpc.md) §5 |
+| H2 | planned (HPC) | reference LP optima (HiGHS) per network, resolution and weather year | 40, 256 nodes (later 512, 1024); daily, 6 h, 1 h; one build job per case; cached | [system/validation.md](system/validation.md) |
+| H3 | planned (HPC) | autocorrelation times of the operation at fixed (k, x), long runs | E17 protocol, 5000+ sweeps, job array over chains, sizes and resolutions | E17 |
+| H4 | planned (HPC) | the replica–Langevin sampler at scale | after the prototype is merged: 40 nodes daily → 6 h → 256 nodes; low/high starts; against H2 | [worklog.md](worklog.md) |
+| H5 | planned (HPC) | device throughput on the H100 | chains × replicas batch scaling, FP64 against the Float32 switch, memory per chain, 40 and 256 nodes, all families | [system/performance.md](system/performance.md) §7 |
+| H6 | planned (HPC) | sweeps to equilibrium against network size and finest step | 40, 256, 512, 1024 nodes; 24, 12, 6, 3, 1 h | P7, [system/roadmap.md](system/roadmap.md) §7 |
+| H7 | planned (HPC) | first full-resolution run, 256 nodes hourly with ERA5 | ERA5 from the cluster's ERA5 folder (`scripts/prepare_era5.py` as a build job), `configs/full256_era5.toml` | P8 |
+| H8 | planned (HPC) | sensitivity of the exactness tests | long reference runs as job arrays | P6 |
+| H9 | planned (HPC) | design under stressed weather | the explicit weather tilt (λ > 0) once built | [system/ensemble.md](system/ensemble.md) §3.1 |

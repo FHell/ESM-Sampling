@@ -48,6 +48,17 @@ concrete next steps. Update it at the end of every work session.
   planned `kop` port and per-carrier scales).
 - Re-measure the compile times on a quiet machine (239 s / 149 s were measured under load).
 
+**HPC (PIK cluster, [system/hpc.md](system/hpc.md); campaigns H0–H9 in the ledger):**
+- `cache_dir` key or `ESM_CACHE_DIR`: one shared, content-addressed cache with atomic writes
+  (now per run directory).
+- Checkpoint and resume with SIGTERM handling in `run_chains` and `run_device`.
+- `hpc/` scripts: environment preparation on a login node, the run wrapper, job templates, the
+  run record and the runs index.
+- Julia 1.12 on the cluster (the guide lists 1.11.7; the Manifests need 1.12); the Reactant CUDA
+  artifact fetched on a login node without a GPU; the ERA5 folder's path (the user will look it
+  up).
+- Request `/p/projects` space; fill in the project and account names in hpc.md.
+
 **Tests and validation:**
 - Exactness tests do not detect small invariance violations (missed the `kpeak` width and the
   storage walk bug): longer reference runs (ledger P6).
