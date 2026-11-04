@@ -44,7 +44,9 @@ Base.@kwdef mutable struct Config
     warmup0::Int = 1500             # level-0 warmup iterations (bias learning)
     bias_start::Int = 150
     bias_every::Int = 25
-    bias_samples::Int = 16
+    bias_samples::Int = 16          # exact weather draws for Ē ĝ (redrawn at the chains' level when the bias is lifted)
+    bias_sample_steps::Int = 4096   # ... of whose steps this many are kept (uniformly, weighted; 0: all)
+    bias_table_res::Int = 100       # grid points per smoothing width s of the F₁, F₂ tables
     bias_warmstart::Float64 = 20.0  # weight of the LP-score warm start (in samples), 0 = off
     descent_iters::Int = 4000       # descent of the level-0 operation before the level-0 warmup (0: off)
     mlda_warmup::Int = 100          # finest-level warmup sweeps (device: checkpoints)
@@ -172,7 +174,8 @@ function setup(cfg::Config; rng=MersenneTwister(cfg.seed))
     logmsg(cfg, @sprintf("LP: total %.3e €/a (capex %.3e), confined n_v*≈%.0f (finest), n_k=%.1f → β_v=%.3e, β_k=%.3e  [%.0fs]",
                          lp.objective, lp.capex, n_v, n_k, βv, βk, time() - t0))
 
-    bias = init_bias(E, W, Layout(E.kspecs, cfg.levels[1]...), βk / βv; rng=rng, nsamples=cfg.bias_samples)
+    bias = init_bias(E, W, Layout(E.kspecs, cfg.levels[1]...), βk / βv; rng=rng, nsamples=cfg.bias_samples,
+                     nsteps=cfg.bias_sample_steps, res=cfg.bias_table_res)
     P = build_problem(E, W, cfg.levels, βk, βv, bias; use_bias=cfg.use_bias)
     # LP-score warm start only with a reference LP; LP-free starts learn the bias from the chain alone
     cfg.use_bias && cfg.bias_warmstart > 0 && cfg.init == "lp" && warmstart_bias!(P, lp, xref, ref; weight=cfg.bias_warmstart,
@@ -200,14 +203,6 @@ function restrict_state(P::Problem, s::State, ℓ::Int)
     return evaluate!(P, sc)
 end
 
-"Score samples at a level-0 state for the bias regression (state coordinates)."
-function scores(P::Problem, s::State)
-    lk, lv = P.lk[1], P.lv[1]
-    Xn = weather_nodes(P.W, 0, s.z0)
-    _, (_, gko, _, gX) = energy_cost(P.E, lk, lv, s.k, s.v, Xn; grad=true)
-    return Xn, weather_grad_to_x(P.W, 0, [-P.βv .* g for g in gX]), -P.βv .* gko
-end
-
 """
 Warm start of the bias from the zero-temperature scores of the LP (nodal and
 availability shadow prices), restricted to level-0 coordinates. The gradient of
@@ -232,12 +227,28 @@ function warmstart_bias!(P::Problem, lp::LPSolution, xref, ref::Int; weight=20.0
     gk0 = restrict_to(gk, P.lk, P.trk, E.kspecs, ref, 0)   # k fields: restriction = mode prefix
     k0 = restrict_to(kref, P.lk, P.trk, E.kspecs, ref, 0)
     X0 = weather_nodes(W, 0, z0)
-    bias_observe!(P.bias, E, W, P.lk[1], k0, X0, Float64(P.levels[1][2]), gz, gk0; weight=weight)
+    P.bias.ℓb == 0 || error("the LP warm start needs the bias at level 0")
+    bias_observe!(P.bias, E, W, P.lk[1], k0, X0, gz, gk0; weight=weight)
     bias_update!(P.bias; monotone=monotone)
 end
 
 "Arguments of the monotone-price bias fit (nothing: unconstrained)."
 bias_monotone_args(P::Problem, cfg::Config) = cfg.bias_monotone ? (P.βv, P.E.c_shed, P.E.c_dump) : nothing
+
+"""
+    lift_bias!(P, cfg) -> P
+
+After the level-0 warmup: lift the bias to the finest level (θ kept, a and c prolongated,
+regression sums reset, `bias_samples` exact draws redrawn there with `bias_sample_steps`
+kept), from a stream of its own so that every driver gets the same sample steps.
+"""
+function lift_bias!(P::Problem, cfg::Config)
+    P.use_bias || return P
+    L = nlevels(P) - 1
+    lift_bias!(P, L; rng=MersenneTwister(cfg.seed + 4243), nsamples=cfg.bias_samples, nsteps=cfg.bias_sample_steps)
+    logmsg(cfg, @sprintf("bias lifted to level %d (%d sample steps of %d draws)", L, length(P.bias.sD), P.bias.nsamp))
+    return P
+end
 
 """
     run_level0!(rng, P, s, S, n, cfg; learn, label) -> (state, Q trace, weather diagnostics trace, mean k)
@@ -253,12 +264,13 @@ function run_level0!(rng, P::Problem, s::State, S::ChainSampler, n::Int, cfg::Co
     t0 = time()
     S.adapt = learn
     S.gibbs.adapt = learn
+    P.use_bias && P.bias.ℓb != 0 && error("the level-0 chain needs the bias at level 0 (it has been lifted to level $(P.bias.ℓb))")
     for it in 1:n
         s = base_step(rng, P, s, S)
         if learn
             if it >= cfg.bias_start && P.use_bias && P.bias.active
-                Xn, sz, sk = scores(P, s)
-                bias_observe!(P.bias, P.E, P.W, P.lk[1], s.k, Xn, Float64(P.levels[1][2]), sz, sk)
+                Xn, sz, sk, kb = bias_scores(P, s)
+                bias_observe!(P.bias, P.E, P.W, P.lk[1], kb, Xn, sz, sk)
                 it % cfg.bias_every == 0 && (bias_update!(P.bias; monotone=bias_monotone_args(P, cfg)); evaluate!(P, s))
             end
         end

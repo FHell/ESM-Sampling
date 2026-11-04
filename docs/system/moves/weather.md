@@ -25,15 +25,20 @@ data-map kinks (load $\ge0$, availability in $[0,1]$) as primary breakpoints. Th
 units at every node whose requirement changes follow share-preservingly on the actual
 requirement (requirement-tracking kinks); weather-dependent units are excluded from the
 compensation because their injection scale changes with the weather. $t$ is drawn exactly with
-the Gaussian prior on the line (truncated Gaussian segments), then the Jacobian and, for a
-level-0 coordinate at $\alpha = 1$, the bias change enter one Metropolis step.
+the Gaussian prior on the line (truncated Gaussian segments), then the Jacobian and, at
+$\alpha = 1$, the bias change $e^{-\Delta\hat b}$ enter one Metropolis step (an independence
+step with the exact bias-free conditional as proposal; on rejection the state stays). The bias
+is evaluated at the finest level, so every coordinate, innovation or $z_0$, moves it; its change
+is that of $\hat g$ at the steps of the window ($D_t$ and $R_t$ from the data-mapped weather
+entries, `bias_delta_weather`), read from and committed to the bias cache of the fine step.
 
 **Selection and schedule.** The regime update first; then, from the finest level down to level
 0, a random sample of a fraction `fine_weather` of the coordinates of each level. Moves whose
 coarse blocks are far enough apart (block index modulo a spacing derived from the window
-spread) run in parallel; level-0 moves at $\alpha = 1$ run in sequence because the bias couples
-all steps. **Cost.** A block move over the window of steps the coordinate reaches at the finest
-level, plus compensation at its nodes.
+spread) run in parallel, at every level including $z_0$: their windows, and so their bias
+changes, are disjoint. **Cost.** A block move over the window of steps the coordinate reaches at
+the finest level, plus compensation at its nodes, plus one table lookup per window step for the
+bias.
 
 ## Level-0 warmup chain
 

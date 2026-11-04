@@ -16,7 +16,7 @@ with their convergence diagnostics. The individual move families are in
    heuristic (`init = "heuristic"`: renewables at a proxy share of their potential, gas at the
    nodal peak load, batteries at 5 % of it, interior dispatch).
 2. **Level-0 warmup** (only at $\alpha = 1$): a chain on the coarsest level learns the bias
-   $\hat b$ from its scores (§7.1).
+   $\hat b$ from its scores, which is then lifted to the finest level (§7.1).
 3. **Finest-level chains**: `mlda_warmup` sweeps of warmup, in which the adaptive modes,
    the online bias and the optional CO₂ price adapt, then `nsamples` production sweeps with
    the bias and the CO₂ price frozen. `nchains` chains in the CPU driver (`run`, §9), many
@@ -225,6 +225,18 @@ Both include capex, the bias change and the measure term. At $\alpha = 1$ a capa
 within about $1/(\beta_v c)$ of its peak dispatch, so moves of $k$ at fixed dispatch move it
 little; `kpeak` moves capacity and peak dispatch together.
 
+**Incremental bias.** The bias is evaluated at the finest level, so a capacity proposal changes
+$\hat g$ and $\bar{\mathbb E}\hat g$ at every step and sample step. A per-state cache
+(`BiasCache`, built once per fine step and shared by the capacity and weather moves, since the
+operation sweep changes neither $k$ nor $x$) holds the features $D_t$, $R_t$, $u_{1,t}$ and the
+table values $F_1$, $F_2$ per step for the chain's weather and per sample step, the firm
+capacity, the raw and clamped node capacities, the clamped coefficients of $\hat h$ and the
+three sums. A proposal of one unit (`bias_delta_k`) changes $R_t$ by $A_{i,t}\Delta$ at every
+step for a non-gas generator (steps with $A_{i,t}=0$ are skipped), the firm capacity for gas and
+storage, and the clamped coefficients of its node for $\hat h$; the commit updates the cache and
+recomputes the sums from the per-step values. The measure term of `kpeak` is the unit's term
+of $\log J$ alone. The global `evaluate!` equals the incremental sums to round-off.
+
 ## 7. Weather and bias
 
 ### 7.1 Learning the bias
@@ -234,21 +246,31 @@ little; `kpeak` moves capacity and peak dispatch together.
   the level-0 weather coordinates at fixed operation (five colour classes of steps), the
   weather move with pro-rata shear, slice updates of the level-0 capacity coefficients, FFBS of
   the regimes, and the carrier scaling move ([moves/weather.md](moves/weather.md),
-  [moves/capacity.md](moves/capacity.md)). From iteration `bias_start` its scores enter the
-  bias regression every iteration, with a refit every `bias_every` iterations. With
-  `init = "lp"` the zero-temperature scores of the reference LP (its duals) enter first as
-  pseudo-observations of weight `bias_warmstart`. An optional reflective descent of the
-  operation (`descent_iters`) precedes the warmup.
-- **Online refits** (`bias_online`, default on). In the finest chain the scores
-  $s_z = -\beta_v\nabla_{z_0}C$ and $s_k = -\beta_v\partial_{k_0}C$, carried to level-0
-  coordinates, enter the regression every `bias_online_every` steps during the finest-level
-  warmup. The coefficients are refitted (monotone QP) only when the observation count reaches
-  $2^j\ge4$. Both drivers pool the scores of all chains and freeze the bias at the end of the
-  warmup, so production samples one fixed target. After a refit every chain's state is
-  re-evaluated.
-- **Post-correction** (`bias_post`, default on). Every production sample records its level-0
-  weather and capacities and the bias in use. After the run, $\tilde b$ is refitted from all
-  scores and every sample gets the self-normalized weight
+  [moves/capacity.md](moves/capacity.md)). The bias is evaluated at level 0 ($\ell_b = 0$;
+  the per-step part of $\hat g$ enters the step terms of the slice updates). From iteration
+  `bias_start` its scores enter the bias regression every iteration, with a refit every
+  `bias_every` iterations. With `init = "lp"` the zero-temperature scores of the reference LP
+  (its duals) enter first as pseudo-observations of weight `bias_warmstart`. An optional
+  reflective descent of the operation (`descent_iters`) precedes the warmup.
+- **Lift** (`lift_bias!`, both drivers, [ensemble.md](ensemble.md) §4.4). Before the finest
+  chains start, the bias is lifted to their level: $\theta$ and $\bar D$ kept, $a$ and $c$
+  prolongated (new detail coefficients zero), the regression sums reset, the sample steps of
+  $\bar{\mathbb E}$ redrawn at the finest level from a stream of their own (seed + 4243), so
+  that both drivers get the same ones.
+- **Online refits** (`bias_online`, default on). In the finest chains the scores
+  $s_x = -\beta_v\nabla C$ in the weather state coordinates of the finest level ($z_0$ and all
+  detail coordinates) and $s_k = -\beta_v\partial_k C + \partial_k\log J$ on all capacity
+  coordinates of the level enter the regression every `bias_online_every` steps during the
+  finest-level warmup. The coefficients are refitted (monotone QP) only when the observation
+  count reaches $2^j\ge4$. Both drivers pool the scores of all chains and freeze the bias at the
+  end of the warmup, so production samples one fixed target. After a refit every chain's state
+  is re-evaluated.
+- **Post-correction** (`bias_post`, default on). Every production sample records what is
+  needed to evaluate $\hat b$ and to refit it at the finest level, not the raw weather: the
+  features $u_{1,t}$ per step, the clamped node capacities and clamped capacity coefficients,
+  the bias in use, and the sufficient statistics of its scores (its contribution to the normal
+  equations). After the run, $\tilde b$ is refitted from the warmup's sums plus the production
+  statistics and every sample gets the self-normalized weight
   $w_i\propto\exp(\hat b_{\rm used}(x_i,k_i)-\tilde b(x_i,k_i))$. The weight ESS measures how
   far the bias in use was from the final one; weighted quantities and weather diagnostics
   are written next to the unweighted ones. Weights cannot repair regions the chain did not
@@ -256,8 +278,13 @@ little; `kpeak` moves capacity and peak dispatch together.
 
 > **Status: missing.** Stabilization of the bias early in an $\alpha = 1$ run (a long enough
 > level-0 warmup before fine-level refits, damping or a trust region for the refits,
-> regularization of $\hat h$'s slopes). Without it a refit can move $\hat b$ by many nats at
-> states far from the fitted ones.
+> regularization of $\hat h$). Without it a refit can move $\hat b$ by many nats at states far
+> from the fitted ones. Two mechanisms are known. The separable quadratic $\hat h$, fitted from
+> scores of chains that start far apart, takes negative curvature with its maximum inside the
+> capacity box; beyond the maximum $e^{-\hat h}$ grows with the capacity, and storage runs to its
+> bound. And the weather scores do not separate the linear coefficients of $u_1$ and $u_2$ (their
+> design columns are equal), so the ridge splits them equally and the firm-capacity dependence
+> of $\hat g$ in surplus is not identified by the weather data.
 
 ### 7.2 Weather moves at the fine level
 
@@ -265,10 +292,16 @@ With `fine_weather` $= f > 0$, every fine step ends with `fine_weather_sweep!`: 
 regime update (FFBS given the anomalies of all levels), then a fraction $f$ of the innovation
 coordinates of every level and of the level-0 coordinates, each moved by an exact line draw
 with its Gaussian prior and share-preserving compensation of the dispatchable units at every
-node whose requirement changes. The bias change of a $z_0$ move enters the Metropolis step
-together with the Jacobian. Innovation moves in coarse blocks far enough apart run in
-parallel; $z_0$ moves at $\alpha = 1$ run in sequence because the bias couples all steps.
-With `fine_weather = 0` the weather stays at its initial draw at the fine level.
+node whose requirement changes. At $\alpha = 1$ every weather coordinate moves $\hat b$ (it is
+evaluated at the finest level): the exact draw of the bias-free line conditional is followed by
+a Metropolis correction with $e^{-\Delta\hat b}$ together with the Jacobian (an independence
+Metropolis step with the exact conditional as proposal), and on rejection $t = 0$. The bias
+change comes from the bias cache: $D_t$ and $R_t$ change at the steps of the move's window,
+$\bar{\mathbb E}\hat g$ and $\hat h$ do not change (`bias_delta_weather`); an accepted move
+updates the cache at those steps. Because the change is local to the window, moves in coarse
+blocks far enough apart run in parallel at every level, $z_0$ included; the sums of the cache
+are recomputed after the sweep. With `fine_weather = 0` the weather stays at its initial draw
+at the fine level.
 
 ### 7.3 Canonical CO₂ price
 

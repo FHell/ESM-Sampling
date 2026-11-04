@@ -105,7 +105,9 @@ the 256-node network.
 | key | default | meaning |
 |---|---|---|
 | `use_bias` | `true` | $\alpha = 1$ (learned bias) or $\alpha = 0$ |
-| `bias_samples` | 16 | exact weather draws for $\bar{\mathbb E}\hat g$ |
+| `bias_samples` | 16 | exact weather draws for $\bar{\mathbb E}\hat g$, at the level of the bias (redrawn at the finest level when the bias is lifted) |
+| `bias_sample_steps` | 4096 | steps of those draws kept for $\bar{\mathbb E}\hat g$ (uniformly, weighted; 0: all) |
+| `bias_table_res` | 100 | grid points per smoothing width $s$ of the tables of $F_1$, $F_2$ |
 | `bias_monotone` | `true` | monotone, bounded implied price in the $\hat g$ fit |
 | `bias_warmstart` | 20.0 | weight (in samples) of the LP-score warm start; `init = "lp"` only; 0: off |
 | `bias_start`, `bias_every` | 150, 25 | level-0 warmup: first learning iteration, refit interval |

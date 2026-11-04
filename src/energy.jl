@@ -804,6 +804,30 @@ function log_measure(E::EnergyModel, lk::Layout, lv::Layout, zk)
     return val
 end
 
+"""
+Gradient of `log_measure` w.r.t. the capacity coefficients: per unit with physical
+measure, n_u/(k_c + κ0) at its node inside the box (0 where the capacity is clamped).
+"""
+function log_measure_grad(E::EnergyModel, lk::Layout, lv::Layout, zk)
+    g = zeros(lk.n)
+    E.measure == :physical || return g
+    function add!(f, n)
+        sp = E.kspecs[f]
+        y = vec(nodevals(zk, lk, E.kspecs, f))
+        dk = [(sp.lo[i] < y[i] < sp.hi[i]) ? n / (y[i] + E.κ0) : 0.0 for i in eachindex(y)]
+        add_field_grad!(g, lk, E.kspecs, f, reshape(dk, :, 1))
+    end
+    for gg in E.gens
+        (gg.kf > 0 && gg.wf == 0 && gg.vf > 0 && iscomplete(lv, E.vspecs, gg.vf) && iscomplete(lk, E.kspecs, gg.kf)) || continue
+        add!(gg.kf, (gg.ucf > 0 && iscomplete(lv, E.vspecs, gg.ucf) ? 2 : 1) * lv.T)
+    end
+    for st in E.stors
+        (st.kf > 0 && iscomplete(lv, E.vspecs, st.fe) && iscomplete(lk, E.kspecs, st.kf)) || continue
+        add!(st.kf, lv.T)
+    end
+    return g
+end
+
 "Total capacity per investable carrier (MW), from the node values."
 capacity_totals(E::EnergyModel, lk::Layout, zk) =
     [sum(nodevals(zk, lk, E.kspecs, f)) for f in eachindex(E.kspecs)]

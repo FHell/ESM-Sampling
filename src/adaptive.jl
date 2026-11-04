@@ -406,13 +406,14 @@ function peak_set(P::Problem, LM::LocalModel, LC::LocalCost, Xn, n::Int; q::Floa
 end
 
 """
-    kpeak_sweep!(rng, P, LM, s; LC, AM, q, w, κmin) -> (s, nmoved)
+    kpeak_sweep!(rng, P, LM, s; LC, BC, AM, q, w, κmin) -> (s, nmoved)
 
 One peak-set move per investable dispatchable generator unit (random order) at a
 complete level, variant `absorb` or `learned` with probability 1/2 each (learned
-only once AM has been updated).
+only once AM has been updated). At α = 1 the bias change comes from the incremental
+bias cache `BC` (built from `s` if not given).
 """
-function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, AM=nothing, q::Float64=0.05,
+function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC=nothing, AM=nothing, q::Float64=0.05,
                       w::Float64=0.1, κmin::Float64=1.0, mh::Bool=false, σk=nothing, nprop::Int=1, order::Symbol=:shuffle)
     E = P.E
     ℓ = LM.ℓ
@@ -420,6 +421,7 @@ function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, AM=
     T = LM.T
     Δt, cv, κ0 = LM.Δt, E.c_viol, E.κ0
     LC = LC === nothing ? LocalCost(P, LM, s) : LC
+    BC = (P.use_bias && BC === nothing) ? BiasCache(P, s) : BC
     Xn = weather_nodes(P.W, ℓ, s.xs[end])
     Kraw = knodes(P, ℓ, s.k)
     units = [(gi, i) for (gi, g) in enumerate(E.gens) if g.kf > 0 && g.vf > 0 && LM.complete[g.vf] &&
@@ -455,12 +457,11 @@ function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, AM=
         c = LM.cell[n]; nc = LM.ncell[c]
         Ylast = LC.Y[g.vf]
         cap = f_capex(E, kf)[i]
-        b0 = P.use_bias ? bias_term(P, k_at0(P, ℓ, s.k), s.z0) : 0.0
-        lm0 = log_measure(E, lk, lv, s.k)
-        kbase = copy(s.k)
+        # reference measure: the unit's term n_u log(k_c + κ0) of `log_measure` (physical measure, dispatchable)
+        nmeas = (E.measure == :physical && g.wf == 0) ? (g.ucf > 0 ? 2 : 1) * T : 0
+        lm0 = nmeas > 0 ? nmeas * log(clamp(k0, sp.lo[i], sp.hi[i]) + κ0) : 0.0
         Ut = E.kspecs[kf].B.Ut
         function setk!(δ)
-            copyto!(s.k, kbase)
             for qq in nzrange(Ut, i)
                 s.k[lk.off[kf]+rowvals(Ut)[qq]] += δ * nonzeros(Ut)[qq]
             end
@@ -516,12 +517,8 @@ function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, AM=
             k0 + δ < κmin && return -Inf
             Δop, Δcap = opdelta(δ)
             val = -P.βv * Δop - P.βk * Δcap + (g.ucf > 0 ? 2 : 1) * T * log(k0 / (k0 + δ))
-            if P.use_bias || E.measure == :physical
-                setk!(δ)
-                P.use_bias && (val -= bias_term(P, k_at0(P, ℓ, s.k), s.z0) - b0)
-                val += log_measure(E, lk, lv, s.k) - lm0
-                copyto!(s.k, kbase)
-            end
+            nmeas > 0 && (val += nmeas * log(clamp(k0 + δ, sp.lo[i], sp.hi[i]) + κ0) - lm0)
+            BC === nothing || (val -= bias_delta_k(BC, P.bias, E, lk, 1, gi, i, k0 + δ))
             return val
         end
         if mh
@@ -541,9 +538,10 @@ function kpeak_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, AM=
         end
         δ == 0.0 && continue
         nmoved += 1
-        # commit: capacity, utilizations, compensators, residuals and cell sums
+        # commit: capacity, utilizations, compensators, residuals and cell sums, bias cache
         k1 = k0 + δ
         setk!(δ)
+        BC === nothing || bias_delta_k(BC, P.bias, E, lk, 1, gi, i, k1; commit=true)
         Kraw[kf][i] = k1
         LC.kgen[gi][i] = clamp(k1, sp.lo[i], sp.hi[i])
         m = lv.m[g.vf]

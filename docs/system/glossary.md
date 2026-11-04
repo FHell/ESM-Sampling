@@ -10,7 +10,9 @@ exists. See [docs/README.md](../README.md) for the document index.
 | $x$ | weather: one year of load and availability at the finest step | `s.xs[end]` |
 | $m$, $z_0$, $w_\ell$ | regime path, level-0 standardized anomalies, innovations of level $\ell$ | `s.m`, `s.z0`, `s.ws` |
 | $\rho^x$, $p^w$ | weather law, its density in $(m,z_0,w)$ | `WeatherModel` |
-| $k$, $k_0$ | capacities (MW); their level-0 coefficients (in the bias) or existing capacity (brownfield) | `s.k`, `k_at0`; `GenGroup.k0` |
+| $k$, $k_0$ | capacities (MW); their level-0 coefficients or existing capacity (brownfield) | `s.k`, `k_at0`; `GenGroup.k0` |
+| $\ell_b$, $\Delta t_b$ | level of the bias (0 in the level-0 warmup, the finest after the lift) and its step length | `bias.ℓb`, `bias.Δt` |
+| $F_1$, $F_2$, $u_1$, $u_2$ | ramp sums of $\hat g$ (tabulated) and their features: residual load and shortfall per step | `RampTable`, `tabval`, `BiasCache` |
 | $v$ | operation: angles $\theta$, link utilizations $u$, dispatch utilizations $\omega$, commitment $c$, states of charge $e$ | `s.v` |
 | $K(k)$ | annualized capital cost (€/a) with the box penalty | `CostParts.capex` |
 | $C_x(k,v)$ | annual operating cost (€/a) with all priced violations | `CostParts.op` |
