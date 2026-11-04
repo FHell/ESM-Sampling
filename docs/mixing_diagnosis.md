@@ -725,3 +725,99 @@ level (`fine_weather_block_steps` = 600 finest steps: all three daily, 16 and 64
 prior the mixture without B = 365 has about 30 % lower rates per move for the annual load mean
 (5.8e-4 against 8.4e-4), which at the daily costs gives the same rate per CPU second (1.4e-2)
 and at the 6-hourly costs a 1.8 times higher one.
+
+## 10. α = 1 assessment of the full stack (main 36c5026)
+
+Two runs of `chains40.toml` at α = 1 (scratch copies `results/mixing/a1/chains40_a1_kop{0,1}.toml`:
+learning level-0 warmup of 400 iterations with `bias_start = 150`, lift to the fine level, the
+bias safeguards of main on by default (refit floor 16, confined ĥ, exact (1 − r) log J, θ_u₂ ≤ 0,
+trust region 1.0), `fine_weather = 0.05` with one z0 block move per fine step, 4 chains from the
+`low`, `high`, `heuristic`, `heuristic` starts, 40 warmup sweeps with online refits and 40
+production sweeps with the bias frozen, post-correction), one with `kop = false` and one with
+`kop = true`. `scripts/mixing/run_a1_full.jl` mirrors `run_chains` and replicates the local fine
+step to instrument `kop` and the block moves; outputs in `results/mixing/a1/`. Weather z-scores
+are against the marginal prior of the annual means of the field-mean rows (2000 exact draws:
+mean −0.52, 0.16, 0.04, 0.09 and sd 0.47, 0.49, 0.11, 0.45 for load, onwind, offwind, solar; in
+these units the α = 0 baseline of §2 ended at −0.2…1.7, −2.7…−1.6, −10.8…+16.9 and −3.4…+1.0).
+Each run took 20–22 min (14 min of it the level-0 warmup); a fine step 1.0–1.3 s per chain
+without `kop`, 1.4–1.5 s with it.
+
+**Stability.** Nothing runs away in the totals. Capacity totals per chain (GW) at sweeps 1 → 40 → 80:
+
+| carrier | `kop = false` (chains 1–4) | `kop = true` (chains 1–4) |
+|---|---|---|
+| onwind | 294→359→357, 246→248→248, 182→194→196, 181→198→199 | 251→276→267, 119→114→119, 143→180→186, 150→177→183 |
+| solar | 1150→2138→2120, 1221→1371→1374, 911→913→930, 907→909→916 | 1242→1595→1487, 1004→1011→1038, 1035→1259→1281, 1050→1321→1342 |
+| gas | 136→137→100, 784→807→807, 352→251→228, 332→238→211 | 136→154→134, 784→787→779, 352→249→223, 332→232→206 |
+| battery | 5→13→1, 20→27→27, 20→25→22, 18→25→21 | 7→0→0, 10→31→33, 2→28→31, 2→31→36 |
+| H₂ | 0, 1, 1, 1 | 0, 1, 1, 1 |
+
+Box hits at the end (node capacities at their upper box): the `high` chain's gas sits at the
+box at 35–36 of 40 nodes from its start (×2, clamped) and does not leave it in 80 sweeps; the
+renewables reach their boxes at a few nodes (without `kop` 10 units in chain 1, 0–1 in the
+others; with `kop` 5–11 units in every chain, onwind and offwind mostly). Storage and H₂ stay
+small (H₂ at the 1 MW floor in one unit of chain 1).
+
+Refits (Δb̂ at the four chains; over all states visited so far: mean change, largest deviation
+from the mean, against the spread of the old b̂ over the same states):
+
+| refit (observations) | `kop = false`: λ, Δb̂ at chains, visited mean / deviation (old spread) | `kop = true` |
+|---|---|---|
+| 16 | 0.23; +5.7…+6.5e6; +5.4e6 / 3.4e6 (3.5e6) | 0.42; +8.2…+8.9e6; +7.4e6 / 5.7e6 (5.7e6) |
+| 32 | 1.00; +3.1…+5.0e6; +4.1e6 / 6.2e6 (6.4e6) | 1.00; +2.1…+3.3e6; +2.5e6 / 3.9e6 (6.9e6) |
+| 64 | 1.00; −5.9…−4.0e6; −5.6e6 / 1.8e6 (9.6e6) | 1.00; −7.6…−5.7e6; −7.0e6 / 1.3e6 (9.5e6) |
+| 128 | 1.00; −2.3…−0.7e6; −1.9e6 / 2.0e6 (7.3e6) | 1.00; −2.7…−0.9e6; −1.8e6 / 3.7e6 (8.8e6) |
+
+The trust region acts only at the first refit; afterwards the deviation stays below the spread
+of b̂ over the visited states, which is itself millions of nats (the four chains sit in
+capacity configurations whose operating costs differ by up to 1e11 €/a, β_v·1e11 = 4e6), so the
+bound allows changes of millions of nats.
+
+The frozen bias still drives one chain. In the `low` chain the gas total falls from 137 to
+100 GW (`kop = false`) and 154 to 134 GW (`kop = true`) during production while the shed rises
+from 0.4 to 2.7 TWh/a (1.4 to 2.9 with `kop`): over the 40 production sweeps b̂ falls by
+2.6e6 nats while −β_vΔC is −3.0e5, −β_kΔK +160 and Δlog J about −4e4 (the batteries of that
+chain shrink from 13 to 1 GW), so the log target rises by 2.3–2.4e6 nats through −b̂ alone. The exact b would change by about the change of
+log Z, of the order of −β_vΔC; here b̂ falls about 8 times as much: in this region its slope in
+the firm capacity overshoots, and the chain is paid to shed. The other three chains change b̂ by
+0.03–0.3e6 nats.
+
+**The weather marginal.** z-scores of the annual means against the prior, means over the
+production window, per chain:
+
+| field | `kop = false` | `kop = true` | α = 0 baseline (§2) |
+|---|---|---|---|
+| load | +0.57, +0.14, −0.58, −0.22 | −0.23, +0.49, −0.78, −0.03 | +1.7, +0.8, −0.2, +0.2 |
+| onwind | +0.96, +1.49, +1.43, +1.22 | +0.92, −0.98, +0.48, +0.08 | −2.3, −2.7, −2.4, −1.6 |
+| offwind | +1.69, +3.51, +4.42, +1.78 | +1.30, −0.18, +0.34, −1.46 | −10.8, +13.2, +2.9, +16.9 |
+| solar | +0.78, +6.50, +7.19, +8.85 | +0.82, +6.27, +0.84, +6.12 | −2.4, −0.9, −3.4, +1.0 |
+
+α = 1 removes most of the α = 0 tilt for load and the wind fields (offwind from up to 17 sd to
+at most 4.4 sd, with `kop` 1.5 sd), but the solar annual mean is pulled 6–9 sd above the prior
+in two or three chains in both runs, and it drifted there during the run (sweep 1: −0.6…+3.7).
+The chains with too little firm or renewable capacity prefer sunny years at the cost of the
+prior; ĝ, with its implied price of the residual load, does not cancel that preference.
+
+**Mixing.** None within 40 production sweeps: R̂ 3.3–4.7 and bulk ESS 4.3–4.5 for every
+capacity total and every annual weather mean in both runs (H₂ with `kop`: R̂ 2.3, ESS 5.1). The
+chains stay in configurations set by their starts (the `high` chain's 780–807 GW of gas against
+100–230 GW, solar 0.9–2.1 TW).
+- `kop`: on average 184 of about 224 moves per pass move; the median |Δlog k| of a moved unit is
+  5.7e-3, 15 % of the unit changes exceed 0.1 and 2 % exceed 1 (the largest 5.1, a small store);
+  it adds about 0.4 s per chain-step.
+- z0 blocks: 320 moves per run, 22 % (`kop = false`) and 25 % accepted, median |t| 5.5e-3 and
+  7.8e-3 (16-day blocks 6–10e-3, 64-day 1–4e-3); none of the 11 365-day moves per run was
+  accepted. They remain cost-confined at α = 1 with this bias, as at α = 0 (§5.2).
+
+**Post-correction.** Weight ESS 1.00 of 160 samples in both runs; the log-weight spread is
+3.8e6 nats (sd 1.1e6) without `kop` and 4.3e6 (sd 1.5e6) with it: the refit at the end disagrees
+with the frozen bias by millions of nats across the production samples, consistent with the
+drift of the `low` chain.
+
+**Summary.** With the safeguards nothing runs away in the totals within 80 sweeps, and the
+weather tilt is much smaller than at α = 0 for load and wind, but (i) the bias's capacity
+dependence is still off by millions of nats between the chains' regions (the `low` chain is
+paid to shed during production; weight ESS 1), (ii) solar availability stays 6–9 sd above its
+prior in most chains, and (iii) there is no mixing between the start-dependent configurations
+in 40 production sweeps; `kop` moves capacities more (and to more boxes) but does not change
+(iii). No bug was found in the moves; the runs needed no change of `src/`.
