@@ -28,8 +28,9 @@ The other files in `docs/` are development notes, not a description of the syste
 - Keep the work log [docs/worklog.md](docs/worklog.md) current: add what was done (with
   commits) at the end of a work session, and keep its list of open to-dos up to date.
 - Record every experiment (planned, running, done) in the ledger
-  [docs/experiments.md](docs/experiments.md): question, setup, one-line result, where the
-  record lives.
+  [docs/experiments.md](docs/experiments.md), and every measurement campaign (runs that produce
+  results, mostly on the cluster) in [docs/campaigns.md](docs/campaigns.md): question, setup,
+  one-line result, where the record lives.
 - Personal or session notes (memory files, scratch notes, final reports) do not replace these
   documents.
 - Code wins over documents. If you find a disagreement, fix the document (or the code, if the

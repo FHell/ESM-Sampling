@@ -2,8 +2,8 @@
 
 How the sampler is run on the PIK cluster (HPC2024, Slurm): the environment, where code, data,
 caches and results live, the job types, checkpointing, how every run is recorded, and how
-results come back. The scripts are in `hpc/`; the campaigns are rows H0–H9 of the experiment
-ledger ([../experiments.md](../experiments.md)). User `hellmann`, project directory `coen`
+results come back. The scripts are in `hpc/`; the campaigns are the rows of the campaign
+list ([../campaigns.md](../campaigns.md)). User `hellmann`, project directory `coen`
 (`/p/projects/coen`), Slurm account `icone`.
 
 > **Status: partial.** The scripts exist, and the CPU driver's shared cache (§4) and state
@@ -97,11 +97,16 @@ overridden before sourcing it); `hpc/prepare_env.sh [<code dir>]` prepares a cod
   the `io` QOS (`hpc/jobs/data.sbatch`, requeued if interrupted; downloads, POWER points and
   snakemake outputs are kept, so a rerun continues). Every built file is recorded in
   `data/processed/PROVENANCE.toml` (path, hash, size, commit, command, date, host).
-- **ERA5** is read in place from `/p/projects/climate_data_central/reanalysis/ERA5` (`ESM_ERA5`)
-  by `scripts/prepare_era5.py` in a build job: only the variables, years and region it needs,
-  sequentially, one such job at a time, never a recursive scan of the folder (no `find` or
-  `grep` over it). Its layout (files per variable and year) is to be looked up once, by hand,
-  for the variables needed.
+- **ERA5** is read in place from `/p/projects/climate_data_central/reanalysis/ERA5` (`ESM_ERA5`),
+  which compute nodes see directly, so no copy and no internet are needed:
+  `hpc/prepare_data.sh era5 [years]` (`hpc/jobs/era5.sbatch`, standby on a compute node, after
+  `pypsa256`, whose PyPSA-Eur resources it needs) cuts the monthly global files
+  (`<variable>/<variable>_YYYYMM.nc`: `2m_temperature`, `10m_u_component_of_wind`,
+  `10m_v_component_of_wind`, `surface_solar_radiation_downwards`) to the European box
+  (`scripts/era5_subset.py`, into `data/raw/era5/europe/`), one file at a time with
+  constructed paths (never a listing, glob or recursive scan of the folder), keeping finished
+  months, then runs `scripts/prepare_era5.py` for `model256_era5.h5`. Default years 2003,
+  2010, 2013, 2017; 2013, the calibration window, must be among them.
 - **Weather-model and LP caches** (`weather_<hash>.jls`, `lp_<hash>.h5`, content-hashed
   keys; [architecture.md](architecture.md) §5). Their directory is the environment variable
   `ESM_CACHE_DIR` if set and non-empty, else the key `cache_dir`, else `dirname(out)/cache`;
@@ -139,7 +144,8 @@ command line. The run record notes the thread plan.
 | template (`hpc/jobs/`) | resources | QOS | used for |
 |---|---|---|---|
 | `prepare.sbatch` | 4 cores on a login node | `io` | environment preparation (§3) |
-| `data.sbatch` | 4 cores on a login node, 3 days, requeued | `io` | building the model files (§4) |
+| `data.sbatch` | 4 cores on a login node, 3 days, requeued | `io` | building the model files that need downloads (§4) |
+| `era5.sbatch` | 4 cores, 48 GB, 24 h, requeued | `standby` | `model256_era5.h5` from the cluster's ERA5 folder (§4) |
 | `h0_cpu.sbatch`, `h0_gpu.sbatch` | 8 cores; 1 H100 + 16 cores | `priority`; `gpushort` | campaign H0: offline load, deterministic tests, a smoke run; Reactant on the H100, a family profile |
 | `cpu.sbatch` | 8 cores (`-c` to change), 24 h, requeued | `standby` | CPU sampler runs (the default) |
 | `cpu_array.sbatch` | one run per line of a list file, requeued | `standby` | many configurations or seeds (`--array=1-n%k`) |
@@ -197,7 +203,7 @@ of 4) and finished with exit 0.
   refuses files above 5 MB and a campaign above 50 MB (`ESM_COLLECT_MAX_MB`,
   `ESM_COLLECT_TOTAL_MB`), and commits in the clone. It never pushes: the user reviews and
   pushes from the cluster, and pulls locally. Large outputs stay in `archive/`.
-- **Experiment ledger** ([../experiments.md](../experiments.md)): one row per campaign, whose
+- **Campaign list** ([../campaigns.md](../campaigns.md)): one row per campaign, whose
   record column points to `campaigns/⟨id⟩/`. The work log notes what was submitted.
 
 ## 7. State snapshots and resume
@@ -250,7 +256,8 @@ directory and are not archived (their size grows with the model).
 1. After the next push: `git -C /p/projects/coen/esm/ESM-Sampling pull` on a login node.
 2. `bash hpc/prepare_env.sh` on a login node (or `sbatch hpc/jobs/prepare.sbatch`).
 3. Build the model files: `sbatch hpc/jobs/data.sbatch small` (hours), and later
-   `sbatch hpc/jobs/data.sbatch pypsa256` (the PyPSA-Eur build, longer).
+   `sbatch hpc/jobs/data.sbatch pypsa256` (the PyPSA-Eur build, longer), then
+   `sbatch hpc/jobs/era5.sbatch` for the ERA5 variant.
 4. `bash hpc/new_campaign.sh H0`, then `sbatch hpc/jobs/h0_cpu.sbatch H0` and
    `sbatch hpc/jobs/h0_gpu.sbatch H0`; read the logs in `/p/tmp/hellmann/esm/logs/`.
 5. H2 (reference LPs): `bash hpc/new_campaign.sh H2`, then per configuration

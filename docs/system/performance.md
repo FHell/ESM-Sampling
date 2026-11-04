@@ -256,6 +256,15 @@ chains, 50–100 times the throughput of 4 CPU threads; full Europe (about 4 000
 hourly with localized moves, 10–20 s per sweep (2–5 s fused) against about 30 min on 4
 threads, at most 8–12 chains per 80 GB.
 
+**First H100 measurement** (campaign H0, PIK cluster, job 2902915, 2026-11-04; `profile_families.jl`
+with `FAMILIES=fast`, `configs/device40_6h_gpu.toml`: 40 nodes × 6 h, $T$ = 1460, 4 chains, FP64,
+the code of the term-axis/slope-jump version as on the laptop): the seven fast families together
+0.025 s per sweep, `soc` the most expensive at 0.0087 s, against 0.57 s and 0.20 s on the laptop
+GPU, about 23 times faster. Compile: 88 s for the first family (including the one-off start-up
+compilation), 4–12 s for each further family (laptop: 113–147 s and 4–59 s). The node's driver
+(580.126, CUDA 13.0) runs Reactant's CUDA 13.1 runtime. The full run set (compensated families,
+blocks, cells) and batch scaling are campaign H5.
+
 ## 8. Offline parts and memory
 
 - **Setup at 256 nodes**: `build_energy_model` with the completion options about 20 s. The

@@ -4,9 +4,13 @@
 # (QOS io). Writes into $ESM_PROJ/data/ (through the clone's data/ link) and records every file
 # in $ESM_PROJ/data/processed/PROVENANCE.toml.
 #
-#   bash hpc/prepare_data.sh small      model.h5 (40 nodes) and model76.h5 (76 nodes)
-#   bash hpc/prepare_data.sh pypsa256   the PyPSA-Eur build esm256, then model256.h5
-#   bash hpc/prepare_data.sh all
+#   bash hpc/prepare_data.sh small      model.h5 (40 nodes) and model76.h5 (76 nodes)      [internet: io]
+#   bash hpc/prepare_data.sh pypsa256   the PyPSA-Eur build esm256, then model256.h5     [internet: io]
+#   bash hpc/prepare_data.sh all        small, then pypsa256                             [internet: io]
+#   bash hpc/prepare_data.sh era5 [years, default 2003,2010,2013,2017]
+#        model256_era5.h5 from the cluster's ERA5 folder: no internet, needs pypsa256 first;
+#        run it on a compute node (hpc/jobs/era5.sbatch, standby). The window year 2013 must be
+#        among the years.
 #
 # Re-running is safe: downloads, NASA POWER points (data/raw/power) and snakemake outputs are
 # kept and reused; a requeued job continues where it stopped.
@@ -75,10 +79,40 @@ build_pypsa256() {
     record data/processed/model256.h5 "PyPSA-Eur $rev, snakemake composed_2050.nc (config.esm.yaml); prepare_data.py --network composed_2050.nc --out data/processed/model256.h5"
 }
 
+build_era5() {
+    local years="${1:-2003,2010,2013,2017}"
+    local pe="$ESM_PROJ/external/pypsa-eur"
+    local out="$ESM_PROJ/data/raw/era5/europe"
+    [ -f data/processed/model256.h5 ] && [ -d "$pe/resources/esm256" ] \
+        || { echo "prepare_data.sh era5: run pypsa256 first (model256.h5 and the esm256 resources)" >&2; exit 2; }
+    [[ ",$years," == *",2013,"* ]] || { echo "prepare_data.sh era5: the years must include 2013 (the calibration window)" >&2; exit 2; }
+    # European cut-outs of the monthly global files, read in place from the shared folder: one file
+    # at a time, paths constructed (never a listing or glob of the folder), finished months kept
+    local vars="2m_temperature 10m_u_component_of_wind 10m_v_component_of_wind surface_solar_radiation_downwards"
+    local y m v f dst
+    for y in ${years//,/ }; do
+        for m in 01 02 03 04 05 06 07 08 09 10 11 12; do
+            for v in $vars; do
+                f=${v}_${y}${m}.nc; dst="$out/$v/$f"
+                [ -s "$dst" ] && continue
+                mkdir -p "$out/$v"
+                ionice -c3 nice -n 10 uv run --frozen python -I scripts/era5_subset.py "$ESM_ERA5/$v/$f" "$dst.part" \
+                    && mv "$dst.part" "$dst" || { echo "prepare_data.sh era5: subset of $v/$f failed" >&2; rm -f "$dst.part"; exit 1; }
+            done
+        done
+        echo "prepare_data.sh era5: year $y cut"
+    done
+    py scripts/prepare_era5.py --base data/processed/model256.h5 --out data/processed/model256_era5.h5 \
+        --era5 "$out" --years "$years" --network "$pe/resources/esm256/networks/composed_2050.nc" \
+        --resources "$pe/resources/esm256" --raw data/raw --force
+    record data/processed/model256_era5.h5 "era5_subset.py from $ESM_ERA5 ($years); prepare_era5.py --base model256.h5 --years $years"
+}
+
 case "$what" in
     small)    build_small ;;
     pypsa256) build_pypsa256 ;;
     all)      build_small; build_pypsa256 ;;
-    *)        echo "prepare_data.sh: small, pypsa256 or all" >&2; exit 2 ;;
+    era5)     build_era5 "${2:-}" ;;
+    *)        echo "prepare_data.sh: small, pypsa256, all or era5 [years]" >&2; exit 2 ;;
 esac
 echo "prepare_data.sh: done ($what); provenance in $ESM_PROJ/data/processed/PROVENANCE.toml"

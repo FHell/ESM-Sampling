@@ -1,4 +1,4 @@
-# Campaign H10 (docs/experiments.md, row H10; docs/system/hpc.md)
+# Campaign H10 (docs/campaigns.md, row H10; ledger E27 in docs/experiments.md; docs/system/hpc.md)
 id = "H10"
 commit = ""          # filled in by hpc/new_campaign.sh H10 <commit> (the merge of the storage-pair branch)
 question = """
