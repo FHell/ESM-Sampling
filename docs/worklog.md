@@ -28,7 +28,8 @@ concrete next steps. Update it at the end of every work session.
 - Seasonal storage at fixed (k, x) after the long-range moves and the storage pairs (ledger
   E21, E27): per-unit hydro and PHS shapes relax about twice as fast with `sxpair`/`sxlong`
   (equal CPU, chain 4), but the large hydro units and opex still drift over 3000 sweeps; the
-  walls are now the reservoirs' zero discharge at the end steps. Next: campaign H10, redesigned to make its start states on the cluster; a direction
+  walls are now the reservoirs' zero discharge at the end steps. Next: campaign H10 (prepared,
+  self-contained; after D1: stage 1 LP, stage 2 the six runs, docs/campaigns.md); a direction
   whose power change is spread over several steps where the reservoir discharges (selection
   must not depend on v); the device port of `slong`/`slevel`, of the storage pairs and of the
   nominal storage requirement (`soc_qadj`) for `:tsoc` and `:sblk`.
@@ -49,6 +50,13 @@ concrete next steps. Update it at the end of every work session.
   region on by default, θ_u₂ ≤ 0); `complete40.toml` has `warmup0` below `bias_start`.
 
 **Device port:**
+- Plan (user, 2026-11-04): implement all missing families on plain arrays against the CPU
+  (`slong`/`slevel`, storage pairs, Haar angle atoms and `tcut`/`acut`, local re-routing
+  templates, block aggregates, `adshape`; not the learned `kpeak`, weather moves, fused kernels,
+  multi-GPU), then one Reactant compile pass (CPU backend) over all device code, then a review
+  of the existing and new Reactant code by a Fable agent; GPU timings from H5 on the cluster.
+  The precompile workload stays only if it is a clean win. (Of the port agent's 6.2 h, 3.3 h were
+  waits on background compile and timing scripts; few compiles broke.)
 - Fine-level weather moves: not needed any more (the weather moves on the host by a
   prior-reversible pCN process). Device agent (2026-11-04) on, in order: GPU form choice and
   the `tpot` padding; restructuring so XLA does not materialize large intermediates
@@ -174,6 +182,16 @@ concrete next steps. Update it at the end of every work session.
   on chain 4 for 3000 sweeps (ledger E27); the long runs as campaign H10 (`campaigns/H10/`,
   `scripts/mixing/opmix_hpc.jl`, smoke-tested locally through `hpc/run.sh` with a stop and a
   resume).
+- H10 made self-contained: the start states are built in the run from `configs/chains40.toml`
+  and its seed (heuristic capacities, or the reference LP solved once by a stage-1
+  `lp_reference.jl` job into the shared cache), then a common 500-sweep burn-in with the E21
+  kernel on its own stream (state hash in the summary), resumable like the main phase; no input
+  files, no pinned model hash; `campaigns/H10/chains40_e15.toml` removed; submit lines with
+  `--time` (LP 2 h, runs 12 h). Smoke-tested through `hpc/run.sh`: heuristic start with a stop
+  in the burn-in and a resume (start hash equal to an uninterrupted run), LP start (burn-in, run,
+  summaries). The LP start fails on main with `ESM_LP_THREADS` ≠ HiGHS's default ("global
+  scheduler has already been initialized"); the fix (scheduler reset, f2d09a3) is on the
+  LP-baseline branch and must be on main before H10's stage 1.
 
 ### 2026-11-04 (replica–Langevin sampler in src/)
 

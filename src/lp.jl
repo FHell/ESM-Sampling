@@ -38,7 +38,14 @@ function solve_lp(E::EnergyModel, lk::Layout, lv::Layout, W; silent=true, time_l
     set_attribute(model, "run_crossover", crossover ? "on" : "off")
     isfinite(time_limit) && set_attribute(model, "time_limit", Float64(time_limit))
     lpth = get(ENV, "ESM_LP_THREADS", "")          # shared nodes: HiGHS must not take every core (docs/system/hpc.md §3)
-    isempty(lpth) || set_attribute(model, "threads", parse(Int, lpth))
+    if !isempty(lpth)
+        set_attribute(model, "threads", parse(Int, lpth))
+        # HiGHS keeps one global thread scheduler, sized by the first solve of the process; a
+        # later solve with another `threads` fails ("global scheduler has already been
+        # initialized", status OTHER_ERROR). Resetting it makes this solve create it with this
+        # option. (One LP at a time per process.)
+        HiGHS.Highs_resetGlobalScheduler(1)
+    end
 
     kv = Dict{Int,Any}()
     for (f, s) in enumerate(E.kspecs)

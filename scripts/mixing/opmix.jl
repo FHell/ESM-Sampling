@@ -19,6 +19,7 @@ nx = length(ARGS) >= 7 ? parse(Int, ARGS[7]) : 8
 sx = length(ARGS) >= 8 ? parse(Float64, ARGS[8]) : 0.1
 kernel == "sx" || (nx = 0; sx = 0.0)
 cfg = ML.load_config("configs/chains40.toml"); cfg.verbose = false
+opmix_start(P, sL) = deserialize(chainsfile)[ci]
 include(joinpath(@__DIR__, "opmix_lib.jl"))
 
 rng = MersenneTwister(1000 + ci)
