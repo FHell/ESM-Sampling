@@ -6,8 +6,8 @@ results come back. The scripts are in `hpc/`; the campaigns are the rows of the 
 list ([../campaigns.md](../campaigns.md)). User `hellmann`, project directory `coen`
 (`/p/projects/coen`), Slurm account `icone`.
 
-> **Status: partial.** The scripts exist, and the CPU driver's shared cache (§4) and state
-> snapshots with resume (§7) are built; the device driver has no snapshots yet (§7). Nothing
+> **Status: partial.** The scripts exist, and the shared cache (§4) and the state snapshots
+> with resume (§7) are built for the CPU and the device driver. Nothing
 > has run on the cluster yet; campaign H0 is the first check.
 
 ## 1. The cluster in brief
@@ -245,8 +245,15 @@ a full-fidelity checkpoint: plain HDF5 data that survives code and Julia version
   creates the stop file, and the driver writes the snapshot at the next sweep boundary and
   exits with 75. The grace time must cover one sweep plus the write.
 
-> **Status: missing (device).** `run_device` writes no snapshot yet. On the device the state is
-> downloaded at each host checkpoint already; the snapshot adds the file write.
+**Device driver** (`run_device`, both samplers; [device.md](device.md) §6.3): the same keys, file
+layout (plus a group `device/`), stop file, exit code 75 and `ESM_IGNORE_SIGTERM`
+(`device/scripts/run_device.jl`); the boundaries are the host checkpoints (every
+`device_sweeps` operation sweeps or replica steps), so the grace time must cover one of them
+plus the write. On resume the device arrays and programs are rebuilt from the saved states
+(the compile is repeated: 2–6 minutes) and Reactant's RNG is re-seeded. The replica driver
+also writes a snapshot at the end of the run. Tested locally on 2026-11-04 through
+`hpc/run.sh` in `device` mode on the CPU backend (`hpc/configs/device_smoke.toml`, the
+simulated layout of §5).
 
 Snapshots are also outputs: a later experiment can start from them. They stay in the run
 directory and are not archived (their size grows with the model).
