@@ -14,7 +14,9 @@ concrete next steps. Update it at the end of every work session.
   different starts, but the dispatch lag biases the stationary capacities unless the step per
   operation sweep is ≲ 1e-4, and a weather refresh costs about 100 daily sweeps. Proposed
   next: M weather replicas sharing k, a lag probe that tunes the step, weather by a
-  prior-reversible pCN process instead of refresh shocks. Then: rewrite ensemble.md §4 and sampler.md §6–7 for the new design, and retire the bias
+  prior-reversible pCN process instead of refresh shocks; the user approved this structure
+  (2026-11-04). Prototype on an agent branch (replicas, pCN weather, lag probe, explicit
+  tilt knob), in parallel with seasonal storage moves on another branch. Then: rewrite ensemble.md §4 and sampler.md §6–7 for the new design, and retire the bias
   code (ĝ, ĥ, tables, lift, refits, trust region, post-correction, level-0 warmup,
   `device/src/bias_dev.jl`) and the capacity moves `kscale`/`kpeak`/`kop` as targets of the
   α = 0 density; record the learned bias in [retired.md](retired.md) with the reason (the
