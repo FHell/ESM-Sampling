@@ -27,8 +27,11 @@ shift $(( $# < 3 ? $# : 3 ))
 code="$ESM_PROJ/campaigns/$campaign/code"
 [ -d "$code" ] || { echo "run.sh: no campaign $campaign (hpc/new_campaign.sh)" >&2; exit 2; }
 cd "$code"
-if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
-    echo "run.sh: the campaign code $code has uncommitted changes; refusing to run" >&2; exit 2
+# every result must be reproducible from its commit: no modified and no untracked files
+# (ignored files such as the data link and device/LocalPreferences.toml are fine)
+if [ -n "$(git status --porcelain)" ]; then
+    echo "run.sh: the campaign code $code has uncommitted or untracked files; refusing to run:" >&2
+    git status --porcelain | head -5 >&2; exit 2
 fi
 commit=$(git rev-parse HEAD)
 esm_load_julia || exit 2
@@ -65,6 +68,10 @@ julia --startup-file=no -e '
     open(io -> TOML.print(io, c), joinpath(rd, "config.toml"), "w")' \
     "$rundir/config.orig.toml" "$rundir" "$ESM_CACHE_DIR" "$ESM_CACHE_MIRROR" "$known" || exit 2
 rm -f "$rundir/STOP"
+# the input data are not in git: record which model file the run reads (path and hash)
+data_path=$(julia --startup-file=no -e 'using TOML; print(get(TOML.parsefile(ARGS[1]), "data", "data/processed/model.h5"))' "$rundir/config.toml")
+data_sha=$( [ -f "$data_path" ] && sha256sum "$data_path" | cut -c1-16 || echo "missing" )
+export ESM_COMMIT="$commit" ESM_RUN_ID="$run_id" ESM_DATA_SHA="$data_sha"
 
 case "$mode" in
     cpu)    cmd=(julia --project=. -t "$threads" scripts/run.jl "$rundir/config.toml") ;;
@@ -84,6 +91,9 @@ restarts="${SLURM_RESTART_COUNT:-0}"
     echo "config = \"$config\""
     echo "config_sha = \"$(sha256sum "$rundir/config.orig.toml" | cut -c1-16)\""
     echo "commit = \"$commit\""
+    echo "julia = \"$(julia --startup-file=no -e 'print(VERSION)')\""
+    echo "data = \"$data_path\""
+    echo "data_sha = \"$data_sha\""
     echo "mode = \"$mode\""
     echo "command = \"${cmd[*]}\""
     echo "job_id = \"$jobid\""
@@ -146,7 +156,7 @@ IFS='|' read -r _ a_elapsed a_maxrss a_cpu a_energy <<< "${acct:-||||}"
 
 # --- archive and runs index (finished or failed runs; checkpointed and preempted runs continue) -
 jstr() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
-line="{\"run_id\":$(jstr "$run_id"),\"campaign\":$(jstr "$campaign"),\"config\":$(jstr "$config"),\"commit\":$(jstr "$commit"),\"mode\":$(jstr "$mode"),\"job_id\":$(jstr "$jobid"),\"status\":$(jstr "$status"),\"exit\":$code_exit,\"start\":$(jstr "$start"),\"end\":$(jstr "$end"),\"restarts\":$restarts,\"cpus\":$threads,\"elapsed\":$(jstr "$a_elapsed"),\"max_rss\":$(jstr "$a_maxrss"),\"energy_j\":$(jstr "$a_energy"),\"rundir\":$(jstr "$rundir")}"
+line="{\"run_id\":$(jstr "$run_id"),\"campaign\":$(jstr "$campaign"),\"config\":$(jstr "$config"),\"commit\":$(jstr "$commit"),\"data_sha\":$(jstr "$data_sha"),\"mode\":$(jstr "$mode"),\"job_id\":$(jstr "$jobid"),\"status\":$(jstr "$status"),\"exit\":$code_exit,\"start\":$(jstr "$start"),\"end\":$(jstr "$end"),\"restarts\":$restarts,\"cpus\":$threads,\"elapsed\":$(jstr "$a_elapsed"),\"max_rss\":$(jstr "$a_maxrss"),\"energy_j\":$(jstr "$a_energy"),\"rundir\":$(jstr "$rundir")}"
 (
     flock 9
     echo "$line" >> "$ESM_PROJ/ledger/runs.jsonl"

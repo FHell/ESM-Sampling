@@ -22,7 +22,10 @@ for (f, sp) in enumerate(E.kspecs)
     byc = Dict(c => sum((kv[i] for i in eachindex(bus) if E.sys.country[bus[i]] == c); init=0.0) for c in countries)
     cap[String(sp.name)] = Dict("total_MW" => sum(kv), "by_country_MW" => byc)
 end
+gitcommit = try readchomp(`git rev-parse HEAD`) catch; "unknown" end
 summary = Dict(
+    "commit" => get(ENV, "ESM_COMMIT", gitcommit), "run_id" => get(ENV, "ESM_RUN_ID", ""),
+    "data_sha" => get(ENV, "ESM_DATA_SHA", ""),
     "config" => ARGS[1], "data" => cfg.data, "levels" => cfg.levels,
     "objective_eur_per_a" => lp.objective, "capex_eur_per_a" => lp.capex,
     "opex_eur_per_a" => lp.objective - lp.capex,
