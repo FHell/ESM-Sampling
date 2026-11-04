@@ -9,3 +9,6 @@ external/pypsa-eur/
 work/
 *.log
 .uv-cache/
+
+# agent worktrees (Claude Code)
+.claude/worktrees/
