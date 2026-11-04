@@ -16,8 +16,8 @@ list ([../campaigns.md](../campaigns.md)). User `hellmann`, project directory `c
 | resource | what | limits that matter here |
 |---|---|---|
 | login nodes `login[01-03]` | 64 cores (EPYC 9354, Zen 4), 768 GB, **internet** | interactive work, compiling, short tests; QOS `io` (partition `io`) runs batch jobs there: 4 cores, 3 days, 5 concurrent jobs |
-| CPU nodes (`standard`, 180; `priority`, 60) | 128 cores (2 × EPYC 9554, Zen 4), 768 GB, no internet | QOS `short` 24 h (default), `medium` 7 days, `long` 30 days but at most 32 cores per job; `priority` 24 h, starts within minutes, at most 64 cores and 5 jobs; `standby` preemptible |
-| GPU nodes (`gpu`, 12) | 4 × H100 80 GB, 128 cores, 1.5 TB, `/localscratch` NVMe ~3 TB | QOS `gpushort` 24 h, `gpumedium` 7 days, `gpulong` 30 days, `gpupreempt` preemptible; `--gres=gpu:N` |
+| CPU nodes (`standard`, 180; `priority`, 60) | 128 cores (2 × EPYC 9554, Zen 4), 768 GB, no internet | QOS `short` 24 h (default), `medium` 7 days, `long` 30 days but at most 32 cores per job; `priority` 24 h, starts within minutes, at most 64 cores and 5 jobs; `standby` 7 days, preemptible (requeued with `--requeue`) |
+| GPU nodes (`gpu`, 12) | 4 × H100 80 GB, 128 cores, 1.5 TB, `/localscratch` NVMe ~3 TB | QOS `gpushort` 24 h, `gpumedium` 7 days, `gpulong` 30 days, `gpupreempt` 30 days, preemptible; `--gres=gpu:N` |
 | `$HOME` | backed up, small quota | no job I/O |
 | `/p/projects/coen` | backed up | the permanent home of this project on the cluster |
 | `/p/tmp/hellmann` | fast parallel FS, not backed up, **inactive files are deleted** | job working directories |
@@ -183,23 +183,23 @@ sbatch hpc/jobs/cpu.sbatch <campaign> <config> [cpu | device | script <path> [ar
    or none), the `sacct` figures (elapsed, MaxRSS, CPU time, energy) and the output files;
    appends one line to the runs indexes (global and the campaign's, under a lock); archives
    finished and failed runs without checkpoints;
-7. a run stopped by the time limit (SIGUSR1, exit 75) submits its own continuation
-   automatically: the same template (`ESM_JOB_SCRIPT`, the campaign worktree's copy) with the
-   same arguments (`ESM_JOB_ARGS`), array index (`ESM_JOB_ARRAY`), cores and memory, the same
-   run id, an afterany dependency on the stopped job; at most `RESUBMIT` in a row (default
-   `ESM_MAX_CONTINUATIONS` = 10; `RESUBMIT=0 sbatch …` for none). A preempted run (SIGTERM) is
-   requeued by Slurm instead, and a cancelled one stays stopped; a run stopped by its stop file
-   alone (no signal) is not continued. Runs longer than 24 hours are such chains, not
-   `medium`/`long` jobs (`long` allows only 32 cores per job).
+7. a preempted run (SIGTERM) is requeued by Slurm (`--requeue`, same job id and run id) and
+   resumes from its snapshot. Jobs are never resubmitted to get past a QOS time limit: every job
+   asks for a `--time` that covers the run's estimate, in the QOS that allows it, preferably
+   preemptible (`standby` up to 7 days, `gpupreempt` up to 30 days; for guaranteed runtime
+   `medium`/`gpumedium` 7 days, `long` 30 days at most 32 cores). The templates' 24 h is a
+   default for short runs; a campaign row gives `sbatch --time=…` where its runs are longer.
+   Runs longer than a week are a design question, settled with the user before submitting. A
+   run that reaches its time limit (SIGUSR1) stops with a snapshot (status `checkpointed`,
+   signal `USR1`), so the work is kept; nothing is resubmitted.
 
 The wrapper was tested locally on 2026-11-04 with the CPU driver on `hpc/configs/h0_smoke.toml`:
 a SIGTERM to the wrapper during the fine warmup gave a snapshot, exit 75 and the status
 `checkpointed`; the same run id started again resumed from the snapshot (fine warmup, sweep 1
 of 4) and finished with exit 0. The signal path through the templates was simulated locally
 with Slurm stubs (`cpu_array.sbatch`, a script-mode line): SIGUSR1 to the batch shell gave the
-snapshot exit, status `checkpointed`, signal `USR1` and one `sbatch` of the same template with
-`--array=⟨task⟩`, the cores, memory, run id and `RESUBMIT` − 1; the continuation, sent
-SIGTERM, reused the run directory (a second attempt in `run.toml`) and submitted nothing.
+snapshot exit, status `checkpointed`, signal `USR1`, and no `sbatch`; a second attempt with
+the same run id, sent SIGTERM, reused the run directory (a second attempt in `run.toml`).
 
 ## 6. Records, the ledger, and results through git
 
@@ -335,8 +335,8 @@ current ones, with what each needs:
 | campaign | needs | then |
 |---|---|---|
 | H0b (SIGTERM and snapshot tests) | D1: the snapshot test is skipped without `model.h5` | `bash hpc/new_campaign.sh H0b`; `sbatch hpc/jobs/h0_cpu.sbatch H0b` |
-| H4 (replica sampler, far-apart starts) | D1 rebuilt with the corrected wind calibration | `bash hpc/new_campaign.sh H4`; `sbatch --array=1-6%6 hpc/jobs/cpu_array.sbatch H4 campaigns/H4/list.txt`; `bash hpc/collect.sh H4` |
-| H10 (storage pairs) | D1 (rebuilt); the HiGHS scheduler reset for `ESM_LP_THREADS` (f2d09a3, LP-baseline branch) on main, else stage 1 fails; its start states and the reference LP are made by the campaign | `bash hpc/new_campaign.sh H10`; `sbatch hpc/jobs/build.sbatch H10 configs/chains40.toml script scripts/lp_reference.jl` (stage 1, the LP into the cache); `sbatch --dependency=afterok:<stage 1 job id> --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt`; `bash hpc/collect.sh H10 'summary*'` |
+| H4 (replica sampler, far-apart starts) | D1 rebuilt with the corrected wind calibration | `bash hpc/new_campaign.sh H4`; `sbatch --time=2-00:00:00 --array=1-6%6 hpc/jobs/cpu_array.sbatch H4 campaigns/H4/list.txt` (6-hourly lines estimated 12–20 h); `bash hpc/collect.sh H4` |
+| H10 (storage pairs) | D1 (rebuilt); the HiGHS scheduler reset for `ESM_LP_THREADS` (f2d09a3, LP-baseline branch) on main, else stage 1 fails; its start states and the reference LP are made by the campaign | `bash hpc/new_campaign.sh H10`; `sbatch --time=02:00:00 hpc/jobs/build.sbatch H10 configs/chains40.toml script scripts/lp_reference.jl` (stage 1, the LP into the cache); `sbatch --time=12:00:00 --dependency=afterok:<stage 1 job id> --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt`; `bash hpc/collect.sh H10 'summary*'` |
 | H2 and the other LP campaigns | D1 for 40 and 76 nodes, D2 for 256, D3 for ERA5 | as in their rows |
 | the full-resolution run | D3 | not yet a campaign ([roadmap.md](roadmap.md) §6) |
 

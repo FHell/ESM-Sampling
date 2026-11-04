@@ -54,6 +54,9 @@ The other files in `docs/` are development notes, not a description of the syste
   the campaign or of the data preparation (docs/system/hpc.md §6, §8). No files are copied
   between this machine and the cluster; code goes up through git, results come back through
   git.
+- Never resubmit or chain jobs to get past a QOS time limit. Each job asks for a `--time` that
+  covers its run's estimate, in a QOS that allows it, preferably preemptible (`standby` up to
+  7 days); runs longer than a week are settled with the user first (docs/system/hpc.md §5).
 - Keep everything inside the project folder (data in `data/`, outputs in `results/`, scratch in
   your scratchpad or `results/`). Install no new external binaries.
 
