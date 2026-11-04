@@ -94,13 +94,22 @@ function sweep_program(st::FlatState, cp, sp, k, tabs, ns, rng, fv::Val, kparts.
     return capacity_pass(st, kparts..., dims; σ, βk, βv, physical)
 end
 
+"Block lengths of a device run (`device_families`); L = 32 is left out: in the dense form a move costs ≈ 40× one of L = 4."
+const BLOCK_SCHED = (2, 4, 8, 16)
+
 """
-Operation families of a device run: the plain families, then the compensated families (`:spair`;
-LINEAR `:tsocL`/`:tpotL` when the model needs requirement tracking (line losses, lossy links),
-else share-preserving `:tsoc`/`:tpot`) and the level-bucketed cell templates of `ci`.
+Operation families of a device run: the plain families, then the compensated families (`:spair0`,
+`:spair`; LINEAR `:tsocL`/`:tpotL` when the model needs requirement tracking (line losses, lossy
+links), else share-preserving `:tsoc`/`:tpot`), the storage blocks of `BLOCK_SCHED` (`:sblkL…` or
+`:sblk…` likewise) and the level-bucketed cell templates of `ci` without `:cellpairu1` (its compile
+needs ≈ 10 GB, docs/system/device.md §3).
 """
-device_families(M::DeviceModel, ci) =
-    (FAMILIES_FAST..., :spair, (tracking(M) ? (:tsocL, :tpotL) : (:tsoc, :tpot))..., (ci === nothing ? () : cell_families(ci))...)
+function device_families(M::DeviceModel, ci)
+    tr = tracking(M)
+    cells = ci === nothing ? () : Tuple(f for f in cell_families(ci) if f != pairsym(1, true))
+    return (FAMILIES_FAST..., :spair0, :spair, (tr ? (:tsocL, :tpotL) : (:tsoc, :tpot))...,
+            (blksym(L, tr) for L in BLOCK_SCHED)..., cells...)
+end
 
 "Write the renewable capacities of chain c (device order `ren_units`) into the State `s` (coefficients)."
 function ren_to_host!(P::ML.Problem, kr::AbstractMatrix, c::Int, s::ML.State)
@@ -126,7 +135,7 @@ model and the plan, the device arrays and the two programs as plain functions wi
 argument builder `kargs` and the host draws `draws()`. Shared by `run_device` and the profiler
 (`device/scripts/profile_device.jl`).
 """
-function device_setup(cfg::ML.Config; families=FAMILIES_FAST)
+function device_setup(cfg::ML.Config; families=FAMILIES_FAST, budget=DENSE_BUDGET[])
     rng = MersenneTwister(cfg.seed)
     P, sL, info = ML.setup(cfg; rng=rng)
     L = ML.nlevels(P) - 1
@@ -147,7 +156,7 @@ function device_setup(cfg::ML.Config; families=FAMILIES_FAST)
     wsh = load_shares(P, chains)
     LM = ML.LocalModel(P, L)
     fams = families === :all ? device_families(M, cell_info(P, LM, ix)) : families
-    pl = plan(M, S, P.βv; cls=proxy_class(S.dnet, wsh), families=fams, cells=cell_info(P, LM, ix))
+    pl = plan(M, S, P.βv; cls=proxy_class(S.dnet, wsh), families=fams, cells=cell_info(P, LM, ix), budget=budget)
     T, N = M.T, M.N
     Ug, Us, Ul = length(ix.gidx), length(ix.sidx), length(M.kcap)
     dims = Val((K, T, N, Ug, Us, Ul, max(1, round(Int, 0.05 * T))))    # last: peak-set size (q = 0.05, as the CPU)

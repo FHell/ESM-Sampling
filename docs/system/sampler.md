@@ -32,7 +32,8 @@ through the move set: coarse spatial and temporal directions are moves of the fi
 One transition (`fine_local_step`) of a finest-level state is the composition of
 
 - an **operation sweep** with capacities and weather fixed (§4),
-- a pass of **capacity moves**, `kscale` then `kpeak`, one move per investable unit (§6),
+- a pass of **capacity moves**, `kscale` then `kpeak`, one move per investable unit, then with
+  `kop = true` the `kop` moves (§6),
 
 in random order (probability 1/2 each), followed by a **weather sweep** if
 `fine_weather > 0` (§7). The operation sweep is one of three kernels (`fine_kernel`):
@@ -221,9 +222,18 @@ order (`kscale_sweep!`, `kpeak_sweep!`; [moves/capacity.md](moves/capacity.md)):
   absorbing the change; $\delta$ from the generalized Gibbs conditional with
   $(k/(k+\delta))^{T}$ by slice sampling.
 
-Both include capex, the bias change and the measure term. At $\alpha = 1$ a capacity is held
+- **`kop`** (`kop_sweep!`, with `kop = true`): $k\to e^u k$ for one renewable or storage unit,
+  or for all units of such a carrier with a common $u$, at fixed utilizations, so that the
+  unit's operation scales with its capacity; the dispatchable generators at its node follow
+  share-preservingly (the pro-rata rule of §5.2 at every step), with the group Jacobian and
+  the pro-rata Jacobian in the line density; $u$ by slice sampling. One move per unit and one
+  per carrier per pass.
+
+All include capex, the bias change and the measure term. At $\alpha = 1$ a capacity is held
 within about $1/(\beta_v c)$ of its peak dispatch, so moves of $k$ at fixed dispatch move it
-little; `kpeak` moves capacity and peak dispatch together.
+little; `kpeak` moves capacity and peak dispatch together. A renewable capacity at fixed
+dispatch is held by its node balance to a few MW; `kop` moves it with the dispatchable
+generation of its node following.
 
 **Incremental bias.** The bias is evaluated at the finest level, so a capacity proposal changes
 $\hat g$ and $\bar{\mathbb E}\hat g$ at every step and sample step. A per-state cache
@@ -235,7 +245,10 @@ three sums. A proposal of one unit (`bias_delta_k`) changes $R_t$ by $A_{i,t}\De
 step for a non-gas generator (steps with $A_{i,t}=0$ are skipped), the firm capacity for gas and
 storage, and the clamped coefficients of its node for $\hat h$; the commit updates the cache and
 recomputes the sums from the per-step values. The measure term of `kpeak` is the unit's term
-of $\log J$ alone. The global `evaluate!` equals the incremental sums to round-off.
+of $\log J$ alone. A `kop` carrier move changes several units at once; its bias change is the
+sum of the unit changes applied in sequence to a copy of the cache (exact, since each unit
+change is evaluated from the updated cache), and the commit applies the same sequence to the
+cache itself. The global `evaluate!` equals the incremental sums to round-off.
 
 ## 7. Weather and bias
 

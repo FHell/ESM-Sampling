@@ -602,3 +602,72 @@ checks in `scripts/mixing/`).
    45× the α = 0 sweep because each z0 move evaluated the full bias twice (§5.4). The
    incremental Δb̂ of the `bias-merge` branch addresses this; its per-move cost should be
    compared with the step-local evaluation (≈ 0.01 ms per z0 move at 40 nodes daily).
+
+## 8. Follow-up: `kop` in `src/` (branch `kop`)
+
+`src/kop.jl` implements recommendation 2 as a move family (`kop_sweep!`, called after `kscale`
+and `kpeak` in `fine_local_step` for all three kernels when `kop = true`, default false;
+`docs/system/moves/capacity.md`). It is the prototype of §4 with the new bias: the bias change
+of a unit move is `bias_delta_k` on the per-step `BiasCache`, that of a carrier move the units
+in sequence on a copy of the cache (exact; the commit applies the same sequence to the cache).
+`test/test_kop.jl` checks, at α = 0 and α = 1 on the 40-node 6-hourly test configuration,
+the line density against the global log target, the bias change against the difference of
+`bias_term`, the local and bias caches against rebuilds after commits and after a sweep, the
+reverse move, the antisymmetry of the line densities and the invariance of (σ, e). A pass
+costs about as much as a `kscale` pass (0.44 against 0.48 s at 40 nodes × 6 h).
+
+**α = 0, with and without `kop`, new code** (`scripts/mixing/run_kop_ab.jl`, `chains40.toml`,
+4 chains, `fine_local_step` itself): `ab_kop` 125 sweeps (180 CPU s per chain, median step
+1.21 s), `ab_base` 150 sweeps (159 s, median step 0.89 s), i.e. about equal CPU.
+
+| landmark | with `kop` (sweep, per chain) | without |
+|---|---|---|
+| battery total ≥ 440 GW | 87, 59, 82, 84 | –, –, –, 132 |
+| H₂ total ≥ 130 GW | 100, 98, 87, 87 | never (≤ 113 GW at 150) |
+| gas total ≤ 60 GW | 85, –, 124, 62 | 107, –, –, – |
+| log targets at the end | 2.31–2.48e5 (spread 1.7e4) | 1.99–2.54e5 (spread 5.5e4) |
+
+The transient is again about twice as fast per CPU second and the chains are closer to each
+other; R̂ on the second half is uninformative in either run (the chains are still relaxing:
+renewables 3.6–4.6 with `kop`, 4.5–4.6 without). The renewables end higher with `kop` (solar
+2.0–2.7 TW against 1.2–1.7 TW), in the direction of the forces of §3.3.
+
+**α = 1 smoke test with the new bias** (`scripts/mixing/run_kop_a1smoke.jl`: `chains40.toml` at
+α = 1, level-0 warmup shortened to 300 iterations, bias lifted to the fine level and frozen,
+heuristic start). One standalone `kop` pass (184 moves) raised the log target by 3.16e6:
+−Δb̂ +1.52e6, −β_vΔC +1.64e6 (the heuristic start sheds), −β_kΔK −2.8e4, Δlog J +3.6e4; onwind
+went from 181 to 1065 GW (above its 932 GW box), solar from 0.91 to 2.43 TW, batteries from 13
+to 44 GW. Ten fine steps from the same start:
+
+| sweep | b̂ with `kop` | b̂ without | gas with / without (GW) |
+|---|---|---|---|
+| 1 | −2.19e7 | −8.20e6 | 386 / 386 |
+| 2 | −2.93e7 | −1.43e7 | 430 / 484 |
+| 5 | −3.15e7 | −2.44e7 | 534 / 576 |
+| 10 | −3.20e7 | −2.62e7 | 616 / 548 |
+
+b̂ runs away by 2.6–3.2e7 nats within ten sweeps with or without `kop`; the log target is then
+dominated by −b̂ (β_vC ≈ 1e6, β_kK ≈ 1e4 at sweep 10). `kop` makes the first sweep faster (b̂
+−2.2e7 against −8.2e6) but is not the cause: `kscale`/`kpeak` follow the same direction a few
+sweeps later (gas 270 → 550–620 GW, solar 1.7–2.1 TW, H₂ 10–52 GW). With the bias cache an
+α = 1 fine step costs 0.8–1.0 s per chain at 40 nodes daily, about the α = 0 cost.
+
+The runaway is entirely in ĥ (a rerun with the same seeds, parts of b̂ from a fresh cache):
+
+| state | ĝ | −r Ē ĝ | (1 − r) ĥ | firm capacity |
+|---|---|---|---|---|
+| heuristic start | −3.9e4 | +40 | +1.7e5 | 329 GW |
+| after one `kop` pass | −1.2e5 | +120 | −1.3e6 | 362 GW |
+| after 10 fine steps with `kop` | −1.6e5 | +129 | −3.19e7 | 625 GW |
+| after 10 fine steps without | −1.4e5 | +122 | −2.61e7 | 487 GW |
+
+ĝ moves by about 1e5 nats and Ē ĝ by nothing, while (1 − r)ĥ falls by 2.6–3.2e7: the
+capacity part of the bias is not confining in the directions the capacity moves take, as
+with the old bias (§4.4). `kop = true` has to wait for a confining ĥ.
+
+**What the new bias changes in this diagnosis.** §4.4 and §5.4 (old level-0 bias) are
+superseded by the smoke test above. The capacity scores now include ∂_k log J
+(`bias_online.jl`), which addresses §6 (i). The cost of the bias in the fine weather moves
+(§5.4, recommendation 9) is now the incremental `bias_delta_weather` of the bias cache.
+Everything at α = 0 and under the weather prior (§2–§4.3, §5.1–§5.3) does not involve the bias
+and stands.

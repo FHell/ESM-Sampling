@@ -160,16 +160,27 @@ move:
 | | `link` | 0.012 | 0.25 |
 | | `theta` | 0.552 | 2.42 |
 | | sum | 2.26 | |
-| `FAMILIES_FAST` | `gen0` | 0.048 | 0.12 |
-| | `pair0` | 0.070 | 0.37 |
-| | `soc` | 0.581 | 0.85 |
-| | `link` | 0.012 | 0.26 |
-| | `theta3`, `theta5`, `theta` | 0.065, 0.155, 0.066 | 0.85, 1.33, 1.87 |
-| | sum | 1.00 | |
-| compensated | `spair` | 2.55 | 3.74 |
+| `FAMILIES_FAST` | `gen0` | 0.047 | 0.12 |
+| | `pair0` | 0.054 | 0.29 |
+| | `soc` | 0.200 | 0.29 |
+| | `link` | 0.011 | 0.24 |
+| | `theta3`, `theta5`, `theta` | 0.048, 0.137, 0.069 | 0.64, 1.17, 1.96 |
+| | sum | 0.57 | |
+| compensated | `spair` | 1.00 | 1.47 |
+| cells | `cell1` | 0.119 | 20.4 |
+| | `cellpair1` | 0.274 | 47.0 |
 
-The whole device loop with `FAMILIES_FAST` (`run_device`, same configuration): 9.8 s per call
-of 10 operation sweeps (22.6 s with `FAMILIES`), capacity pass 0.11 s, host checkpoint 0.21 s.
+The rows are for the dense sampler with the term axis (static zero slopes, per-quantity root
+counts). Before it, the `FAMILIES_FAST` sweep took 1.00 s (`soc` 0.58 s, `pair0` 0.070 s,
+`theta5` 0.155 s) and `spair` 2.55 s; the family rows of `FAMILIES` are from that version. The
+first family profiled in a process runs up to 1.4× slower kernels (GPU clock warm-up); the
+`gen0` row is from a second process. The remaining small kernels with low occupancy are a sort
+over a 2–4-element axis per site (about 5 ms per sweep in `gen0` and `pair0`) and the
+categorical draw over the points (`triton_softmax`, 17 % occupancy, 5–10 ms).
+
+The whole device loop with `FAMILIES_FAST` (`run_device`, same configuration): 6.2 s per call
+of 10 operation sweeps, of which the operation sweeps 5.77 s, capacity pass 0.15 s, download
+0.05 s, host checkpoint 0.24 s (before the term axis 9.8 s per call; with `FAMILIES` 22.6 s).
 
 In every family the most expensive kernels are the potential at all points of the dense form
 and the secondary quantities at the extended primaries. Both are FP64-arithmetic bound on this

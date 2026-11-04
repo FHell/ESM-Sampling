@@ -44,6 +44,7 @@ In include order (`src/ESMSampling.jl`):
 | `weather_fine.jl` | fine-level weather moves, with their bias change `bias_delta_weather` |
 | `flowmoves.jl` | `FlowFrames`, transport families, storage multiscale sweep, `flow_sweep!`, localized modes |
 | `adaptive.jl` | `AdaptiveModes`, learned families, `adaptive_sweep!`, `kpeak_sweep!` |
+| `kop.jl` | capacity moves with their operation: `KopTerm`, `KopMove`, `kop_prepare`, `kop_logdensity`, `kop_commit!`, `kop_sweep!` |
 | `sampler.jl` | `ChainSampler` (the kernels of one chain), `quantities`, carrier scaling `scale_step`, `base_step` |
 | `diagnostics.jl` | single-chain ESS (`ess`), `PriceAcc`, `RegionPriceAcc` |
 | `convergence.jl` | multi-chain diagnostics (rank-normalized $\hat R$, bulk/tail ESS, MCSE, warmup detection) |
@@ -140,7 +141,8 @@ calibration).
 `FlowFrames` (refreshed) and `AdaptiveModes` → in random order the operation sweep
 (`local_sweep!` followed with probability 1/2 by `storage_ms_sweep!`, `flow_sweep!` or
 `adaptive_sweep!`) and the capacity moves
-(`kscale_sweep!` then `kpeak_sweep!`) → `maybe_weather!` → `fine_weather_sweep!`; at
+(`kscale_sweep!` then `kpeak_sweep!`, then `kop_sweep!` with `kop = true`) → `maybe_weather!` →
+`fine_weather_sweep!`; at
 $\alpha = 1$ one `BiasCache`, built at the start, serves the capacity and weather moves.
 
 **Operation sweep** (`local_sweep!`): `LocalCost` → per parity class, threaded over its steps:

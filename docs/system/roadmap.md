@@ -56,6 +56,9 @@ when done, and the affected document is updated in the same change.
   costs about 2.3 times the plain one.
 - **Learned dispatch shapes with learned compensation** for faster intraday relaxation from
   far starts.
+- **`kop` on by default** once a stable $\alpha = 1$ run with it exists: `kop = false` for now,
+  because a wide capacity move follows any non-confining direction of the bias's capacity
+  part at once ([moves/capacity.md](moves/capacity.md)).
 - **Non-centered regime moves at the fine level** ([moves/weather.md](moves/weather.md)).
 - **Parallel tempering:** chains at a ladder of $(\beta_v,\beta_k)$, possibly tempering only
   $\beta_v$ or the bias strength, with swaps.
@@ -70,7 +73,8 @@ when done, and the affected document is updated in the same change.
 ## 5. GPU port
 
 The remaining parts of [device.md](device.md) §7: scheduling the compensated families and the
-cell templates in the driver; templates for Haar angle atoms, localized modes and local
+cell templates in the driver; the `kop` capacity move (a Metropolis form with per-carrier
+proposal scales in the capacity pass); templates for Haar angle atoms, localized modes and local
 re-routing; block profiles; host-side adaptation with table uploads; weather moves; then
 performance (fused kernels, FP32 intermediates, tiling, multi-GPU) and the full-Europe memory
 plan. Also: the array-first offline parts (ADMM, frame projection, principal components) on

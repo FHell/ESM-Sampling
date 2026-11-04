@@ -16,7 +16,7 @@ family name and whether the device port has it.
 | [transport.md](transport.md) | `tpot`, `tmode`, `tline`, `tcut`, `tmode0`, `tline0`, and `tpotL`, `tmodeL`, `tlineL`, `tcutL` | transport in space with share-preserving, learned or no compensation |
 | [storage.md](storage.md) | `tsoc`, `tsocL`, storage plateau and shape moves | transport in time: states of charge over one instant or a dyadic block |
 | [learned.md](learned.md) | `amode`, `amode0`, `amodeL`, `acut`, `acutL`, learned storage and dispatch shapes | directions learned from the chain's own fluctuations |
-| [capacity.md](capacity.md) | `kscale`, `kpeak`; level-0 carrier scaling and capacity slice updates | capacities |
+| [capacity.md](capacity.md) | `kscale`, `kpeak`, `kop`; level-0 carrier scaling and capacity slice updates | capacities |
 | [weather.md](weather.md) | regime FFBS, weather coordinate moves, weather shear | weather |
 
 How to add a family, with its tests and its device port: [adding_a_move.md](adding_a_move.md).
@@ -37,6 +37,7 @@ How to add a family, with its tests and its device port: [adding_a_move.md](addi
 | storage plateau and shape | all | `:sblk{L}`, `:sblkL{L}` (one unit; aggregates missing) |
 | `amode`, `amode0`, `amodeL`, `acut`, `acutL`, learned shapes | adaptive | missing |
 | `kscale`, `kpeak` | all, at the complete level | Metropolis forms, renewables included (`kren`); the learned `kpeak` variant missing |
+| `kop` | all, at the complete level, with `kop = true` | missing |
 | fine-level weather moves | all, with `fine_weather > 0` | missing |
 | level-0 moves (weather slice and shear, FFBS, capacity slice, carrier scaling) | level-0 warmup chain | not ported (host side) |
 

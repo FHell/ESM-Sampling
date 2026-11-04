@@ -98,6 +98,7 @@ the 256-node network.
 | `cell_level_power` | 1.0 | cell moves: partition level drawn $\propto$ (number of cells)$^p$ |
 | `xloc_partner_hops` | 1 | localized pairs: partner within this many hops |
 | `xloc_ball_hops` | 0 | localized pairs: re-routing ball radius (0: the pair only) |
+| `kop` | `false` | capacity moves with their operation ([moves/capacity.md](moves/capacity.md)) in every fine step, after `kscale` and `kpeak` |
 | `fine_weather` | 0.0 | fraction of the weather coordinates moved per fine step (0: weather fixed at the fine level) |
 
 **Bias.**
