@@ -7,7 +7,7 @@
 #   3. with the same uniforms both forms draw the same t (up to round-off), apart from guarded sites.
 # Model A: 40 nodes × 6 h, all terms (tracking: LINEAR families); model B: no losses (T2 families).
 # Every round of every family is checked on a prefix of NSITE sites.
-# Run: cd device && nice -n 19 julia --project=. -t 4 test/test_jump.jl
+# Run: cd device && nice -n 19 julia --project=. -t 4 --heap-size-hint=3G test/test_jump.jl   (CASE=A|B|C, default ABC)
 include("setup40.jl")
 using Test, Random
 
@@ -75,6 +75,7 @@ function jump_case(name; tracking_model::Bool, fams, cells=false, C=2)
     end
 end
 
-jump_case("A (all terms; LINEAR)"; tracking_model=true, fams=(:spair, :tsocL, :tpotL, :sblkL2, :sblkL4, :sblkL8))
-jump_case("B (no losses; T2)"; tracking_model=false, fams=(:spair, :tsoc, :tpot, :sblk2, :sblk4, :sblk16))
-jump_case("C (all terms; cell templates)"; tracking_model=true, fams=:cells, cells=true)
+const CASES = get(ENV, "CASE", "ABC")      # CASE=B: only case B
+'A' in CASES && jump_case("A (all terms; LINEAR)"; tracking_model=true, fams=(:spair, :tsocL, :tpotL, :sblkL2, :sblkL4, :sblkL8))
+'B' in CASES && jump_case("B (no losses; T2)"; tracking_model=false, fams=(:spair, :tsoc, :tpot, :sblk2, :sblk4, :sblk16))
+'C' in CASES && jump_case("C (all terms; cell templates)"; tracking_model=true, fams=:cells, cells=true)

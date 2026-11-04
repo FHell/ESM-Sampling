@@ -17,12 +17,38 @@
 
 const BLOCK_LENGTHS = (2, 4, 8, 16, 32)
 const PROFILES = Dict{Int,Matrix{Float64}}()       # L → (L+1, P) profile table; column 1 the plateau
+"L → season class of every profile column (0: any season; 1–4: DJF, MAM, JJA, SON of the block start)."
+const PROFILE_SEASON = Dict{Int,Vector{Int}}()
 
-"Profiles of length L: the plateau, then the shape columns `shapes` ((L+1) × S, zero ends)."
-function set_profiles!(L::Int, shapes=zeros(L + 1, 0))
+"""
+Profiles of length L: the plateau, then the shape columns `shapes` ((L+1) × S, zero ends), with the
+season class of each shape (`seasons`, 0: any). A site draws its profile among the columns of its
+block's season and those of any season (`block_rounds`).
+"""
+function set_profiles!(L::Int, shapes=zeros(L + 1, 0); seasons=zeros(Int, size(shapes, 2)))
     plat = vcat(0.0, ones(L))
     PROFILES[L] = hcat(plat, shapes)
+    PROFILE_SEASON[L] = vcat(0, seasons)
     return PROFILES[L]
+end
+
+"""
+Learned storage shapes (CPU `AdaptiveModes.shapes[(:soc, L, season)]`, `adaptive_block_sweep!`) as
+profile columns of block length L: per season class `nper` columns (the learned shapes, or the
+plateau while none is learned), after the plateau and the fixed shapes `fixed`. The table keeps its
+shape when the shapes are relearned, so the device tables rebuilt after relearning (`device_table`) upload without recompilation.
+"""
+function set_learned_profiles!(L::Int, AM=nothing; fixed=zeros(L + 1, 0), nper::Int=2)
+    cols, seas = Any[fixed], Int[zeros(Int, size(fixed, 2))...]
+    plat = vcat(0.0, ones(L))
+    for cl in 1:4
+        Φ = AM === nothing ? nothing : get(AM.shapes, (:soc, L, cl), nothing)
+        for j in 1:nper
+            push!(cols, Φ !== nothing && j <= size(Φ, 2) ? Φ[:, j] : plat)
+            push!(seas, cl)
+        end
+    end
+    return set_profiles!(L, hcat(cols...); seasons=seas)
 end
 profiles(L) = get(PROFILES, L) do
     set_profiles!(L)
@@ -31,13 +57,15 @@ end
 blksym(L, lin) = Symbol(lin ? :sblkL : :sblk, L)
 
 "Rounds of block length L: offset o, stride L, blocks of one parity × storage slot j; a profile per site."
-function block_rounds(L::Int, tp::Topo, rng; offset=nothing)
+function block_rounds(L::Int, tp::Topo, rng; offset=nothing, h=nothing)
     T = tp.T
     o = offset === nothing ? rand(rng, 0:L-1) : offset
     starts = collect(1+o:L:T-L-1)                            # steps b0 … b0+L and the commitment term at b0−1
     starts = filter(b -> b >= 2, starts)
     Sm = maximum(length.(tp.nodestor); init=0)
     np = size(profiles(L), 2)
+    seas = get(PROFILE_SEASON, L, zeros(Int, np))
+    compat(b0) = h === nothing ? collect(1:np) : findall(s -> s == 0 || s == ML.season(b0, h), seas)
     rounds = Vector{Vector{Tuple}}()
     for j in 1:Sm, par in (1, 2)
         sites = Tuple[]
@@ -45,7 +73,7 @@ function block_rounds(L::Int, tp::Topo, rng; offset=nothing)
             isodd(bi) == (par == 1) || continue
             for n in 1:tp.N
                 length(tp.nodestor[n]) >= j || continue
-                push!(sites, (tp.nodestor[n][j], b0, rand(rng, 1:np)))
+                push!(sites, (tp.nodestor[n][j], b0, rand(rng, compat(b0))))
             end
         end
         push!(rounds, sites)
@@ -74,11 +102,11 @@ for L in BLOCK_LENGTHS, lin in (false, true)
     @eval begin
         family_rounds(::Val{$(QuoteNode(nm))}, tp::Topo, M::DeviceModel, cls, rng) =
             ($lin || !tracking(M) || error("block T2 needs a model without requirement tracking (use :sblkL…)");
-             block_rounds($L, tp, rng))
+             block_rounds($L, tp, rng; h=round(Int, M.Δt)))
         site_cols(::Val{$(QuoteNode(nm))}, tp::Topo, site, D::Int) = block_cols(tp, site, $L)
         device_extra(::Val{$(QuoteNode(nm))}, ht) = (gon=Float64.(ht.gq .> 0), W=copy(profiles($L)))
         build(::Val{$(QuoteNode(nm))}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r, k::Consts) =
-            build_block(st, cp, sp, tab, r, k, Val($L), Val($lin))
+            build_block(st, cp, sp, tab, r, k, Val($L), Val($lin), $(QuoteNode(nm)))
         commit(::Val{$(QuoteNode(nm))}, st::FlatState, tab, r, t, dr, aux) = error("block commits use commit_tb")
         commit_tb(::Val{$(QuoteNode(nm))}, st, tab, r, t, dr, aux, tb) = commit_block(st, tab, r, t, dr, aux, tb)
     end
@@ -86,113 +114,86 @@ for L in BLOCK_LENGTHS, lin in (false, true)
                 (:grd, :ω, false), (:grd, :uc, false)]
 end
 
-"Profile weights w_j (C|1, B, 1), j = 0 … L+1 (w_{L+1} = 0), of the sites' profile ids."
-function block_weights(tab, r, L)
+"Profile weights w_1 … w_L of the sites' profile ids (1, B, 1, L) (w_0 = w_{L+1} = 0 are static)."
+function block_weights4(tab, r, L)
     pid = tab.p[:, r]
-    W = tab.W                                                 # (L+1, P) static table (a device array)
-    w = Any[]
-    push!(w, 0.0)                                             # w_0 = 0 for every profile (static)
-    for j in 1:L
-        push!(w, s3(W[j+1, :], pid))                          # gather the row's profile values
-    end
-    push!(w, 0.0)                                             # w_{L+1} = 0 (static)
-    return w
+    W = tab.W[2:L+1, :]                                       # (L, P) static table (a device array)
+    return M4(permutedims(W[:, pid]))
 end
 
-function build_block(st, cp, sp, tab, r, k, ::Val{L}, ::Val{lin}) where {L,lin}
+function build_block(st, cp, sp, tab, r, k, ::Val{L}, ::Val{lin}, fam::Symbol=blksym(L, lin)) where {L,lin}
     on = m3(tab.on[:, r])
     s = tab.s[:, r]
     κs = g3(cp.ks, s) .* s3(sp.sh, s) ./ k.Δt
     okm = (on .> 0.0) .& (κs .>= k.κmin)
-    w = [x isa Number ? x : x .* ifelse.(on .> 0.0, 1.0, 0.0) for x in block_weights(tab, r, L)]
+    z = 0.0 .* κs
+    z4 = c4(z)
+    w = block_weights4(tab, r, L) .* c4(ifelse.(on .> 0.0, 1.0, 0.0))     # (C|1, B, 1, L)
+    zw = 0.0 .* w[:, :, :, 1:1]
+    wa = cat(zw, w; dims=4)                                   # w_0 … w_L
+    wb = cat(w, zw; dims=4)                                   # w_1 … w_{L+1}
     G = size(tab.gq, 2)
-    # SoC terms of steps b0+j (args e(b0+j), e(b0+j+1)) and balance slots
-    kk, ww, h, ηi, ηo, qt, mc = g3(cp.ks, s), g3(cp.ws, s), s3(sp.sh, s), s3(sp.sηin, s), s3(sp.sηout, s), s3(sp.sqt, s), s3(sp.smc, s)
-    e = [g3(st.e, tab.ce[:, j, r]) for j in 1:L+2]
-    soc = SocTerms(Any[e[j+1] for j in 0:L], Any[w[j+1] for j in 0:L], Any[e[j+2] for j in 0:L], Any[w[j+2] for j in 0:L],
-                   Any[kk for _ in 0:L], Any[ww for _ in 0:L], Any[h for _ in 0:L], Any[ηi for _ in 0:L], Any[ηo for _ in 0:L],
-                   Any[qt for _ in 0:L], Any[mc for _ in 0:L], collect(1:L+1))
-    r0 = Any[g3(st.r, tab.cr[:, j, r]) for j in 1:L+1]
-    # requirement change of each step, compensation per step
-    dg = [ifelse.(okm, κs .* (w[j+2] .- w[j+1]), 0.0) for j in 0:L]
-    gc(j, jj) = tab.gcol[:, (j + 1) * G + jj, r]             # generator column of unit jj at step b0+j (j = −1 … L+1)
-    x = [Any[] for _ in 0:L]                                  # per step, per unit: slope (LINEAR) or kink coefficient (T2)
-    kinks = nothing
+    # SoC terms of steps b0+j (args e(b0+j), e(b0+j+1)), j = 0 … L, and balance slots
+    rep(x) = (y = c4(x); cat(fill(y, L + 1)...; dims=4))
+    ce = tab.ce[:, :, r]                                      # instants b0 … b0+L+1
+    soc = ssoc(z4, L + 1; e0=G4(st.e, ce[:, 1:L+1]), ae=wa, e10=G4(st.e, ce[:, 2:L+2]), ae1=wb,
+               k=rep(g3(cp.ks, s)), w=rep(g3(cp.ws, s)), h=rep(s3(sp.sh, s)), ηin=rep(s3(sp.sηin, s)), ηout=rep(s3(sp.sηout, s)),
+               qt=rep(s3(sp.sqt, s)), mc=rep(s3(sp.smc, s)), slot=collect(1:L+1),
+               mve=vcat(false, fill(true, L)), mve1=vcat(fill(true, L), false))
+    r0 = G4(st.r, tab.cr[:, :, r])                            # (C, B, 1, L+1)
+    dg = ifelse.(c4(okm), c4(κs) .* (wb .- wa), 0.0)          # requirement change of every step per unit t
+    q = tab.gq[:, :, r]
+    gcol = tab.gcol[:, :, r]                                  # (B, (L+3) G): steps b0−1 … b0+L+1, G units each
+    gstep(j) = gcol[:, (j+1)*G+1:(j+2)*G]                     # units at step b0+j
+    gs = gcol[:, G+1:(L+2)*G]                                 # steps b0 … b0+L
+    qs = reduce(hcat2, fill(q, L + 1))
+    gon = M4(tab.gon[:, :, r]) .> 0.0
+    gons = cat(fill(gon, L + 1)...; dims=4)
+    κ = G4(cp.κg, qs)
+    sl = slotmap(G, L + 1)
     if !lin
-        ds = Any[]
-        for j in 0:L
-            P_, Qs, nu = on .* 0.0, on .* 0.0, on .* 0.0
-            ωs, vs = Any[], Any[]
-            for jj in 1:G
-                q = tab.gq[:, jj, r]
-                κ = g3(cp.κg, q)
-                v = (m3(tab.gon[:, jj, r]) .> 0.0) .& (absd.(κ) .>= k.κmin)
-                ω = g3(st.ω, gc(j, jj))
-                P_ = P_ .+ ifelse.(v, κ .* ω, 0.0); Qs = Qs .+ ifelse.(v, κ .* clamp01.(ω), 0.0); nu = nu .+ ifelse.(v, 1.0, 0.0)
-                push!(ωs, ω); push!(vs, v)
-            end
-            Q = r0[j+1] .+ Qs
-            act = (dg[j+1] .!= 0.0) .& (nu .> 0.0) .& (absd.(P_) .>= 1e-6)
-            push!(ds, (P=P_, Q=Q, e=P_ .- max.(Q, 0.0), nm=nu .- 1.0, act=act))
-            for jj in 1:G
-                push!(x[j+1], ifelse.(act .& vs[jj], ωs[jj] ./ ifelse.(act, P_, 1.0), 0.0))
-            end
-        end
-        kinks = Kinks(Any[d.Q for d in ds], Any[ifelse.(d.act, dg[i], 0.0) for (i, d) in enumerate(ds)], Any[d.P for d in ds],
-                      Any[d.e for d in ds], Any[d.nm for d in ds], Any[ifelse.(d.act, 1.0, 0.0) for d in ds])
+        ω = G4(st.ω, gs)
+        v = gons .& (absd.(κ) .>= k.κmin)
+        d = prorata4(κ, ω, v, r0, dg, L + 1)
+        kk = skinks(z4; Q=d.Q, g=ifelse.(d.act, dg, 0.0), P=d.P, e=d.e, nm=d.nm, on=ifelse.(d.act, 1.0, 0.0))
+        x = ifelse.(d.act[:, :, :, sl] .& v, ω ./ ifelse.(d.act[:, :, :, sl], d.P[:, :, :, sl], 1.0), 0.0)
+        gen = gen4(st, cp, sp, z4, qs, gs, sl; ak=x, kid=sl)
     else
-        for j in 0:L, jj in 1:G
-            q = tab.gq[:, jj, r]
-            κ = g3(cp.κg, q)
-            β = βof(cp, sp, q, tab.cc[:, j+1, r])
-            v = (m3(tab.gon[:, jj, r]) .> 0.0) .& (absd.(κ) .>= k.κmin) .& (β .!= 0.0) .& (dg[j+1] .!= 0.0)
-            push!(x[j+1], ifelse.(v, β .* dg[j+1] ./ ifelse.(v, κ, 1.0), 0.0))
-        end
+        β = βof4(cp, sp, qs, G4(cp.cls, tab.cc[:, :, r])[:, :, :, sl])
+        dgc = dg[:, :, :, sl]
+        v = gons .& (absd.(κ) .>= k.κmin) .& (β .!= 0.0) .& (dgc .!= 0.0)
+        x = ifelse.(v, β .* dgc ./ ifelse.(v, κ, 1.0), 0.0)
+        kk = nothing
+        gen = gen4(st, cp, sp, z4, qs, gs, sl; a=x)
     end
-    gens, ucs, xs, xus = Any[], Any[], Any[], Any[]
-    for jj in 1:G
-        q = tab.gq[:, jj, r]
-        ucq = s3(sp.ucq, q) .* m3(tab.gon[:, jj, r])
-        for j in 0:L
-            xj = x[j+1][jj]
-            push!(gens, lin ? gent(st, cp, sp, q, gc(j, jj), j + 1; a=xj) : gent(st, cp, sp, q, gc(j, jj), j + 1; ak=xj, kid=j + 1))
-        end
-        for j in -1:L                                         # commitment term of step b0+j: (y_j, u_j, u_{j+1})
-            ymv = 0 <= j <= L
-            nxt = j + 1 <= L
-            y0, u0, u10 = g3(st.ω, gc(j, jj)), g3(st.uc, gc(j, jj)), g3(st.uc, gc(j + 1, jj))
-            xj = ymv ? x[j+1][jj] : 0.0
-            xn = nxt ? x[j+2][jj] : 0.0
-            if lin
-                push!(ucs, uct(cp, sp, q; y0=y0, ay=xj, u0=u0, au=xj .* ucq, u10=u10, au1=xn .* ucq, on=ucq))
-            else
-                push!(ucs, uct(cp, sp, q; y0=y0, aky=xj, kidy=ymv ? j + 1 : 0, u0=u0, aku=xj .* ucq, kidu=ymv ? j + 1 : 0,
-                               u10=u10, aku1=xn .* ucq, kidu1=nxt ? j + 2 : 0, on=ucq))
-            end
-        end
+    uj = [jj for jj in 1:G if ucon(fam, jj)]
+    uc, ucq = nothing, nothing
+    if !isempty(uj)
+        ucq = ucflags(sp, q, uj, gon)
+        nU = length(uj)
+        xs(j) = x[:, :, :, j*G .+ uj]                         # slopes of the committable units at step b0+j
+        ks(j) = fill(j + 1, nU)
+        # commitment term of step b0+j: (y_j, u_j, u_{j+1}), j = −1 … L (y_j moves for 0 ≤ j ≤ L, u_{j+1} for j+1 ≤ L)
+        sets = [(cy=gstep(j)[:, uj], y=0 <= j ? xs(j) : nothing, ky=ks(j), cu=gstep(j)[:, uj], u=0 <= j ? xs(j) .* ucq : nothing, ku=ks(j),
+                 cu1=gstep(j + 1)[:, uj], u1=j + 1 <= L ? xs(j + 1) .* ucq : nothing, ku1=ks(j + 1)) for j in -1:L]
+        uc = uc4s(st, cp, sp, z4, q[:, uj], ucq, sets, !lin)
     end
-    tb = TermBatch(mkgen(gens), mkuc(ucs), nothing, nothing, soc, r0, kinks)
-    return tb, (on, w, x, G, lin, [s3(sp.ucq, tab.gq[:, jj, r]) .* m3(tab.gon[:, jj, r]) for jj in 1:G])
+    tb = TermBatchS(z; gen=gen, uc=uc, soc=soc, kk=kk, r0=r0)
+    return tb, (on, w, x, gs, ucq, uj, G, lin)
 end
 
 function commit_block(st, tab, r, t, dr, aux, tb)
-    on, w, x, G, lin, ucq = aux
-    L = length(x) - 1
-    φ = kinkφ(tb, t)
-    e = st.e
-    for j in 1:L                                              # instants b0+1 … b0+L (w_0 = 0)
-        e = scadd(e, tab.ce[:, j+1, r], flat(t .* w[j+1]))
+    on, w, x, gs, ucq, uj, G, lin = aux
+    L = size(w, 4)
+    t4 = c4(t)
+    e = scadd4(st.e, tab.ce[:, 2:L+1, r], t4 .* w)            # instants b0+1 … b0+L (w_0 = 0)
+    Δ = unitΔ(x, tb, t, slotmap(G, L + 1), !lin)
+    ω = scadd4(st.ω, gs, Δ)
+    uc = st.uc
+    if ucq !== nothing
+        cols = [j * G + jj for j in 0:L for jj in uj]
+        uc = scadd4(st.uc, gs[:, cols], Δ[:, :, :, cols] .* cat(fill(ucq, L + 1)...; dims=4))
     end
-    ω, uc = st.ω, st.uc
-    for j in 0:L, jj in 1:G
-        col = tab.gcol[:, (j + 1) * G + jj, r]
-        Δ = lin ? x[j+1][jj] .* t : x[j+1][jj] .* φ[j+1]
-        ω = scadd(ω, col, flat(Δ))
-        uc = scadd(uc, col, flat(Δ .* ucq[jj]))
-    end
-    rr = st.r
-    for j in 1:L+1
-        rr = scadd(rr, tab.cr[:, j, r], flat(msk(dr[j], on)))
-    end
+    rr = scadd4(st.r, tab.cr[:, :, r], msk(dr4(dr), c4(on .+ 0.0 .* t)))
     return FlatState(st.θ, ω, uc, e, st.u, rr)
 end

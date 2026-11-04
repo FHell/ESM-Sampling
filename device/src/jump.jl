@@ -108,6 +108,29 @@ function slotgather(X, slots::Vector{Int}, R::Int)
     return rs(Xz[:, :, :, idx], C, B, L * mx, R)
 end
 
+"""
+Largest axis sorted by a compare-exchange network instead of a sort op (`sort3`). XLA's sort over
+a short axis runs at low occupancy on the GPU; min/max pairs fuse into the elementwise producers.
+"""
+const SMALLSORT = 8
+
+"""
+X sorted along dimension 3: a compare-exchange network (insertion order, n(n−1)/2 min/max pairs)
+for at most `SMALLSORT` entries, else the sort op. Same values as `sort(X; dims=3)` (the points are
+never NaN; ±0 may be ordered differently, which no later step distinguishes).
+"""
+function sort3(X)
+    n = size(X, 3)
+    n > SMALLSORT && return sort(X; dims=3)
+    n == 1 && return X
+    xs = ndims(X) == 3 ? Any[X[:, :, i:i] for i in 1:n] : Any[X[:, :, i:i, :] for i in 1:n]
+    for i in 2:n, j in i-1:-1:1
+        a, b = xs[j], xs[j+1]
+        xs[j], xs[j+1] = min.(a, b), max.(a, b)
+    end
+    return cat(xs...; dims=3)
+end
+
 "Sort the points p (C, B, N) with the payload v along dimension 3 (stable, `isless`)."
 function sortpair(p, v)
     perm = sortperm(p; dims=3)
@@ -138,21 +161,20 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
     s0 = z
     s0abs = z
     nz0 = z
-    roles = Any[]                                       # (local points, slots, injection at points)
-    hasslots = S.nr > 0
-    # real candidates at 0 of a group (V: indicators), counted once per list its points enter: the
-    # group's own and the list of every slot a column injects into (`copies`, per column)
-    addz!(V, copies::Vector{Float64}) =
-        (nz0 = nz0 .+ rs(sum(sum(cat(V...; dims=3); dims=3) .* reshape(copies, 1, 1, 1, :); dims=4), C, B, 1))
-    copies(slotsets...) = Float64[1 + (hasslots ? sum(sl[j] > 0 for sl in slotsets) : 0) for j in eachindex(slotsets[1])]
+    roles = Any[]                                       # (group, slots, injection at points)
+    gP, gJ = Any[], Any[]                               # local points and cost jumps of every column group
+    # real candidates at 0 of a group (V: indicators), every column point counted once
+    addz!(V, _=nothing) = (nz0 = nz0 .+ rs(sum(sum(cat(V...; dims=3); dims=3); dims=4), C, B, 1))
+    copies(slotsets...) = nothing
     track(x) = (sz === nothing || (sz[] = max(sz[], size(x, 3) * size(x, 4))); x)
     function addgroup!(P, f)
         pe = extend4(P)
         v = track(f(pe))
         J, s = coljumps(pe, v)
-        push!(pts, flat3(P)); push!(jmp, flat3(J))
+        push!(gP, P); push!(gJ, J)
         s0 = s0 .+ rs(sum(s; dims=4), C, B, 1)
         s0abs = s0abs .+ rs(sum(absd.(s); dims=4), C, B, 1)
+        return length(gP)
     end
     function roots!(Rv, zq, pe, cnt)
         nr = nrkeep(cnt, NR)
@@ -169,11 +191,11 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
         argprims!(P, V, g.y0, g.a, g.ak, Qc, gc, (0.0, 1.0))
         argprims!(P, V, g.y0, g.a, g.ak, Qc, gc, (g.yk,); mask=g.hv, kink=false)     # vintage kink
         addz!(V, copies(g.slot))
-        P = sort(cat(P...; dims=3); dims=3)
+        P = sort3(cat(P...; dims=3))
         y(t) = argloc(g.y0, g.a, g.ak, Qc, gc, t)
         addgroup!(P, pe -> gen_c.(Δt, cv, y(pe), g.κ, g.w, g.mc, g.clo, g.chi, g.plo, g.hv) .-
                            gen_c.(Δt, cv, g.y0, g.κ, g.w, g.mc, g.clo, g.chi, g.plo, g.hv))
-        push!(roles, (P, g.slot, pe -> .-(gen_p.(y(pe), g.κ) .- gen_p.(g.y0, g.κ))))
+        push!(roles, (length(gP), g.slot, pe -> .-(gen_p.(y(pe), g.κ) .- gen_p.(g.y0, g.κ))))
     end
     q = S.uc
     if q !== nothing && q.on !== nothing && any(x -> x !== nothing, (q.ay, q.aky, q.au, q.aku, q.au1, q.aku1))
@@ -184,7 +206,7 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
             argprims!(P, V, x0, a, ak, kc[j]..., (0.0, 1.0))
         end
         isempty(V) || addz!(V, ones(length(q.kidy)))
-        P = sort(cat(P...; dims=3); dims=3)
+        P = sort3(cat(P...; dims=3))
         av(j, t) = argloc(args[j][1], args[j][2], args[j][3], kc[j]..., t)
         pe = extend4(P)
         yc, ucl, uc1 = clamp01.(av(1, pe)), clamp01.(av(2, pe)), clamp01.(av(3, pe))
@@ -192,7 +214,7 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
         roots!(Rv, q.on .* (yc .- ucl), pe, q.cy .+ q.cu)
         roots!(Rv, q.on .* (q.gmin .* ucl .- yc), pe, q.cy .+ q.cu)
         roots!(Rv, q.on .* (uc1 .- ucl), pe, q.cu .+ q.cu1)
-        P = isempty(Rv) ? P : sort(cat(P, Rv...; dims=3); dims=3)
+        P = isempty(Rv) ? P : sort3(cat(P, Rv...; dims=3))
         addgroup!(P, pe -> q.on .* (uc_val.(Δt, cv, clamp01.(av(1, pe)), av(2, pe), av(3, pe), q.κ, q.w, q.gmin, q.su, q.nl) .-
                                     uc_val.(Δt, cv, clamp01.(q.y0), q.u0, q.u10, q.κ, q.w, q.gmin, q.su, q.nl)))
     end
@@ -201,11 +223,11 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
         P, V = Any[zcols(l.y0)], Any[]
         for c in (-1.0, 1.0, 0.0); cand!(P, V, c .- l.y0, l.a); end
         addz!(V, copies(l.slot0, l.slot1))
-        P = sort(cat(P...; dims=3); dims=3)
+        P = sort3(cat(P...; dims=3))
         yl(t) = l.y0 .+ l.a .* t
         addgroup!(P, pe -> link_c.(Δt, cv, yl(pe), l.cap) .- link_c.(Δt, cv, l.y0, l.cap))
-        push!(roles, (P, l.slot0, pe -> link_j0.(yl(pe), l.cap, l.η) .- link_j0.(l.y0, l.cap, l.η)))
-        push!(roles, (P, l.slot1, pe -> link_j1.(yl(pe), l.cap, l.η) .- link_j1.(l.y0, l.cap, l.η)))
+        push!(roles, (length(gP), l.slot0, pe -> link_j0.(yl(pe), l.cap, l.η) .- link_j0.(l.y0, l.cap, l.η)))
+        push!(roles, (length(gP), l.slot1, pe -> link_j1.(yl(pe), l.cap, l.η) .- link_j1.(l.y0, l.cap, l.η)))
     end
     if S.line !== nothing && S.line.df !== nothing
         ln = S.line
@@ -215,13 +237,13 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
         cand!(P, V, U4 .* ln.s .- ln.f0, ln.df)
         cand!(P, V, .-U4 .* ln.s .- ln.f0, ln.df)
         addz!(V, copies(ln.near, ln.far))
-        P = sort(cat(P...; dims=3); dims=3)
+        P = sort3(cat(P...; dims=3))
         fl(t) = ln.f0 .+ ln.df .* t
         u0 = absd.(ln.f0) ./ ln.s
         dloss(f) = ln.α .* ln.s .^ 2 .* (hinge(k.Lq, absd.(f) ./ ln.s) .- hinge(k.Lq, u0))
         addgroup!(P, pe -> (cv * Δt) .* (ln.s .* (hinge(k.ψ, absd.(fl(pe)) ./ ln.s) .- hinge(k.ψ, u0))))
-        push!(roles, (P, ln.near, pe -> (f = fl(pe); (f .- ln.f0) .+ 0.5 .* dloss(f))))
-        push!(roles, (P, ln.far, pe -> (f = fl(pe); .-(f .- ln.f0) .+ 0.5 .* dloss(f))))
+        push!(roles, (length(gP), ln.near, pe -> (f = fl(pe); (f .- ln.f0) .+ 0.5 .* dloss(f))))
+        push!(roles, (length(gP), ln.far, pe -> (f = fl(pe); .-(f .- ln.f0) .+ 0.5 .* dloss(f))))
     end
     if S.soc !== nothing && (S.soc.ae !== nothing || S.soc.ae1 !== nothing)
         so = S.soc
@@ -231,7 +253,7 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
             cand!(P, V, 0.0 .- x0, a); cand!(P, V, 1.0 .- x0, a)
         end
         addz!(V, copies(so.slot))
-        P = sort(cat(P...; dims=3); dims=3)
+        P = sort3(cat(P...; dims=3))
         ye(t) = so.e0 .+ (so.ae === nothing ? 0.0 .* t : so.ae .* t)
         ye1(t) = so.e10 .+ (so.ae1 === nothing ? 0.0 .* t : so.ae1 .* t)
         dd(t) = soc_d.(Δt, ye(t), ye1(t), so.h, so.qt)
@@ -241,18 +263,28 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
         for zq in (d1, ifelse.(so.ηin .> 0.0, d1 .- so.ηin, 1.0), .-d1 .* so.ηout .- 1.0)
             roots!(Rv, zq, pe, so.cnt)
         end
-        P = isempty(Rv) ? P : sort(cat(P, Rv...; dims=3); dims=3)
+        P = isempty(Rv) ? P : sort3(cat(P, Rv...; dims=3))
         addgroup!(P, pe -> soc_c.(Δt, cv, ye(pe), ye1(pe), so.k, so.w, so.h, so.ηin, so.ηout, so.qt, so.mc) .-
                            soc_c.(Δt, cv, so.e0, so.e10, so.k, so.w, so.h, so.ηin, so.ηout, so.qt, so.mc))
         d0 = soc_d.(Δt, so.e0, so.e10, so.h, so.qt)
-        push!(roles, (P, so.slot, pe -> soc_j.(dd(pe), so.k, so.ηin, so.ηout) .- soc_j.(d0, so.k, so.ηin, so.ηout)))
+        push!(roles, (length(gP), so.slot, pe -> soc_j.(dd(pe), so.k, so.ηin, so.ηout) .- soc_j.(d0, so.k, so.ηin, so.ηout)))
     end
     R = S.nr
     if R > 0 && !isempty(roles)
+        # The balance cost Δt (c_shed r₊ + c_dump r₋) of a slot bends where its residual r bends (at
+        # the points of the columns that inject into it) and where r crosses 0. Its slope jump at a
+        # column point p is Δt w(r(p)) × (that column's injection jump at p), w = c_shed for r ≥ 0,
+        # −c_dump below, so it is added to the column's own entry; the crossings are extra entries
+        # with the jump Δt (w after − w before) r'. The convention r = 0 ↦ surplus side is the same in
+        # both, so the jumps add up to the cost's slopes also when r vanishes at a point.
+        # 1. the slot lists (point 0 and the points of every injecting column, static layout) and
+        #    the residual there (one evaluation of every column at the points of its slot)
         Ps = Any[rs(z, C, B, 1, 1) .+ 0.0 .* S.r0]
-        for (P, sl, _) in roles
-            G = slotgather(P, sl, R)
-            G === nothing || push!(Ps, G)
+        offs, np = Int[], 1
+        for (gid, sl, _) in roles
+            G = slotgather(gP[gid], sl, R)
+            push!(offs, np)
+            G === nothing || (push!(Ps, G); np += size(G, 3))
         end
         r1(pe) = begin                                   # residual of every slot at its points pe (C, B, L, R)
             inj = nothing
@@ -263,76 +295,256 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
             end
             S.r0 .+ (inj === nothing ? 0.0 .* pe : inj)
         end
-        P = sort(cat(Ps...; dims=3); dims=3)
-        pe = extend4(P)
-        Rv = Any[]
-        roots!(Rv, track(r1(pe)), pe, fill(2, R))
-        P = isempty(Rv) ? P : sort(cat(P, Rv...; dims=3); dims=3)
-        addgroup!(P, pe -> bal_val.(Δt, k.cshed, k.cdump, r1(pe)) .- bal_val.(Δt, k.cshed, k.cdump, S.r0))
+        Pu = cat(Ps...; dims=3)                           # (C, B, np, R), unsorted
+        rv = track(r1(Pu))
+        rvf = rs(rv, C, B, np * R)
+        # 2. the balance part of the jump at every column point, and the slope of r right of 0
+        rp0 = nothing
+        z1 = 0.0 .* zc
+        for (ρ, (gid, sl, f)) in enumerate(roles)
+            P = gP[gid]
+            m, n = size(P, 3), size(P, 4)
+            pos = zeros(Int, n)
+            for j in 1:R
+                for (kk, c) in enumerate(findall(==(j), sl)); pos[c] = kk; end
+            end
+            idx = [sl[c] == 0 ? 1 : offs[ρ] + i + m * (pos[c] - 1) + np * (sl[c] - 1) for i in 1:m, c in 1:n]
+            rc = rs(rvf[:, :, vec(idx)], C, B, m, n)            # residual of the column's slot at its points
+            pe = extend4(P)
+            Ji, si0 = coljumps(pe, track(f(pe)))               # injection jumps and slope right of 0
+            on = reshape(Float64.(sl .> 0), 1, 1, 1, n)
+            gJ[gid] = gJ[gid] .+ (Δt .* on) .* ifelse.(rc .>= 0.0, k.cshed, -k.cdump) .* Ji
+            rp0 = addinj(rp0, slotsum(si0, sl, R, z1))
+        end
+        rp0 === nothing && (rp0 = 0.0 .* S.r0)
+        up = (S.r0 .> 0.0) .| ((S.r0 .== 0.0) .& (rp0 .> 0.0))  # side of r just right of 0
+        sb = Δt .* ifelse.(up, k.cshed, -k.cdump) .* rp0
+        s0 = s0 .+ rs(sum(sb; dims=4), C, B, 1)
+        s0abs = s0abs .+ rs(sum(absd.(sb); dims=4), C, B, 1)
+        # 3. the crossings of 0: the slot lists sorted with r as payload (entry axis first), r on the rays
+        Pq, rq = sortpair1(permutedims(Pu, (3, 1, 2, 4)), permutedims(rv, (3, 1, 2, 4)))
+        lo, hi = Pq[1:1, :, :, :], Pq[np:np, :, :, :]
+        pext = cat(lo .- (1.0 .+ absd.(lo)), hi .+ (1.0 .+ absd.(hi)); dims=1)     # (2, C, B, R)
+        rext = permutedims(r1(permutedims(pext, (2, 3, 1, 4))), (3, 1, 2, 4))
+        rts, cn, jr = slot_cross(cat(rext[1:1, :, :, :], rq, rext[2:2, :, :, :]; dims=1),
+                                 cat(pext[1:1, :, :, :], Pq, pext[2:2, :, :, :]; dims=1), NR, Δt, k.cshed, k.cdump)
+        over = over .| (rs(maximum(cn; dims=(1, 4)), C, B, 1) .> NR)
+        push!(gP, permutedims(rts, (2, 3, 1, 4))); push!(gJ, permutedims(jr, (2, 3, 1, 4)))
+    end
+    for (P, J) in zip(gP, gJ)
+        push!(pts, flat3(P)); push!(jmp, flat3(J))
     end
     return pts, jmp, s0, over, nz0, s0abs
+end
+
+"""
+    slot_cross(r, pe, NR, Δt, cs, cd) -> (roots, count, jumps)
+
+Crossings of 0 of the piecewise-linear residuals r over the sorted extended points pe (both
+(n, C, B, R), entry axis first; linear between the points and on the rays): the NR smallest
+(NR, C, B, R; 0 where fewer), their number (1, C, B, R) and the slope jumps of the balance cost
+there, Δt (w after − w before) r' (0 where none). A crossing is a change of the side r ≥ 0 between
+the ends of a segment (on a ray: between its end and infinity), so it is also found where r vanishes
+at a point; a crossing on a ray farther than `RAYMAX` is dropped (as in `rootsK`).
+"""
+function slot_cross(z, pe, NR::Int, Δt, cs, cd)
+    n = size(pe, 1)
+    za, zb = z[1:n-1, :, :, :], z[2:n, :, :, :]
+    pa, pb = pe[1:n-1, :, :, :], pe[2:n, :, :, :]
+    L = pb .- pa
+    s = ifelse.(L .> 0.0, (zb .- za) ./ ifelse.(L .> 0.0, L, 1.0), 0.0)
+    ua, ub = za .>= 0.0, zb .>= 0.0
+    seg = reshape(collect(1:n-1), n - 1, 1, 1, 1)
+    isl, isr = seg .== 1, seg .== n - 1
+    ulo, uhi = s .< 0.0, s .> 0.0                                # side at −∞ and +∞ of a ray
+    sn = ifelse.(s .== 0.0, 1.0, s)
+    x = ifelse.(isl, pb .- zb ./ sn, ifelse.(isr, pa .- za ./ sn, pa .+ L .* sdiv.(za, za .- zb)))
+    ok = ifelse.(isl, (s .!= 0.0) .& (ulo .!= ub), ifelse.(isr, (s .!= 0.0) .& (ua .!= uhi), ua .!= ub))
+    ok = ok .& ((.!(isl .| isr)) .| (absd.(x) .< RAYMAX))
+    bef = ifelse.(isl, ulo, ua)
+    aft = ifelse.(isr, uhi, ub)
+    jr = Δt .* (ifelse.(aft, cs, -cd) .- ifelse.(bef, cs, -cd)) .* s
+    xs = pin(ifelse.(ok, x, Inf))
+    cnt = sum(ifelse.(isfinite.(xs), 1.0, 0.0); dims=1)
+    out, jo = Any[], Any[]
+    prev = cnt .* 0.0 .- Inf
+    for _ in 1:NR
+        xi = minimum(ifelse.(xs .> prev, xs, Inf); dims=1)
+        fin = isfinite.(xi)
+        push!(out, ifelse.(fin, xi, 0.0))
+        push!(jo, ifelse.(fin, sum(ifelse.(xs .== xi, jr, 0.0); dims=1), 0.0))
+        prev = ifelse.(fin, xi, prev)
+    end
+    return cat(out...; dims=1), cnt, cat(jo...; dims=1)
 end
 
 "Suffix sums Σ_{i ≥ m} x_i along dimension 3, accumulated from the end (no cancellation against far terms)."
 rcumsum(x) = (n = size(x, 3); cumsum(x[:, :, n:-1:1]; dims=3)[:, :, n:-1:1])
 
+# ---------------------------------------------------------------------------
+# global part with the entry axis first: (N, C, B) arrays, the entry axis the fastest in memory, so
+# the payload sort and the scans need no transposes
+# ---------------------------------------------------------------------------
+
+"Block length of the two-level scans of traced arrays (`cumsum1`)."
+const SCANBLK = 32
+
 """
-Potential βΔC at the sorted points q (C, B, N) from the jumps J at them and the slope s0 just right
-of 0 (0 is one of the points): segment slopes from 0 outwards, values integrated from c(0) = 0
-outwards; returns the extended points and values for `sample_core`. A segment slope within the
-round-off of its sum (16 ε × the absolute slopes and jumps summed: `s0abs` for s0, `J0abs` for the
-folded entry at 0) is 0: a flat stretch stays exactly flat, as in the dense form.
+Prefix sums along dimension 1. Reactant lowers `cumsum` to a reduce-window over the whole axis (n²
+work); a traced axis longer than `SCANBLK` is scanned in two levels: within blocks of `SCANBLK`,
+then the exclusive scan of the block totals, added (work n·(b + n/b)). Partial sums keep their
+terms (a prefix of exact zeros stays exactly zero), only the order of the additions differs.
 """
-function jump_values(q, J, s0, β, s0abs=0.0 .* s0, J0abs=0.0 .* s0)
-    N = size(q, 3)
+cumsum1(x) = cumsum(x; dims=1)
+function cumsum1(x::Reactant.TracedRArray)
+    n = size(x, 1)
+    b = SCANBLK
+    n <= 2b && return cumsum(x; dims=1)
+    nb = cld(n, b)
+    rest = size(x)[2:end]
+    xp = nb * b == n ? x : cat(x, zeros(eltype(x), nb * b - n, rest...) .+ 0.0 .* x[1:1, ntuple(_ -> Colon(), length(rest))...]; dims=1)
+    X = rs(xp, b, nb, rest...)
+    W = cumsum(X; dims=1)
+    tot = W[b:b, ntuple(_ -> Colon(), length(rest) + 1)...]
+    inc = nb <= 2b ? cumsum(tot; dims=2) : rs(cumsum1(rs(tot, nb, rest...)), 1, nb, rest...)
+    cc = ntuple(_ -> Colon(), length(rest))
+    off = cat(0.0 .* tot[:, 1:1, cc...], inc[:, 1:nb-1, cc...]; dims=2)     # exclusive by a shift (no cancellation)
+    Y = rs(W .+ off, nb * b, rest...)
+    return nb * b == n ? Y : Y[1:n, ntuple(_ -> Colon(), length(rest))...]
+end
+"Suffix sums along dimension 1, accumulated from the end."
+rcumsum1(x) = (n = size(x, 1); c = ntuple(_ -> Colon(), ndims(x) - 1); cumsum1(x[n:-1:1, c...])[n:-1:1, c...])
+
+"(C, B, m) → (m, C, B) (entry axis first)."
+efirst(X) = permutedims(X, (3, 1, 2))
+"(1, C, B) → (C, B, 1) (a reshape: the moved axis has length 1)."
+elast(x) = rs(x, size(x, 2), size(x, 3), 1)
+"(C, B, 1) → (1, C, B)."
+eone(x) = rs(x, 1, size(x, 1), size(x, 2))
+
+"Sort the points p (N, C, B) with the payload v along dimension 1 (stable, `isless`)."
+function sortpair1(p, v)
+    perm = sortperm(p; dims=1)
+    return p[perm], v[perm]
+end
+function sortpair1(p::Reactant.TracedRArray, v::Reactant.TracedRArray)
+    a, b = Reactant.Ops.sort(p, v; comparator=(x, y, _, _) -> isless(x, y), dimension=1, is_stable=true)
+    return a, b
+end
+
+"""
+Potential βΔC at the sorted points q (N, C, B) from the jumps J at them and the slope s0 just right
+of 0 (0 is one of the points; s0, s0abs, J0abs (1, C, B)): segment slopes from 0 outwards, values
+integrated from c(0) = 0 outwards; returns the extended points and values (N + 2, C, B) for
+`sample_core1`. A segment slope within the round-off of its sum (16 ε × the absolute slopes and
+jumps summed: `s0abs` for s0, `J0abs` for the folded entry at 0) is 0: a flat stretch stays exactly
+flat, as in the dense form.
+"""
+function jump_values1(q, J, s0, β, s0abs=0.0 .* s0, J0abs=0.0 .* s0)
+    N = size(q, 1)
     ε16 = 16 * eps(Float64)
     pos = q .> 0.0
     JR = ifelse.(pos, J, 0.0)
     JL = ifelse.(pos, 0.0, J)
-    cR = cumsum(JR; dims=3)                               # Σ_{i ≤ k, q_i > 0} J_i (from 0 outwards)
-    sL = rcumsum(JL)                                      # Σ_{i ≥ k, q_i ≤ 0} J_i (from 0 outwards)
-    aR = cumsum(absd.(JR); dims=3)
-    aL = rcumsum(absd.(JL))
-    qa, qb = q[:, :, 1:N-1], q[:, :, 2:N]
+    cR = cumsum1(JR)                                      # Σ_{i ≤ k, q_i > 0} J_i (from 0 outwards)
+    sL = rcumsum1(JL)                                     # Σ_{i ≥ k, q_i ≤ 0} J_i (from 0 outwards)
+    aR = cumsum1(absd.(JR))
+    aL = rcumsum1(absd.(JL))
+    qa, qb = q[1:N-1, :, :], q[2:N, :, :]
     rseg = qa .>= 0.0                                     # segments right of 0 (the others end at ≤ 0)
-    sl = ifelse.(rseg, s0 .+ cR[:, :, 1:N-1], s0 .- sL[:, :, 2:N])
-    tol = ε16 .* (s0abs .+ absd.(s0) .+ ifelse.(rseg, aR[:, :, 1:N-1], aL[:, :, 2:N] .+ J0abs))
+    sl = ifelse.(rseg, s0 .+ cR[1:N-1, :, :], s0 .- sL[2:N, :, :])
+    tol = ε16 .* (s0abs .+ absd.(s0) .+ ifelse.(rseg, aR[1:N-1, :, :], aL[2:N, :, :] .+ J0abs))
     sl = ifelse.(absd.(sl) .<= tol, 0.0, sl)
     w = sl .* (qb .- qa)
-    z = 0.0 .* q[:, :, 1:1]
-    right = cat(z, cumsum(ifelse.(rseg, w, 0.0); dims=3); dims=3)        # Σ_{i < m, q_i ≥ 0} w_i
-    left = cat(rcumsum(ifelse.(qb .<= 0.0, w, 0.0)), z; dims=3)          # Σ_{i ≥ m, q_{i+1} ≤ 0} w_i
+    z = 0.0 .* q[1:1, :, :]
+    right = cat(z, cumsum1(ifelse.(rseg, w, 0.0)); dims=1)          # Σ_{i < m, q_i ≥ 0} w_i
+    left = cat(rcumsum1(ifelse.(qb .<= 0.0, w, 0.0)), z; dims=1)    # Σ_{i ≥ m, q_{i+1} ≤ 0} w_i
     c = ifelse.(pos, right, .-left)
-    gl = s0 .- sL[:, :, 1:1]                              # slope on the left ray (increasing t)
-    gr = s0 .+ cR[:, :, N:N]
+    gl = s0 .- sL[1:1, :, :]                              # slope on the left ray (increasing t)
+    gr = s0 .+ cR[N:N, :, :]
     base = ε16 .* (s0abs .+ absd.(s0))
-    gl = ifelse.(absd.(gl) .<= base .+ ε16 .* (aL[:, :, 1:1] .+ J0abs), 0.0, gl)
-    gr = ifelse.(absd.(gr) .<= base .+ ε16 .* aR[:, :, N:N], 0.0, gr)
-    lo, hi = q[:, :, 1:1], q[:, :, N:N]
+    gl = ifelse.(absd.(gl) .<= base .+ ε16 .* (aL[1:1, :, :] .+ J0abs), 0.0, gl)
+    gr = ifelse.(absd.(gr) .<= base .+ ε16 .* aR[N:N, :, :], 0.0, gr)
+    lo, hi = q[1:1, :, :], q[N:N, :, :]
     plo, phi = lo .- (1.0 .+ absd.(lo)), hi .+ (1.0 .+ absd.(hi))
-    clo = c[:, :, 1:1] .+ gl .* (plo .- lo)
-    chi = c[:, :, N:N] .+ gr .* (phi .- hi)
-    return cat(plo, q, phi; dims=3), β .* cat(clo, c, chi; dims=3)
+    clo = c[1:1, :, :] .+ gl .* (plo .- lo)
+    chi = c[N:N, :, :] .+ gr .* (phi .- hi)
+    return cat(plo, q, phi; dims=1), β .* cat(clo, c, chi; dims=1)
 end
 
 """
-The sorted global points and jumps, compacted: every entry at exactly 0 is folded into one entry
-(0, Σ its jumps), the others sorted; with a cap Nc > 0 only the first Nc entries are kept; the
-folded ones are moved onto the largest point (zero-length segments). Returns (q, J, count, J0abs):
-the count of real candidates (entries ≠ 0, and real candidates at 0; line-invariant; count ≥ Nc
-means the kept entries may miss points: guard) and Σ |jumps| folded at 0 (round-off scale).
+The sorted global points and jumps (N, C, B), compacted: every entry at exactly 0 is folded into one
+entry (0, Σ its jumps), the others sorted; with a cap Nc > 0 only the first Nc entries are kept; the
+folded ones are moved onto the largest point (zero-length segments). Returns (q, J, count, J0abs),
+count and J0abs (1, C, B): the count of real candidates (entries ≠ 0, and real candidates at 0;
+line-invariant; count ≥ Nc means the kept entries may miss points: guard) and Σ |jumps| folded at 0
+(round-off scale). `pts`, `jmp`: vectors of (C, B, m) pieces; nz0 (C, B, 1).
 """
-function jump_points(pts, jmp, nz0, cap::Int)
-    qa, Ja = cat(pts...; dims=3), cat(jmp...; dims=3)
+function jump_points1(pts, jmp, nz0, cap::Int)
+    qa, Ja = cat((efirst(x) for x in pts)...; dims=1), cat((efirst(x) for x in jmp)...; dims=1)
     z = qa .== 0.0
-    cnt = rs(sum(ifelse.(z, 0.0, 1.0); dims=3), size(qa, 1), size(qa, 2), 1) .+ nz0
-    J0 = sum(ifelse.(z, Ja, 0.0); dims=3)
-    J0abs = sum(ifelse.(z, absd.(Ja), 0.0); dims=3)
-    q, J = sortpair(cat(0.0 .* J0, ifelse.(z, Inf, qa); dims=3), cat(J0, ifelse.(z, 0.0, Ja); dims=3))
-    (cap <= 0 || cap >= size(q, 3)) || ((q, J) = (q[:, :, 1:cap], J[:, :, 1:cap]))
+    cnt = sum(ifelse.(z, 0.0, 1.0); dims=1) .+ eone(nz0)
+    J0 = sum(ifelse.(z, Ja, 0.0); dims=1)
+    J0abs = sum(ifelse.(z, absd.(Ja), 0.0); dims=1)
+    q, J = sortpair1(cat(0.0 .* J0, ifelse.(z, Inf, qa); dims=1), cat(J0, ifelse.(z, 0.0, Ja); dims=1))
+    (cap <= 0 || cap >= size(q, 1)) || ((q, J) = (q[1:cap, :, :], J[1:cap, :, :]))
     fin = isfinite.(q)
-    qmax = maximum(ifelse.(fin, q, -Inf); dims=3)          # ≥ 0: the zero entry is finite
+    qmax = maximum(ifelse.(fin, q, -Inf); dims=1)          # ≥ 0: the zero entry is finite
     return ifelse.(fin, q, qmax), ifelse.(fin, J, 0.0), cnt, J0abs
+end
+
+"""
+Inverse-CDF draw from the potential βΔC given at the sorted extended points pe (n, C, B), values c
+(linear between the points and on the two end segments, which stand for the rays); u1, u2 (1, C, B).
+The same arithmetic as `sample_core` (entry axis first). Returns t (1, C, B).
+"""
+function sample_core1(k::Consts, pe, c, u1, u2)
+    n = size(pe, 1)
+    ca, cb = c[1:n-1, :, :], c[2:n, :, :]
+    pa, pb = pe[1:n-1, :, :], pe[2:n, :, :]
+    L = pb .- pa
+    Ls = ifelse.(L .> 0.0, L, 1.0)
+    g = (cb .- ca) ./ Ls
+    seg = reshape(collect(1:n-1), n - 1, 1, 1)
+    isl, isr = seg .== 1, seg .== n - 1
+    gl = -g[1:1, :, :]
+    gr = g[n-1:n-1, :, :]
+    risel = c[1:1, :, :] .- c[2:2, :, :]
+    riser = c[n:n, :, :] .- c[n-1:n-1, :, :]
+    tol(a, b) = 1e-12 .* (absd.(a) .+ absd.(b))
+    improper = (risel .<= tol(c[1:1, :, :], c[2:2, :, :])) .| (riser .<= tol(c[n:n, :, :], c[n-1:n-1, :, :])) .|
+               (gl .<= 0.0) .| (gr .<= 0.0)
+    lmf = ifelse.(L .> 0.0, .-min.(ca, cb) .+ logseg_d.(L, absd.(cb .- ca)), -Inf)
+    lml = .-cb .- log.(ifelse.(gl .> 0.0, gl, 1.0))
+    lmr = .-ca .- log.(ifelse.(gr .> 0.0, gr, 1.0))
+    lm = ifelse.(isl, lml, ifelse.(isr, lmr, lmf))
+    lmx = maximum(lm; dims=1)
+    w = exp.(lm .- lmx)
+    cum = cumsum1(w)
+    tgt = u1 .* cum[n-1:n-1, :, :]
+    j = sum(ifelse.(cum .< tgt, 1.0, 0.0); dims=1) .+ 1.0
+    j = min.(j, Float64(n - 1))
+    sel = seg .== j
+    pick(X) = sum(ifelse.(sel, X, 0.0); dims=1)
+    jl, jr = pick(ifelse.(isl, 1.0, 0.0)) .> 0.0, pick(ifelse.(isr, 1.0, 0.0)) .> 0.0
+    ja, jb, jL, jg = pick(pa), pick(pb), pick(ifelse.(L .> 0.0, L, 0.0)), pick(ifelse.(L .> 0.0, g, 0.0))
+    e = -log1p.(-u2)
+    tl = jb .- e ./ ifelse.(gl .> 0.0, gl, 1.0)
+    tr = ja .+ e ./ ifelse.(gr .> 0.0, gr, 1.0)
+    tf = ifelse.((jg .< 0.0) .& (absd.(jg .* jL) .>= 1e-10), jb .+ trexp_end.(u2, jg, jL, k.cpumap), ja .+ trexp_d.(u2, jg, jL, k.cpumap))
+    t = ifelse.(jl, tl, ifelse.(jr, tr, tf))
+    return ifelse.(improper .| .!isfinite.(t), 0.0, t)
+end
+
+"`jump_values1` on (C, B, N) arrays (diagnostics and tests)."
+function jump_values(q, J, s0, β, s0abs=0.0 .* s0, J0abs=0.0 .* s0)
+    pe, c = jump_values1(efirst(q), efirst(J), eone(s0), β, eone(s0abs), eone(J0abs))
+    return permutedims(pe, (2, 3, 1)), permutedims(c, (2, 3, 1))
+end
+"`jump_points1` with (C, B, N) results (diagnostics and tests)."
+function jump_points(pts, jmp, nz0, cap::Int)
+    q, J, cnt, J0abs = jump_points1(pts, jmp, nz0, cap)
+    return permutedims(q, (2, 3, 1)), permutedims(J, (2, 3, 1)), elast(cnt), elast(J0abs)
 end
 
 """
@@ -345,10 +557,10 @@ guard keeps the kernel π-invariant).
 """
 function sample_jump(tb::TermBatch, k::Consts, u1, u2; K::Val=Val(4), cap::Int=0)
     pts, jmp, s0, over, nz0, s0abs = jump_parts(tb, k; K=K)
-    q, J, cnt, J0abs = jump_points(pts, jmp, nz0, cap)
-    cap > 0 && (over = over .| (cnt .> cap - 1))
-    pe, c = jump_values(q, J, s0, k.β, s0abs, J0abs)
-    t = sample_core(k, pe, c, u1, u2)
+    q, J, cnt, J0abs = jump_points1(pts, jmp, nz0, cap)
+    cap > 0 && (over = over .| (elast(cnt) .> cap - 1))
+    pe, c = jump_values1(q, J, eone(s0), k.β, eone(s0abs), J0abs)
+    t = elast(sample_core1(k, pe, c, eone(u1), eone(u2)))
     return ifelse.(over, 0.0, t), over
 end
 

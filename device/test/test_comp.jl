@@ -44,6 +44,15 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
     ci = cells ? D.cell_info(P, LM, ix) : nothing
     fams == :cells && (fams = D.cell_families(ci))
     fams = Tuple(f for f in fams if !(string(f) in split(get(ENV, "SKIP", ""), ",")))   # SKIP=cellpairu1: leave out
+    # dense angle directions (tdir families): random node directions per chain, a third binding-line
+    # normals of random lines (the CPU reference compensates the same g, `cpu_move`)
+    D.TDIR_CHAINS[] = C
+    D.TDIR_SOURCE[] = (fam, τ, rng, c) -> begin
+        sys = E.sys
+        rand(rng) < 0.3 && return D.tline_dir(sys, LM, rand(rng, eachindex(sys.line_s)))
+        d = randn(rng, sys.N); d .-= sum(d) / sys.N
+        D.tdir_g(sys, d)
+    end
     pl = D.plan(M, S, β; families=fams, cpumap=true, cls=cls, bmax=Dict(f => NSITE for f in fams), cells=ci)
     qof = Dict(ix.gidx[q] => q for q in eachindex(ix.gidx))
     for n in eachindex(AM.runits), (j, (f, i)) in enumerate(AM.runits[n])
@@ -59,9 +68,9 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
         B, R = size(tabs[f].on)
         x = reshape(weyl(C * B * 3 * R, off[]), C, B, 3, R); off[] += length(x); x
     end for f in pl.fams))
-    learnof(f, c) = (f in (:tsocL, :tpotL) || startswith(string(f), "sblkL")) ? (AM=AM, FF=FFs[c]) : nothing
+    learnof(f, c) = (f in (:tsocL, :tpotL, :tdirL) || startswith(string(f), "sblkL")) ? (AM=AM, FF=FFs[c]) : nothing
     cpumove(c, LC, f, site) = (jac = NTuple{5,Float64}[];
-                              bm = cpu_move(P, LM, LC, ix, f, site; jac=jac, learn=learnof(f, c)); (bm, jac))
+                              bm = cpu_move(P, LM, LC, ix, f, site; jac=jac, learn=learnof(f, c), chain=c); (bm, jac))
     ok_conf = all(D.check_conflicts(f, D.host_table(f, pl.tp, pl.sched[f]))[1] for f in pl.fams)
     # exactness of the dense form with kinked and LINEAR entries: ≤ 2 sign changes per secondary quantity
     maxroots = Dict(f => maximum(maximum(D.root_count(D.build(Val(f), st0, pl.cp, pl.sp, tabs[f], r, pl.k)[1], pl.k))
@@ -129,6 +138,12 @@ if get(ENV, "CASE", "ABC") in ("D", "ABC")
 end
 if get(ENV, "CASE", "ABC") in ("E", "ABC")
     comp_case("E (no losses; storage blocks, T2)"; tracking_model=false, fams=(:sblk2, :sblk4))
+end
+if get(ENV, "CASE", "ABC") in ("F",)
+    comp_case("F (no losses; dense angle directions, T2 and none)"; tracking_model=false, fams=(:tdir, :tdir0))
+end
+if get(ENV, "CASE", "ABC") in ("G",)
+    comp_case("G (all terms; dense angle directions, LINEAR and none)"; tracking_model=true, fams=(:tdirL, :tdir0))
 end
 if get(ENV, "CASE", "ABC") in ("C", "ABC")
     # cell templates: every partition level, one round per level (cell_power = 1) and time class

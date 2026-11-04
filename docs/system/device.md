@@ -42,15 +42,20 @@ terms, line terms with hinge knots, SoC terms, balance slots). A compensation si
 requirement change by one rule: none, unit, linear (learned coefficients) or share-preserving
 (kinked arguments $x_0 + at + a_k\varphi_k(t)$ plus the Jacobian step).
 
-**Term axis.** The builders list a site's terms; the `TermBatch` constructor stacks every field
-of a term type into one $(C, B, 1, n)$ array (`stack_terms`). Evaluation then works on
-$(C, B, K, n)$ for $K$ points and reduces over $n$, so the compiled program does not grow with
-the term count.
+**Term axis.** Every field of a term type is one $(C, B, 1, n)$ array. The compensated, block,
+cell and dense angle families build them directly (`device/src/stack.jl`): one gather of a
+$(B, n)$ index table per field (`G4`, `S4`), and one scatter-add per state array in the commit
+(`scadd4`). The plain families list their few terms and the `TermBatch` constructor stacks them
+(`stack_terms`). Evaluation then works on $(C, B, K, n)$ for $K$ points and reduces over $n$, so
+neither the trace nor the compiled program grows with the term count.
 
 Static per-column metadata is recorded at trace time:
 * the balance slot of every injection;
 * the kink id of every kinked argument;
-* whether an argument moves: a slope that is the literal `0.0` of the builder is static.
+* whether an argument moves: a slope that is the literal `0.0` of the builder (or `nothing` in a
+  stacked builder) is static;
+* which unit columns can hold a unit with fleet commitment (`UC_COLS`, from the schedule): the
+  commitment terms of the other columns are identically zero and are left out.
 
 The balance slots sum their columns with a static padded column table (an appended zero column,
 one gather and one sum; no 0/1 matmul, so a padded term cannot turn an infinity into NaN).
@@ -87,15 +92,31 @@ own points:
    own points), sorted;
 2. per column: the cost change at these points (and one beyond each end), the slope of every
    local segment, the slope jump at every point and the slope just right of 0;
-3. per balance slot: the points of every column injecting into it and 0, the residual there, its
-   roots, then the balance cost and its jumps in the same way;
+3. per balance slot: the points of every column injecting into it and 0, and the residual $r$
+   there (one evaluation). $r$ is linear between them, so the balance cost
+   $\Delta t\,(c_{shed} r_+ + c_{dump} r_-)$ bends only at those points and where $r$ crosses 0.
+   At a column's point $p$ its jump is $\Delta t\,w(r(p))$ × that column's injection jump,
+   $w = c_{shed}$ for $r \ge 0$ and $-c_{dump}$ below: it is added to the column's own entry. The
+   crossings are found on the slot's points sorted with $r$ as payload (a change of the side
+   $r \ge 0$ between the ends of a segment, or between a ray's end and infinity) and become
+   entries with the jump $\Delta t\,(w_{after} - w_{before})\,r'$ (`slot_cross`). The same side
+   convention in both makes the jumps add up to the cost's slopes also where $r$ vanishes at a
+   point. Slot points are therefore no entries of their own;
 4. the (point, jump) entries of a site: every entry at exactly 0 is folded into one, the rest
    sorted with the jumps as payload (one stable sort), and only the first `cap` kept
    (`JUMP_CAP`, set by `plan` from the sites of three rounds: 1.25 × the largest count + 8);
 5. the segment slopes from the slope right of 0 outwards, the potential integrated outwards from
    $c(0) = 0$; every partial sum accumulates from 0 outwards, so no value near 0 carries the
    round-off of far, large terms, and a slope within the round-off of its sum is 0 (a flat stretch
-   stays exactly flat). Then the dense form's inverse CDF (`sample_core`).
+   stays exactly flat). Then the dense form's inverse CDF (`sample_core1`).
+
+Steps 4 and 5 work with the entry axis first, $(N, C, B)$ (`jump_points1`, `jump_values1`,
+`sample_core1`): the entry axis is then the fastest in memory, so the payload sort and the scans
+need no transposes. Reactant lowers `cumsum` to a reduce-window over the whole axis ($N^2$ work);
+the scans of traced arrays run in two levels instead (`cumsum1`: blocks of `SCANBLK` = 32, then the
+block totals, joined by a shift, so a prefix of exact zeros stays exactly zero). Point lists of at
+most `SMALLSORT` = 8 entries per column are sorted by a compare-exchange network (`sort3`, min/max
+pairs that fuse into their producers) instead of a sort op.
 
 The cost per site is the sum of the columns' local points plus a sort of the entries.
 
@@ -283,7 +304,7 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | block aggregates (cell–class groups), learned shapes | missing |
 | dense transport modes (`tmode`, `amode`) | missing; low rate, may be dropped |
 | adaptation on the host with table uploads (modes, shapes, response coefficients); learned `kpeak` | missing |
-| weather moves with compensation as a device family | missing |
+| weather moves with compensation as a device family | not planned: the weather moves to a prior-reversible pCN process on the host, the capacities to a Langevin step ([../worklog.md](../worklog.md)); `kop` and the device bias (`bias_dev.jl`, kept as it is until it is retired) are not extended |
 | fused kernels, FP32 intermediates, tiling, multi-GPU, full-Europe memory plan | missing |
 
 **Reactant constraints met so far.** Inside `@trace for`, every captured scalar becomes

@@ -37,9 +37,9 @@ How to add a family, with its tests and its device port: [adding_a_move.md](addi
 | storage plateau and shape | all | `:sblk{L}`, `:sblkL{L}` (one unit; aggregates missing) |
 | `amode`, `amode0`, `amodeL`, `acut`, `acutL`, learned shapes | adaptive | missing |
 | `kscale`, `kpeak` | all, at the complete level | Metropolis forms, renewables included (`kren`); the learned `kpeak` variant missing |
-| `kop` | all, at the complete level, with `kop = true` | missing |
-| fine-level weather moves | all, with `fine_weather > 0` | missing |
-| joint $z_0$ blocks | all, with `fine_weather > 0` and `fine_weather_blocks > 0` | missing |
+| `kop` | all, at the complete level, with `kop = true` | not planned: the capacity moves are replaced by a Langevin step on the sampled scores (its device form comes later; [../../worklog.md](../../worklog.md)) |
+| fine-level weather moves | all, with `fine_weather > 0` | not planned: the weather moves to a prior-reversible pCN process on the host ([../../worklog.md](../../worklog.md)) |
+| joint $z_0$ blocks | all, with `fine_weather > 0` and `fine_weather_blocks > 0` | not planned (as above) |
 | level-0 moves (weather slice and shear, FFBS, capacity slice, carrier scaling) | level-0 warmup chain | not ported (host side) |
 
 The device families `:spair`, `:tsoc(L)`, `:tpot(L)` and the cell templates are scheduled by the

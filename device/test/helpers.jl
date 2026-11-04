@@ -2,12 +2,12 @@
 # `prep_node!`/`finalize!`/`link_soc!` and evaluated as in `local_sweep!` (BlockMove over τ−1, τ).
 
 "CPU move of family `fam` at `site` (device indices) on LocalCost LC; returns the BlockMove (or nothing if masked)."
-function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], learn=nothing)
+function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], learn=nothing, chain=1)
     E = P.E
     T = LM.T
     ws, wa = ML.MoveWS(P), ML.MoveWS(P); wa.follow = false
     fam == :spair0 && (fam = :spair)                          # the same CPU move (spair)
-    τ = fam == :spair ? site[2] : site[end]; τm = mod1(τ - 1, T)      # spair sites are (s, τ, q1, q2)
+    τ = fam == :spair ? site[2] : fam in D.TDIR_FAMILIES ? site[1] : site[end]; τm = mod1(τ - 1, T)   # spair: (s, τ, q1, q2); tdir: (τ, d, g)
     gi(q) = ix.gidx[q]
     sf = string(fam)
     if startswith(sf, "sblk")                                  # storage block (plateau or shape profile)
@@ -19,6 +19,23 @@ function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], 
         bm = ML.BlockMove(wss, 0, Int[], P, LM, LC, Float64[], Float64[])
         shape = p == 1 ? nothing : D.profiles(L)[:, p]
         ML.prep_storage_ms!(bm, P, LM, LC, [(si, i)], b0, L, shape, jac; κmin=κmin, learn=learn) || return nothing
+        return bm
+    end
+    if fam in D.TDIR_FAMILIES                                  # dense angle direction (τ, d, g) of chain `chain`
+        τd, dd, gg = site
+        d, g = dd[chain, :], gg[chain, :]
+        for i in eachindex(d)
+            d[i] != 0.0 && ML.prep_node!(ws, P, LM, E.fθ, i, d[i], τd)
+        end
+        if fam != :tdir0
+            for n in eachindex(g)
+                g[n] != 0.0 && ML.prorata!(ws, jac, P, LM, LC, n, g[n], τd; κmin=κmin, learn=learn)
+            end
+        end
+        ML.finalize!(ws, P, LM, LC, τd)
+        bm = ML.BlockMove([wa, ws], 2, [mod1(τd - 1, T), τd], P, LM, LC, Float64[], Float64[])
+        ML.finalize!(wa, P, LM, LC, mod1(τd - 1, T)); ML.link_soc!(wa, ws, LM)
+        append!(bm.bps, wa.bps); append!(bm.bps, ws.bps)
         return bm
     end
     fam = startswith(sf, "cellpair") ? :cellpair : startswith(sf, "cell") ? :cell : fam     # level buckets
