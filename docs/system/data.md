@@ -50,6 +50,12 @@ h5py). `quantity_names` names the rows.
 | `post/weights`, `post/ess`, `post/Q_weighted` | bias post-correction ($\alpha = 1$) |
 | `post/bias_used`, `post/bias_refit` | $\hat b$ in use and the refitted $\tilde b$ at every production sample (the log weights are their difference) |
 
+**Device runs** (appended by `run_device`): `device_profile/<part>` (seconds per host
+checkpoint of every timed part) and `device_profile/compile_<program>` (compile seconds);
+`run/restarts`, `run/resumed_at_checkpoint` (host checkpoint of the last resume, −1: none);
+replica driver: `replica/M`, `replica/nchains`, `replica/eta_w`, `replica/kappa_s`, and every
+replica is a chain `chains/<c>` (chain-major, the capacity quantities equal within a chain).
+
 **CPU driver only** (`write_run_outputs`, appended to the same file):
 
 | path | content |
@@ -100,7 +106,7 @@ place; leftover temporary files are from killed writers and can be deleted.
 
 ## 5. State snapshots
 
-The file `checkpoint` of the CPU driver ([hpc.md](hpc.md) §7), HDF5, replaced atomically at
+The file `checkpoint` of the CPU and device drivers ([hpc.md](hpc.md) §7), HDF5, replaced atomically at
 every write. Vectors are the coefficient vectors of the state at its level (the layouts of
 [model.md](model.md) §2).
 
@@ -117,6 +123,8 @@ every write. Vectors are the coefficient vectors of the state at its level (the 
 | `chains/<c>/start`, `chains/<c>/Q` | fine phase: start kind and the monitored trace so far (quantity × sweep) |
 | `co2/price_trace` | the CO₂ price trace of the fine warmup so far |
 | `sampler/sigma_scale`, `sampler/gibbs/{wv,wz,wk}` | level-0 phase: carrier-scaling step sizes and slice widths |
+| `device/driver` | device runs: `"mh"` or `"replica"`; `it` counts host checkpoints, `chains/<c>` are the chains (`mh`) or the replicas, chain-major (`replica`) |
+| `device/nchains`, `device/replicas`, `device/since`, `device/step`, `device/eta_w` | replica driver: chains, replicas per chain, steps since each replica's last weather burst, replica steps done, Langevin steps per k field |
 
 **Replica driver** (`write_replica_snapshot`; `read_snapshot` of the chains driver refuses it):
 

@@ -45,7 +45,7 @@ the 256-node network.
 | `out` | `"results/run.h5"` | output file |
 | `cache_dir` | `""` | directory of the weather-model and LP caches; `""`: `<dirname(out)>/cache/`; the environment variable `ESM_CACHE_DIR`, if set and non-empty, overrides it ([hpc.md](hpc.md) §4) |
 | `cache_mirror` | `""` | read-only fallback of the caches: an entry missing in the cache but present here is copied in instead of recomputed; `""`: none; overridden by `ESM_CACHE_MIRROR` |
-| `checkpoint` | `""` | CPU driver: the state snapshot file, written at sweep boundaries and resumed from if it exists at start ([hpc.md](hpc.md) §7, layout in [data.md](data.md) §5); `""`: off |
+| `checkpoint` | `""` | CPU and device drivers: the state snapshot file, written at sweep boundaries and resumed from if it exists at start ([hpc.md](hpc.md) §7, layout in [data.md](data.md) §5); `""`: off |
 | `checkpoint_minutes` | 30.0 | ... a snapshot every this many minutes of wall time (and once after the level-0 warmup) |
 | `stop_file` | `""` | ... if this file exists at a sweep boundary: write a snapshot, remove the file, exit with code 75 |
 | `seed` | 1 | master seed (chains use derived seeds; after the r-th resume, re-seeded from seed and r) |
@@ -208,7 +208,29 @@ fine-weather keys are not used.
 | key | default | meaning |
 |---|---|---|
 | `device_backend` | `"gpu"` | Reactant backend, `"gpu"` or `"cpu"` |
-| `device_sweeps` | 10 | operation sweeps per device call (one capacity pass and one checkpoint after each) |
+| `device_sweeps` | 10 | `mh`: operation sweeps per device call (one capacity pass and one host checkpoint after each); `replica`: replica steps per host checkpoint |
+| `device_sampler` | `"mh"` | capacity sampler of the device driver: `"mh"` (Metropolis capacity pass with the bias, [device.md](device.md) §5.1) or `"replica"` (replica–Langevin sampler, §5.2) |
+| `device_replica` | `{}` | settings of the replica sampler, a TOML table `[device_replica]` with the keys below |
+
+`[device_replica]` (`ESMDevice.ReplicaCtl`; [../replica_sampler.md](../replica_sampler.md)):
+
+| key | default | meaning |
+|---|---|---|
+| `M` | 4 | weather replicas per chain (the batch is `nchains` × M) |
+| `eta_w` | 5e-4 | Langevin step in w = log(k + κ_s): one value or one per k field |
+| `kappa_s` | per carrier | offsets κ_s (MW): onwind 500, solar 1000, offwind 200, gas 300, battery 100, H₂ 100, else 300; one value or one per k field |
+| `clip` | 0.02 | drift clip per step in w |
+| `box` | `true` | reflect at the upper bound of the capacity box |
+| `kappa_min` | 1.0 | reflection at k = κ_min; compensators need \|A k\| ≥ κ_min |
+| `inner` | 1 | operation sweeps per replica and step (the scores averaged over them) |
+| `burst_every` | 40 | a pCN step of angle `phi` per replica every this many steps, staggered (0: continuous pCN of angle `theta` every step) |
+| `phi`, `theta` | 0.3, 0.0 | burst angle; continuous angle |
+| `gate` | 25 | steps after a burst in which a replica's scores get weight 0 |
+| `burst_regime`, `reg_window` | 0.5, 30 | probability of a regime window move with a burst; its length (level-0 steps) |
+| `nreg` | 0 | continuous mode: a regime window move every this many steps (0: never) |
+| `comp` | `true` | compensated initialisation of the dispatch after a weather step |
+| `lambda`, `phi_mean`, `phi_sd` | 0, 0, 1 | stress tilt exp(λΦ) of the replica weights, Φ the annual mean residual load at the set-up capacities (GW), standardised by `phi_mean`, `phi_sd` |
+| `init_sweeps` | 40 | operation sweeps at fixed capacities after the fresh weather draws of a new run |
 | `kmove_nprop` | 2 | Metropolis proposals per unit and capacity pass |
 | `kmove_sigma` | 0.3 | scaling-move proposal scale (log capacity) |
 | `kpeak_sigma` | 0.05 | peak-set proposal scale, fraction of the unit's start capacity (at least 100 MW) |

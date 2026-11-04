@@ -256,6 +256,15 @@ chains, 50–100 times the throughput of 4 CPU threads; full Europe (about 4 000
 hourly with localized moves, 10–20 s per sweep (2–5 s fused) against about 30 min on 4
 threads, at most 8–12 chains per 80 GB.
 
+**Replica step on the laptop GPU** (2026-11-04, `run_device` with `device_sampler = "replica"`,
+`configs/device40_replica.toml`: 40 nodes daily, 4 chains × 4 replicas, C = 16, FP64, operation
+families reduced to `:gen0` for the measurement): per step, the score accumulation 10 ms, the
+Langevin step with the dispatch following 38 ms, the weather upload with the compensation 54 ms
+(on the steps with a burst; host weather process 0.11 s per step); compile 66 s (score), 62 s
+(Langevin), 15 s (weather upload). The capacity side is therefore small against a sweep of the
+run set (§7 above); the host weather process is the largest part beside the sweeps. The H100
+numbers are campaign H5.
+
 **First H100 measurement** (campaign H0, PIK cluster, job 2902915, 2026-11-04; `profile_families.jl`
 with `FAMILIES=fast`, `configs/device40_6h_gpu.toml`: 40 nodes × 6 h, $T$ = 1460, 4 chains, FP64,
 the code of the term-axis/slope-jump version as on the laptop): the seven fast families together
