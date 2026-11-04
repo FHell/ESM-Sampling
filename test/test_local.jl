@@ -167,6 +167,47 @@ if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
                 ks = maximum(abs(Femp2(x) - Fq2(x)) for x in quantile(ts, 0.01:0.01:0.99))
                 @test ks < 0.015
             end
+            if ℓ == 1
+                # the walk's points of lines with storage terms: the potential is linear between
+                # consecutive points (a storage injection kinks at the roots of its own secondaries,
+                # which bend the cell balances inside a primary segment; walk! splits there)
+                worst = 0.0
+                nlines = 0
+                jacs = NTuple{5,Float64}[]
+                for trial in 1:240
+                    τ = rand(rng, 2:LM.T); τm = τ - 1
+                    ML.clear!(ws); ML.clear!(wa)
+                    kind = trial % 3
+                    if kind == 0
+                        ML.prep_spair!(rng, wa, ws, P, LM, LC, τm, τ) || continue
+                    elseif kind == 1
+                        empty!(jacs)
+                        ML.prep_tsoc!(rng, wa, ws, P, LM, LC, τm, τ, jacs) || continue
+                    else
+                        nd = rand(rng, [n for n in 1:P.E.sys.N if !isempty(LM.nodestor[n])])
+                        si, i = rand(rng, LM.nodestor[nd])
+                        ML.prep_node!(ws, P, LM, P.E.stors[si].fe, i, 1.0, τ)
+                        us = [x for x in LM.units[nd] if LM.complete[x[1]] && x[1] != P.E.stors[si].fe]
+                        isempty(us) || (u = rand(rng, us); ML.prep_node!(ws, P, LM, u[1], u[2], randn(rng), τ))
+                    end
+                    ML.finalize!(ws, P, LM, LC, τ)
+                    isempty(ws.ent) && continue
+                    ML.finalize!(wa, P, LM, LC, τm); ML.link_soc!(wa, ws, LM)
+                    bm = ML.BlockMove([wa, ws], 2, [τm, τ], P, LM, LC, Float64[], Float64[])
+                    append!(bm.bps, wa.bps); append!(bm.bps, ws.bps)
+                    ML.sample_line!(rng, bm, P.βv, ws.secprev)
+                    lb = ML.linebuf(bm)
+                    pts, cs = copy(lb.pts), copy(lb.cs)
+                    for j in 1:length(pts)-1
+                        pts[j+1] > pts[j] || continue
+                        cm = P.βv * ML.mv_eval!(bm, 0.5 * (pts[j] + pts[j+1]))
+                        worst = max(worst, abs(cm - 0.5 * (cs[j] + cs[j+1])))
+                    end
+                    nlines += 1
+                end
+                @test nlines > 100
+                @test worst < 1e-6                       # nats (before the split: up to 2.6e2)
+            end
             # investment scaling moves keep the caches consistent (complete level only)
             if ℓ == 1 && all(ML.iscomplete(P.lk[2], P.E.kspecs, f) for f in eachindex(P.E.kspecs))
                 LC = ML.LocalCost(P, LM, s)

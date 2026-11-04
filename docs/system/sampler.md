@@ -73,11 +73,16 @@ move and a network-wide cell move, whose natural scales differ by orders of magn
   of the loss and overload interpolants, and $f = 0$ with losses), the kink $t^\ast=-Q/g$ of
   every share-preserving compensation together with the clamp points on both sides of it,
   and the data-map kinks of moved weather values.
-- **Secondary breakpoints** are the zeros of quantities that are linear between consecutive
-  primary breakpoints: the balance residuals of the touched nodes (cell sums at coarse
-  levels), the storage dynamics quantities (the charge/discharge switch $d = 0$ and the power
-  limits), and the unit-commitment wall arguments. They are found exactly by linear
-  interpolation between consecutive evaluation points.
+- **Secondary breakpoints** are the zeros of the secondary quantities: the storage dynamics
+  quantities (the charge/discharge switch $d = 0$ and the power limits) and the
+  unit-commitment wall arguments, which are linear between consecutive primary breakpoints, and
+  the balance residuals of the touched nodes (cell sums at coarse levels), which are linear
+  only between consecutive kinks of the storage injections: a storage term's injection kinks
+  at the zeros of its own dynamics quantities and bends the residual it feeds inside a primary
+  segment. Within a primary segment the walk therefore first places the zeros of the storage
+  quantities (exact by linear interpolation), then interpolates the zeros of the residuals on
+  the pieces between them, where every secondary quantity is linear (`walk!`,
+  `storage_mask!`, `piece_roots!`).
 
 ### 3.3 The walk
 
@@ -96,8 +101,10 @@ truncated Gaussian (`sample_segments_gauss`, exact `trnorm`).
 a share-preserving compensation follows is itself piecewise linear in $t$, so the kinks are
 not known in advance and a kink of one secondary quantity bends others. For these moves the
 walk proceeds event by event: at the current point a probe step gives the one-sided slopes
-of all secondary quantities, which are extrapolated exactly up to the earliest root; that
-root is evaluated and becomes the new current point (`walk!`, the `nonlin` branch).
+of all secondary quantities, which are extrapolated up to the earliest root; the root is
+corrected by the secant through the current point and the extrapolated one (the probe slope
+carries the round-off of a difference over a step of $10^{-7}$ of the segment), evaluated, and
+becomes the new current point (`walk!`, the `nonlin` branch).
 
 ### 3.4 The Jacobian step
 

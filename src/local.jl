@@ -422,8 +422,15 @@ struct LineBuf
     cs::Vector{Float64}
     lm::Vector{Float64}
     sec0::Vector{Float64}
+    # storage-term secondaries of the walk (split of a primary segment at their roots)
+    gmask::Vector{Bool}
+    groots::Vector{Float64}
+    sroots::Vector{Float64}
+    secB::Vector{Float64}
+    secE::Vector{Float64}
 end
-LineBuf() = LineBuf(Float64[], Float64[], Float64[], Float64[], Float64[], Float64[], Float64[], Float64[], Float64[], Float64[], Float64[])
+LineBuf() = LineBuf(Float64[], Float64[], Float64[], Float64[], Float64[], Float64[], Float64[], Float64[], Float64[], Float64[], Float64[],
+                    Bool[], Float64[], Float64[], Float64[], Float64[])
 
 mutable struct MoveWS
     dy::Vector{Vector{Float64}}
@@ -1207,6 +1214,50 @@ mv_sec(m::BlockMove) = m.sec
 mv_bps(m::BlockMove) = m.bps
 
 """
+Mask of the storage-term secondaries (charge/discharge switch and power limits, three per
+storage term, pushed first by `eval_move!` and `eval_cached!`) in the secondary vector of a move
+without requirement-tracking kinks; the steps of a block move in its evaluation order.
+"""
+function storage_mask!(mask::Vector{Bool}, mv)
+    empty!(mask)
+    wss = mv_wss(mv)
+    for q in (mv isa BlockMove ? (length(wss):-1:1) : (1:length(wss)))
+        ws = wss[q]
+        ns = 3 * length(ws.stu)
+        for j in eachindex(ws.sec)
+            push!(mask, j <= ns)
+        end
+    end
+    return mask
+end
+
+"""
+Points at the sign changes of the secondaries other than the storage ones (`gmask` false) on a
+piece (a, b) of a primary segment between storage roots, where they are linear: interpolated
+from their values `A` at a and `B` at b, evaluated and appended in walking order. Returns the
+running minimum.
+"""
+function piece_roots!(pts, cs, mv, β, qf, cmin, sroots, A, B, a, b, gmask, sgn)
+    empty!(sroots)
+    @inbounds for j in eachindex(B)
+        gmask[j] && continue
+        u, v = A[j], B[j]
+        if (u < 0) != (v < 0) && u != v
+            x = a + (b - a) * u / (u - v)
+            (sgn * (x - a) > 0 && sgn * (b - x) > 0) && push!(sroots, x)
+        end
+    end
+    isempty(sroots) && return cmin
+    insort!(sroots, sgn)
+    for x in sroots
+        cx = β * mv_evalc!(mv, x)
+        push!(pts, x); push!(cs, cx)
+        cmin = min(cmin, cx + qf(x))
+    end
+    return cmin
+end
+
+"""
 Walk from t = 0 in direction `sgn` over the sorted primary breakpoints `bp`,
 appending (t, βΔC) points including the secondary sign changes, until the
 potential (plus the optional quadratic `quad` = (κ, b): κt²/2 + bt, the Gaussian
@@ -1214,7 +1265,7 @@ prior of weather moves) exceeds its running minimum by `maxnats`. Returns false
 if no such point is found (improper line).
 """
 function walk!(pts, cs, mv, β, bp, sgn, maxnats, secprev::Vector{Float64}, roots::Vector{Float64}=Float64[];
-               heap::Bool=false, sec0=nothing, quad=(0.0, 0.0))
+               heap::Bool=false, sec0=nothing, quad=(0.0, 0.0), lb::Union{Nothing,LineBuf}=nothing)
     qκ, qb = quad
     qf(x) = 0.5 * qκ * x^2 + qb * x
     tp = 0.0
@@ -1225,6 +1276,17 @@ function walk!(pts, cs, mv, β, bp, sgn, maxnats, secprev::Vector{Float64}, root
     resize!(secprev, length(sec0)); copyto!(secprev, sec0)
     nonlin = any(ws -> ws.anydyn, mv_wss(mv))       # requirement-tracking kinks
     secT, secA = nonlin ? (Float64[], Float64[]) : (secprev, secprev)
+    # A storage term's injection kinks at the roots of its own secondaries (charge/discharge
+    # switch, power limits), which are not primary breakpoints, and bends the cell balances it
+    # feeds inside a primary segment. Those storage quantities are linear between primaries, so
+    # their interpolated roots are exact; the segment is split there, and the roots of the other
+    # secondaries are interpolated on the pieces, where every secondary is linear.
+    stor = !nonlin && any(ws -> !isempty(ws.stu), mv_wss(mv))
+    if stor
+        L = lb === nothing ? LineBuf() : lb
+        gmask, groots, sroots, secB, secE = storage_mask!(L.gmask, mv), L.groots, L.sroots, L.secB, L.secE
+        length(gmask) == length(sec0) || error("walk!: storage mask does not match the secondary quantities")
+    end
     cmin = 0.0
     idx = 1
     nh = length(bp)                          # heap mode: breakpoints still in the heap
@@ -1257,22 +1319,43 @@ function walk!(pts, cs, mv, β, bp, sgn, maxnats, secprev::Vector{Float64}, root
         c = β * mv_evalc!(mv, t)
         sec = mv_sec(mv)
         if !nonlin
-            # secondary sign changes between tp and t (all secondary quantities are linear there)
+            # secondary sign changes between tp and t (linear there, apart from the cell balances
+            # bent by a storage kink inside the segment: split at the storage roots below)
             empty!(roots)
+            stor && empty!(groots)
             @inbounds for j in eachindex(sec)
                 a, b = secprev[j], sec[j]
                 if (a < 0) != (b < 0) && a != b
                     x = tp + (t - tp) * a / (a - b)
-                    (sgn * (x - tp) > 0 && sgn * (t - x) > 0) && push!(roots, x)
+                    if sgn * (x - tp) > 0 && sgn * (t - x) > 0
+                        (stor && gmask[j]) ? push!(groots, x) : push!(roots, x)
+                    end
                 end
             end
-            copyto!(secprev, sec)          # sec at t (before evaluating the roots)
-            if !isempty(roots)
-                insort!(roots, sgn)                                   # in walking order (few roots: insertion sort)
-                for x in roots
+            if stor && !isempty(groots)
+                copyto!(resize!(secE, length(sec)), sec)          # sec at t
+                insort!(groots, sgn)
+                a0 = tp                                          # secprev: the values at a0
+                for x in groots
                     cx = β * mv_evalc!(mv, x)
+                    copyto!(resize!(secB, length(secE)), mv_sec(mv))
+                    cmin = piece_roots!(pts, cs, mv, β, qf, cmin, sroots, secprev, secB, a0, x, gmask, sgn)
                     push!(pts, x); push!(cs, cx)
                     cmin = min(cmin, cx + qf(x))
+                    copyto!(secprev, secB)
+                    a0 = x
+                end
+                cmin = piece_roots!(pts, cs, mv, β, qf, cmin, sroots, secprev, secE, a0, t, gmask, sgn)
+                copyto!(secprev, secE)
+            else
+                copyto!(secprev, sec)          # sec at t (before evaluating the roots)
+                if !isempty(roots)
+                    insort!(roots, sgn)                               # in walking order (few roots: insertion sort)
+                    for x in roots
+                        cx = β * mv_evalc!(mv, x)
+                        push!(pts, x); push!(cs, cx)
+                        cmin = min(cmin, cx + qf(x))
+                    end
                 end
             end
         else
@@ -1287,10 +1370,11 @@ function walk!(pts, cs, mv, β, bp, sgn, maxnats, secprev::Vector{Float64}, root
             while nev < 50 * (length(secT) + 2)
                 h = 1e-7 * abs(t - cur)
                 h > 0 || break
-                mv_eval!(mv, cur + sgn * h)
+                mv_evalc!(mv, cur + sgn * h)                   # recorded terms where they apply (bitwise the plain path)
                 sp = mv_sec(mv)
                 length(sp) == length(secA) || break
                 xbest = t
+                jbest = 0
                 for j in eachindex(secA)
                     a = secA[j]
                     d = (sp[j] - a) / h                         # slope along sgn
@@ -1298,12 +1382,23 @@ function walk!(pts, cs, mv, β, bp, sgn, maxnats, secprev::Vector{Float64}, root
                     τx = -a / d
                     if τx > 0 && a != 0.0
                         x = cur + sgn * τx
-                        sgn * (x - cur) > 2h && sgn * (xbest - x) > 0 && (xbest = x)
+                        sgn * (x - cur) > 2h && sgn * (xbest - x) > 0 && (xbest = x; jbest = j)
                     end
                 end
                 xbest == t && break
                 nev += 1
-                cx = β * mv_eval!(mv, xbest)
+                cx = β * mv_evalc!(mv, xbest)
+                # secant correction: the probe slope carries the round-off of a difference over h
+                # (about 1e-3 relative for large balances); the event's quantity is linear from cur
+                # through its own root, so the secant through cur and xbest gives the root exactly
+                Xb = mv_sec(mv)[jbest]
+                if Xb != 0.0 && Xb != secA[jbest]
+                    x2 = cur + (xbest - cur) * secA[jbest] / (secA[jbest] - Xb)
+                    if sgn * (x2 - cur) > 2h && sgn * (t - x2) > 0
+                        xbest = x2
+                        cx = β * mv_evalc!(mv, xbest)
+                    end
+                end
                 push!(pts, xbest); push!(cs, cx)
                 cmin = min(cmin, cx + qf(xbest))
                 copyto!(secA, mv_sec(mv))
@@ -1398,8 +1493,8 @@ function sample_line!(rng, mv, β::Float64, secprev::Vector{Float64}; maxnats=40
     mv_fill!(mv)                           # terms and secondary quantities at t = 0, once for both walks
     sec0 = lb.sec0
     resize!(sec0, length(mv_sec(mv))); copyto!(sec0, mv_sec(mv))
-    walk!(pr, cr, mv, β, right, 1.0, maxnats, secprev, lb.roots; heap=hr, sec0=sec0, quad=quad) || return 0.0
-    walk!(pl, cl, mv, β, left, -1.0, maxnats, secprev, lb.roots; heap=hl, sec0=sec0, quad=quad) || return 0.0
+    walk!(pr, cr, mv, β, right, 1.0, maxnats, secprev, lb.roots; heap=hr, sec0=sec0, quad=quad, lb=lb) || return 0.0
+    walk!(pl, cl, mv, β, left, -1.0, maxnats, secprev, lb.roots; heap=hl, sec0=sec0, quad=quad, lb=lb) || return 0.0
     # points in increasing order: the left walk reversed, 0, the right walk (each walk is monotone)
     pts, cs = lb.pts, lb.cs
     empty!(pts); empty!(cs)

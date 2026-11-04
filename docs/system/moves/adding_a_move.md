@@ -26,7 +26,11 @@ makes the line draw valid ([../sampler.md](../sampler.md) §5.1):
 A move at step $\tau$ may read and write only steps $\tau-1$ and $\tau$ (parity classes run in
 parallel); longer moves need their own block colouring. Every cost term the move changes must be
 convex and piecewise linear in $t$, with its kinks either known in advance (primary
-breakpoints) or zeros of quantities linear between them (secondary).
+breakpoints) or zeros of secondary quantities ([../sampler.md](../sampler.md) §3.2). A secondary
+quantity must be linear between primary breakpoints, or between the kinks of the quantities it
+depends on, and the walk must place those kinks first (as it does for the balance residuals
+and the storage kinks); `test/test_local.jl` checks that the potential is linear between the
+walk's points.
 
 ## 2. Implement it (CPU, `src/local.jl` or `src/flowmoves.jl`)
 

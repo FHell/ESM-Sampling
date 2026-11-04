@@ -44,7 +44,9 @@ exists. See [docs/README.md](../README.md) for the document index.
 - **Line move.** A move along a one-dimensional curve with $t$ drawn exactly from the target
   restricted to it.
 - **Primary / secondary breakpoints.** Kinks of the piecewise-linear cost along a line known
-  in advance / found as zeros of quantities linear between primary breakpoints.
+  in advance / found as zeros of secondary quantities, which are linear between primary
+  breakpoints and, for the balance residuals, also between the storage kinks
+  ([sampler.md](sampler.md) §3.2).
 - **Share-preserving pro-rata compensation.** Dispatch that follows a requirement change with
   fixed shares and excess, with a kink where the node turns to surplus and a Jacobian.
 - **Requirement tracking.** The variant of that compensation that follows the actual,
