@@ -226,7 +226,10 @@ advice.
   build's cap) and a common weather source for H2 and H2b (e.g. ERA5 on both sides) are decided
   when the H2b comparison is set up.
 
-**PyPSA-Eur's** (`scripts/pypsa_baseline.py`, campaign H2b). PyPSA solves the composed network
+**PyPSA-Eur's** (`scripts/pypsa_baseline.py`, campaign H2b). PyPSA is upstream: our model files
+are imported from PyPSA networks (and, once built, their time series), and the PyPSA reference is
+PyPSA's own implementation solving the network we import from; our model is never exported to
+PyPSA (user, 2026-11-04). PyPSA solves the composed network
 of the build (`resources/esm256/networks/composed_2050.nc`, 2013) with HiGHS, configured to our
 scope (§2.2): lines and DC links at their current ratings, a load-shedding generator at every
 bus at our $c_{\rm shed}$, the build's CO₂ cap (or none, or a price), the time series averaged
