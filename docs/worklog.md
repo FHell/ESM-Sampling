@@ -78,8 +78,9 @@ concrete next steps. Update it at the end of every work session.
   hellmann, project directory coen, Slurm account icone, julia/1.12.2, CUDA 13 → Reactant 13.1, ERA5 at
   /p/projects/climate_data_central/reanalysis/ERA5, clone at /p/projects/coen/esm/ESM-Sampling).
   Model files built on the cluster (`hpc/prepare_data.sh`, `hpc/jobs/data.sbatch`), no manual
-  copy. Next on the cluster: pull, prepare_env.sh, data.sbatch small, H0; then H2 with
-  `scripts/lp_reference.jl` (MGA alternatives still to be scripted).
+  copy. H0 done except the SIGTERM and snapshot-resume tests (a test bug, fixed in f89c77e):
+  rerun as H0b. Next on the cluster: the data jobs (2902883 small, 2902884 pypsa256), H0b, H10;
+  then H2 with `scripts/lp_reference.jl` (MGA alternatives still to be scripted).
 - Device driver checkpoint (after the device agent's work).
 
 **Tests and validation:**
@@ -90,6 +91,11 @@ concrete next steps. Update it at the end of every work session.
   to ~1e-5 nats between walk points on weather moves; `test_moves.jl` reports it as broken);
   an iterated secant made other lines worse. Needs a root placement that is exact where a
   quantity bends at its own root.
+- `test_moves.jl` is order-dependent: the families run in sequence on one shared state, and
+  entries placed before others changed their outcome (with the storage pairs early, `kopC`'s
+  `lo` check missed by 2.1e-12 against an absolute 1e-12, and `wz0`'s sweep accepted no move).
+  The storage pairs now run last; better: a fresh copy of the setup state per family, and
+  relative tolerances.
 - Exactness tests do not detect small invariance violations (missed the `kpeak` width and the
   storage walk bug): longer reference runs (ledger P6).
 - Sweeps to equilibrium against network size and resolution; 256-node ERA5 run (ledger P7, P8).
@@ -99,7 +105,8 @@ concrete next steps. Update it at the end of every work session.
 - `docs/reactant_design.md` mentions archived notes by bare file name in its text.
 - Worktrees to remove when done: `.claude/worktrees/gpu-timing` (GPU timing copy), and the
   locked worktrees of finished agents whose branches are merged (review 72e12c2, storage
-  09790f6; their outputs are copied to `results/review/` and `results/smix/`).
+  09790f6; their outputs are copied to `results/review/` and `results/smix/`; storage pairs
+  a2ce14d, whose raw runs are in its `results/sxmix/`).
 - Julia MCP sessions of agents restart at nice 0 with 16 threads unless every call passes the
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 

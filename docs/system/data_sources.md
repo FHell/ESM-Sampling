@@ -111,11 +111,18 @@ fresh extraction of `composed_2050.nc`. Per bus:
 The calibrated scales are stored in `weather_calibration/<carrier>_scale` and the source in the
 attributes `weather_source` and `weather_base`.
 
-> **Status: missing.** The ERA5 fetch has not completed: the cut-outs hold January to August or
-> September 2013 for the four fields. `model256_era5.h5` is not built, the comparison of ERA5
-> with NASA POWER (capacity factors, load, extremes per node) has not been made, and
-> `configs/full256_era5.toml` has not been run. Faster retrieval (cut-outs made on the cluster)
-> would need access on the cluster side.
+**Scope.** The box covers the 10-country region of the PyPSA-Eur build, and the processing maps
+the cells onto its 256 buses, so ERA5 exists for `model256.h5` only (`model256_era5.h5`); the
+40- and 76-node files keep NASA POWER. Larger networks need a new build and a wider box.
+
+**On the cluster** the cut-outs are made on a compute node from the ERA5 folder in place
+(`hpc/prepare_data.sh era5 [years]`, `hpc/jobs/era5.sbatch`, after the `pypsa256` build;
+[hpc.md](hpc.md) §4, §8.3), with the same `era5_subset.py` and `prepare_era5.py`.
+
+> **Status: missing.** `model256_era5.h5` is not built: locally the fetch over the mount stopped
+> with January to August or September 2013, and the cluster step is scripted but not run yet.
+> The comparison of ERA5 with NASA POWER (capacity factors, load, extremes per node) has not
+> been made, and `configs/full256_era5.toml` has not been run.
 
 ## 5. Provenance of the model files
 

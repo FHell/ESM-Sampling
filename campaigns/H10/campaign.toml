@@ -21,17 +21,18 @@ exactly. About 0.6-1 s per sweep, so 1-1.5 h per task. Outputs per run: summary_
 Equal CPU: compare tau x s/sweep of runs on the same node type; the s/sweep of the summaries
 come from the same partition, so the recorded times can be used directly."""
 inputs = """
-Two files are not in the repository; copy both before submitting (untracked files are allowed
-by hpc/run.sh):
+Two files are not in the repository; copy both from the local machine before submitting
+(untracked files are allowed by hpc/run.sh):
 1. the start states, results/mixing/a1/a1_kop0_chains.jls (6.4 MB, sha256 ab8d9273a6d904ba...),
-   into the campaign code:
+   into the campaign code (after new_campaign.sh):
      mkdir -p /p/projects/coen/esm/campaigns/H10/code/results/mixing/a1
      scp results/mixing/a1/a1_kop0_chains.jls <login>:/p/projects/coen/esm/campaigns/H10/code/results/mixing/a1/
-2. the model file the states belong to: data/processed/model.h5 with sha256 d869e9accb69c1b5...
-   (107 MB, the one of the E15/E21/E27 runs). If the cluster's model.h5 has another hash (run.toml
-   records it as data_sha), copy the local one to /p/projects/coen/esm/data/processed/model_e15.h5
-   and run a copy of configs/chains40.toml with data = "data/processed/model_e15.h5" (the states
-   do not fit another model)."""
+2. the model file the states belong to, data/processed/model.h5 (107 MB, sha256
+   d869e9accb69c1b5...), as model_e15.h5 next to the cluster's own model files (the cluster's
+   model.h5 is another build, sha256 be56a52db413e27e at H0):
+     scp data/processed/model.h5 <login>:/p/projects/coen/esm/data/processed/model_e15.h5
+   The runs read it through campaigns/H10/chains40_e15.toml (configs/chains40.toml with this
+   data file); run.toml records its hash (data_sha), which must be d869e9accb69c1b5."""
 submit = "sbatch --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt"
 collect = "bash hpc/collect.sh H10 'summary*'"
 analysis = """
