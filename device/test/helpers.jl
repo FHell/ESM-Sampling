@@ -19,14 +19,13 @@ function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], 
         return bm
     end
     if startswith(sf, "sblk")                                  # storage block (plateau or shape profile)
-        L = parse(Int, replace(sf, "sblkL" => "", "sblk" => ""))
+        L = parse(Int, replace(sf, "sblkgL" => "", "sblkg" => "", "sblkL" => "", "sblk" => ""))
         s, b0, p = site
-        si, i = ix.sidx[s]
-        κs = LC.kst[si][i] * E.stors[si].hours[i] / LM.Δt
+        us = [ix.sidx[x] for x in (s isa Integer ? [s] : s)]     # one unit, or a cell–class group
         wss = [ML.MoveWS(P) for _ in 1:L+2]
         bm = ML.BlockMove(wss, 0, Int[], P, LM, LC, Float64[], Float64[])
         shape = p == 1 ? nothing : D.profiles(L)[:, p]
-        ML.prep_storage_ms!(bm, P, LM, LC, [(si, i)], b0, L, shape, jac; κmin=κmin, learn=learn) || return nothing
+        ML.prep_storage_ms!(bm, P, LM, LC, us, b0, L, shape, jac; κmin=κmin, learn=learn) || return nothing
         return bm
     end
     if haskey(D.SPARSE_FAMILIES, fam)                         # sparse angle direction (τ, (nodes, d, g, pair))

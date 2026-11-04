@@ -61,6 +61,7 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
     Hθ = ML.haar_theta(E)
     Dm = randn(MersenneTwister(5), E.sys.N, 4); Dm .-= sum(Dm; dims=1) ./ E.sys.N
     D.SPARSE_SOURCE[] = D.sparse_source(P, LM, ix; atoms=() -> Any[(Hθ, ML.localize(Dm, Hθ))])
+    D.BLOCK_GROUPS[] = D.block_groups(P, ix)                   # cell–class groups of the aggregate blocks
     pl = D.plan(M, S, β; families=fams, cpumap=true, cls=cls, bmax=Dict(f => NSITE for f in fams), cells=ci)
     qof = Dict(ix.gidx[q] => q for q in eachindex(ix.gidx))
     for n in eachindex(AM.runits), (j, (f, i)) in enumerate(AM.runits[n])
@@ -76,7 +77,7 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
         B, R = size(tabs[f].on)
         x = reshape(weyl(C * B * 3 * R, off[]), C, B, 3, R); off[] += length(x); x
     end for f in pl.fams))
-    learnof(f, c) = (f in (:tsocL, :tpotL, :tdirL, :tcutL, :tcutLw) || startswith(string(f), "sblkL")) ? (AM=AM, FF=FFs[c]) : nothing
+    learnof(f, c) = (f in (:tsocL, :tpotL, :tdirL, :tcutL, :tcutLw) || startswith(string(f), "sblkL") || startswith(string(f), "sblkgL")) ? (AM=AM, FF=FFs[c]) : nothing
     cpumove(c, LC, f, site) = (jac = NTuple{5,Float64}[];
                               bm = cpu_move(P, LM, LC, ix, f, site; jac=jac, learn=learnof(f, c), chain=c); (bm, jac))
     ok_conf = all(D.check_conflicts(f, D.host_table(f, pl.tp, pl.sched[f]))[1] for f in pl.fams)
@@ -153,6 +154,12 @@ if get(ENV, "CASE", "ABC") in ("F",)
 end
 if get(ENV, "CASE", "ABC") in ("G",)
     comp_case("G (all terms; dense angle directions, LINEAR and none)"; tracking_model=true, fams=(:tdirL, :tdir0))
+end
+if get(ENV, "CASE", "ABC") in ("K",)
+    comp_case("K (no losses; storage blocks and cell–class aggregates, T2)"; tracking_model=false, fams=(:sblk2, :sblkg2, :sblkg4))
+end
+if get(ENV, "CASE", "ABC") in ("L",)
+    comp_case("L (all terms; cell–class aggregates, LINEAR)"; tracking_model=true, fams=(:sblkgL2, :sblkgL8))
 end
 if get(ENV, "CASE", "ABC") in ("J",)
     comp_case("J (all terms; dispatch shapes)"; tracking_model=true, fams=(:dshp2, :dshp8))
