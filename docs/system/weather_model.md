@@ -135,6 +135,7 @@ additive changes to the data file do not invalidate it. The fit uses all years.
 | level-0 warmup chain | $z_0$ coordinate with pro-rata re-dispatch (shear) | coarse weather and dispatch together |
 | fine level (`fine_weather > 0`) | FFBS of $m$ given the anomalies of all levels, innovations recomputed | regimes (centered) |
 | fine level | one innovation $w_\ell$ or one $z_0$ coordinate, exact line draw with the Gaussian prior and share-preserving compensation | weather details or coarse weather, with dispatch following |
+| fine level | $z_0$ shifted along a fixed joint direction over 16, 64 or 365 level-0 steps, the same line draw and compensation | annual and seasonal means of the coarse weather |
 
 Details are in [moves/weather.md](moves/weather.md). At the fine level the regimes are
 almost determined by the anomalies, so the centered regime update rarely changes them.

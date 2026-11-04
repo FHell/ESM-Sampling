@@ -671,3 +671,57 @@ superseded by the smoke test above. The capacity scores now include ∂_k log J
 (§5.4, recommendation 9) is now the incremental `bias_delta_weather` of the bias cache.
 Everything at α = 0 and under the weather prior (§2–§4.3, §5.1–§5.3) does not involve the bias
 and stands.
+
+## 9. Follow-up: joint z0 block moves in `src/` (branch `wblock`)
+
+`src/weather_blocks.jl` implements recommendation 4: `z0_block_sweep!`, called at the end of
+`fine_weather_sweep!` with `fine_weather_blocks` moves per fine step in expectation (default
+1.0, only with `fine_weather > 0`; docs/system/moves/weather.md). Lengths 16, 64 and 365
+level-0 steps with probabilities ∝ 1/B, uniform starts, directions the six leading
+eigenvectors of the regime-averaged long-run covariance of the VAR, built from the weather
+model (`z0_block_directions`; their overlaps with the prior-covariance directions of §5.1 are
+0.94–0.998 and their prior rates within about 10 %). At α = 1 the bias-free exact line draw is
+followed by the Metropolis correction e^{−Δb̂} from the bias cache (`bias_delta_weather` over
+the block's window), like the coordinate moves. `test/test_wblock.jl`: directions orthonormal;
+the VAR quadratic against `logp_z0`; at α = 0 and α = 1 the line density against the global
+log target, Δb̂ against the `bias_term` difference, anomalies against `weather_at_level`, the
+local and bias caches against rebuilds, the reverse move with the opposite line density; the
+sweeps; and 20000 repeated moves of one block against quadrature of its line density with the
+bias correction (KS 0.010, against 0.22 for the bias-free conditional).
+
+**Measurement** (`scripts/mixing/wblock_esjd.jl`): prior-only expected-squared-jump rates per
+move (three prior regime draws) times the cost per move at an equilibrated α = 0 state of the
+40-node daily model (`chains40.toml`, baseline end state): a z0 coordinate move costs 0.18 ms
+(657 per sweep, run in parallel), a block move 24, 108 and 598 ms for B = 16, 64 and 365
+(accepted 0.45, 0.33, 0/4), 59 ms per move in the mixture.
+
+| functional (field-mean row) | coordinate, per CPU s | blocks, per CPU s | gain |
+|---|---|---|---|
+| annual mean, load | 1.1e-4 | 1.4e-2 | 135 |
+| seasonal means, load | 1.1–1.2e-4 | 0.7–1.6e-2 | 58–136 |
+| annual mean, onwind | 1.8e-2 | 3.1e-2 | 1.7 |
+| annual mean, solar | 2.1e-2 | 2.3e-2 | 1.1 |
+| annual mean, offwind | 3.6e-2 | 1.1e-2 | 0.3 |
+
+The blocks are the move for the load means, the bottleneck of §5.1; for wind and solar they
+are about as efficient as the coordinate moves, for offwind less; both run. At the default
+rate the load annual-mean rate per sweep rises from 1.3e-5 (657 coordinate moves) to 8.5e-4,
+i.e. the prior-only bound on its autocorrelation time falls from 1.6e5 to about 2400 sweeps,
+for about 40 ms per sweep (5 % of a fine step at the α = 0 equilibrium; the 20 weather sweeps
+measured took 145 ms without and 188 ms with one block move). At α = 0 the moves are
+cost-confined (median |t| of accepted moves 2.4e-3, 1.0e-3, 4.8e-4 in the direction units), as
+in §5.2. Far from equilibrium (the relaxed heuristic start) a block move is several times more
+expensive (45, 700 and 6200 ms), because the walk crosses many more compensation kinks.
+
+**At 6-hourly resolution** (`scripts/mixing/wblock_cost6h.jl`, `complete40.toml` at α = 0: 40
+nodes × 6 h, adaptive kernel, all model terms; a state after 15 fine steps from the heuristic
+start; 4 threads): a fine step takes 19.9 s, its weather sweep 5.7 s. Block moves cost 0.43 s
+(B = 16, window 80 finest steps), 1.88 s (B = 64, 272 steps) and 35.1 s (B = 365, 1476 steps)
+per move, accepted 2/12, 2/6 and 0/3. With all three lengths the mixture costs 1.88 s per move
+(9.5 % of a fine step), two thirds of it in the rare 365-day moves, each of which makes its fine
+step almost three times longer. The lengths are therefore capped by their window at the finest
+level (`fine_weather_block_steps` = 600 finest steps: all three daily, 16 and 64 at 3 and 6 h,
+16 at 1 h); at 6 h the default then costs 0.72 s per move, 3.6 % of a fine step. Under the
+prior the mixture without B = 365 has about 30 % lower rates per move for the annual load mean
+(5.8e-4 against 8.4e-4), which at the daily costs gives the same rate per CPU second (1.4e-2)
+and at the 6-hourly costs a 1.8 times higher one.
