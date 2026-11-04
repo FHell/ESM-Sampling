@@ -25,6 +25,8 @@ The other files in `docs/` are development notes, not a description of the syste
   gets its section in `docs/system/moves/` and a row in `moves/README.md`; a new config key goes
   into [config.md](docs/system/config.md); a new output into [data.md](docs/system/data.md); a
   removed limitation removes its status note.
+- Keep the work log [docs/worklog.md](docs/worklog.md) current: add what was done (with
+  commits) at the end of a work session, and keep its list of open to-dos up to date.
 - Record every experiment (planned, running, done) in the ledger
   [docs/experiments.md](docs/experiments.md): question, setup, one-line result, where the
   record lives.
