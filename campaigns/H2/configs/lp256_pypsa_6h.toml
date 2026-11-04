@@ -1,0 +1,9 @@
+# Campaign H2 (docs/campaigns.md): our LP at 256 nodes, 6 h steps, on model256_pypsa.h5, the esm256
+# network with its own time series (2013) as the weather (prepare_data.sh pypsa256ts, hpc.md §8.3 D4):
+# the same weather as H2b. Brownfield (existing fleets as floors, fixed thermal fleets), as the PyPSA
+# network; CO2 as the price of the file (150 EUR/t), matched by H2b's pypsa256_co2price.toml.
+data = "data/processed/model256_pypsa.h5"
+out = "results/h2/lp256_pypsa_6h/out.h5"
+levels = [[10, 24], [256, 6]]
+init = "lp"
+brownfield = true

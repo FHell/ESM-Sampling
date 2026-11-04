@@ -92,7 +92,8 @@ On the imported data we solve our LP and run our sampler cold. Our LP optimum is
 PyPSA's objective, capacities per carrier and country, dispatch, and duals against prices.
 Every difference must be explained by an aggregation of the import (one unit per node and
 carrier, fixed energy-to-power ratios, merged vintages); each is switched off on one side
-where possible, so that its size is measured.
+where possible, so that its size is measured. The import with the network's own series is
+`prepare_data.py --network composed_2050.nc --pypsa-series` (`model256_pypsa.h5`, §2.7).
 
 ### 2.3 Low-temperature limit: the sampler's landscape
 
@@ -181,14 +182,49 @@ LP of `solve_lp` (`src/lp.jl`), built by `lp_build` from one operation block per
   ends a capacity objective with `OTHER_ERROR` at such a point: dual residuals after
   postsolve), anything else is recorded as failed.
 
-> **Status: open (maximisation).** On the 5-node test problem every MGA solve ends optimal; on
-> the PyPSA network (H2b smoke, 14 days) too. At 40 nodes daily (2013, ε = 5 %) the
-> minimisation ends optimal (onwind −45 %, 8–9 min), the maximisation is not reliable: in an
-> interactive session onwind max (+50 %) and gas max (+117 %) ended at feasible points exactly on
-> the bound (HiPO `OTHER_ERROR`, 5–7 min each), but in the smoke run of `scripts/lp_baseline.jl`
-> onwind max did not finish in 17 min, and three other maxima together not in 29 min. Unscaled,
-> every maximisation failed. Untried: IPX with crossover, a dual-simplex re-solve warm-started
-> from a crossed-over optimum, tighter capacity boxes.
+> **Status: held.** PyPSA's `optimize_mga` on the network we import from (H2b) is the
+> reference envelope; ours is a secondary check and its campaign lines (`list_mga.txt`) are
+> held. On the 5-node test problem every MGA solve ends optimal. At 40 nodes daily (2013,
+> ε = 5 %) the minimisation ends optimal (onwind −45 %, 8–9 min), the maximisation is not
+> reliable: in an interactive session onwind max (+50 %) and gas max (+117 %) ended at feasible
+> points exactly on the bound (HiPO `OTHER_ERROR`, 5–7 min each), in the smoke run of
+> `scripts/lp_baseline.jl` onwind max did not finish in 17 min. Unscaled, every maximisation
+> failed. Untried: IPX with crossover, a dual-simplex re-solve warm-started from a crossed-over
+> optimum, tighter capacity boxes.
+
+- **Not in the LP:** line losses and soft thermal limits (hard limits; a configuration with
+  them is solved without them and the summary lists them as ignored). The LP follows the
+  sampler's energy model where it can: renewables produce $A\cdot k$ exactly (their excess is
+  nodal dump at $c_{\rm dump}$, not free curtailment), and the storage balance is an equality
+  (stored energy and reservoir inflow are not spilled for free; the sampler's SoC form spills only
+  beyond the power limit). One loophole remains: simultaneous charge and discharge disposes of
+  energy in the round-trip losses (and, with `link_losses`, two-way link flows would do the
+  same), which the sampler cannot; excluding it needs binaries. So the LP objective is a lower
+  bound of the sampler's minimum, and the sampler's cost at the LP solution is the objective
+  plus `cycling_cost_eur` ($c_{\rm dump}$ × the energy lost), an upper bound; at 40 nodes the
+  two differ by about 0.02 % (the test checks the identity to 1e-4). PyPSA curtails and spills
+  for free, so H2b and our LP differ by these prices.
+- **Comparison runs:** until the LP has line losses and soft thermal limits, the sampler runs
+  compared with the LP use `losses = false`, `thermal = "hard"` and `link_losses = false`
+  (user, 2026-11-04). The common weather source of H2 and H2b is the network's own series
+  (`model256_pypsa.h5`, below); the CO₂ treatment is matched by a price on both sides (our LP:
+  150 €/t in the marginal costs; H2b's `pypsa256_co2price.toml`), next to PyPSA's runs with the
+  build's cap.
+
+**PyPSA-Eur's** (`scripts/pypsa_baseline.py`, campaign H2b). PyPSA is upstream: our model files
+are imported from PyPSA networks (and, once built, their time series), and the PyPSA reference is
+PyPSA's own implementation solving the network we import from; our model is never exported to
+PyPSA (user, 2026-11-04). PyPSA solves the composed network
+of the build (`resources/esm256/networks/composed_2050.nc`, 2013) with HiGHS, configured to our
+scope (§2.2): lines and DC links at their current ratings, a load-shedding generator at every
+bus at our $c_{\rm shed}$, the build's CO₂ cap (or none, or a price), the time series averaged
+over blocks of 24, 6, 3 or 1 h (PyPSA-Eur's `average_every_nhours`). MGA is PyPSA's own
+`n.optimize.optimize_mga` (budget on capex + opex including the fixed cost of the existing
+fleet, taken from the statistics of the network's current solution), called for every extreme
+on a copy of the solved optimum, with our HiGHS options and the IPX fallback as its solver
+arguments; carrier groups
+mapped to our k fields (onwind; solar and solar-hsat; the three offwind kinds; CCGT and OCGT
+as gas; the battery discharger and the H₂ fuel cell as the storage powers). PyPSA's budget includes the fixed cost of the existing fleet (`total_cost_eur_per_a`), ours does not (greenfield objective), so an ε of H2b corresponds to about ε · total/objective of H2; both numbers are in `summary_pypsa.toml`. The local smoke (14 daily snapshots) ends every MGA solve optimal (PyPSA's unscaled budget), 13–18 s each.
 
 **MGA with open solvers: what others report.** PyPSA's `optimize_mga` adds the same kind of
 budget, on `n.statistics` capex + opex with the fixed costs on both sides, and recommends
@@ -208,47 +244,33 @@ a multi-objective simplex to avoid the independent re-solves of standard MGA. We
 report of HiGHS-specific MGA failures or fixes (searches of the PyPSA docs and issues, Calliope
 SPORES, HiGHS); the budget-row scaling above is our own fix, in line with the rescaling
 advice.
-- **Not in the LP:** line losses and soft thermal limits (hard limits; a configuration with
-  them is solved without them and the summary lists them as ignored). The LP follows the
-  sampler's energy model where it can: renewables produce $A\cdot k$ exactly (their excess is
-  nodal dump at $c_{\rm dump}$, not free curtailment), and the storage balance is an equality
-  (stored energy and reservoir inflow are not spilled for free; the sampler's SoC form spills only
-  beyond the power limit). One loophole remains: simultaneous charge and discharge disposes of
-  energy in the round-trip losses (and, with `link_losses`, two-way link flows would do the
-  same), which the sampler cannot; excluding it needs binaries. So the LP objective is a lower
-  bound of the sampler's minimum, and the sampler's cost at the LP solution is the objective
-  plus `cycling_cost_eur` ($c_{\rm dump}$ × the energy lost), an upper bound; at 40 nodes the
-  two differ by about 0.02 % (the test checks the identity to 1e-4). PyPSA curtails and spills
-  for free, so H2b and our LP differ by these prices.
-- **Comparison runs:** until the LP has line losses and soft thermal limits, the sampler runs
-  compared with the LP use `losses = false`, `thermal = "hard"` and `link_losses = false`
-  (user, 2026-11-04). The CO₂ treatment (our LP has the price in the marginal costs, PyPSA the
-  build's cap) and a common weather source for H2 and H2b (e.g. ERA5 on both sides) are decided
-  when the H2b comparison is set up.
 
-**PyPSA-Eur's** (`scripts/pypsa_baseline.py`, campaign H2b). PyPSA is upstream: our model files
-are imported from PyPSA networks (and, once built, their time series), and the PyPSA reference is
-PyPSA's own implementation solving the network we import from; our model is never exported to
-PyPSA (user, 2026-11-04). PyPSA solves the composed network
-of the build (`resources/esm256/networks/composed_2050.nc`, 2013) with HiGHS, configured to our
-scope (§2.2): lines and DC links at their current ratings, a load-shedding generator at every
-bus at our $c_{\rm shed}$, the build's CO₂ cap (or none, or a price), the time series averaged
-over blocks of 24, 6, 3 or 1 h (PyPSA-Eur's `average_every_nhours`). MGA as PyPSA's
-`optimize_mga` (budget on capex + opex including the fixed cost of the existing fleet), on one
-model with the budget's right-hand side and the objective changed per solve; carrier groups
-mapped to our k fields (onwind; solar and solar-hsat; the three offwind kinds; CCGT and OCGT
-as gas; the battery discharger and the H₂ fuel cell as the storage powers). PyPSA's budget includes the fixed cost of the existing fleet (`total_cost_eur_per_a`), ours does not (greenfield objective), so an ε of H2b corresponds to about ε · total/objective of H2; both numbers are in `summary_pypsa.toml`. The local smoke (14 daily snapshots) ends every MGA solve optimal with the scaled budget.
+**The same weather on both sides: the time-series import.** `model256_pypsa.h5` carries the
+network's own series as one weather year (2013): per renewable generator row the
+`p_nom_max`-weighted mean `p_max_pu` of the PyPSA generators it merges, per node the sum of its
+loads; nodes, lines, links and unit rows are those of `model256.h5`. The build checks the written
+tensors against the network (max |difference| 3e-8). With it our LP (H2, `lp256_pypsa_*`) and
+PyPSA (H2b) solve the same network on the same weather. A local check at 730 h steps (12
+snapshots, both sides; ours brownfield with the file's CO₂ price of 150 €/t, PyPSA with the
+cap replaced by the same price, `co2 = 150`): capacities onwind 170.3 against 171.0 GW, offwind
+25.7 and 25.7 GW, gas 82.3 and 82.2 GW (the existing fleet), solar 322 against 369 GW, no
+battery or H₂ in either; opex 1.255e10 against 1.283e10 €/a (2 %); new capex plus opex (PyPSA's
+total minus the fixed cost of its existing fleet) 2.83e10 against 2.96e10 €/a (4.6 %). The
+differences are the documented ones: solar and solar-hsat merged into one unit per node (PyPSA
+chooses between them), nuclear at a constant availability of 0.9 (368 against 321 TWh), fixed
+energy-to-power ratios of storage, dump of surplus at $c_{\rm dump}$ against free curtailment,
+and PyPSA's existing capacities of extendable carriers priced in its objective (ours: sunk).
+At 120 h steps (73 snapshots) PyPSA's interior-point solve did not finish in 10 min locally;
+the full-size comparison runs on the cluster (H2 `lp256_pypsa_24h`, H2b `pypsa256_co2price`).
 
 Outputs: [data.md](data.md) §6. The two campaigns are independent; the comparison of their
 results is a separate step.
 
 > **Status: partial.** Built: the historical-year, stacked and MGA LPs of our model (H2) and
 > PyPSA's optimum and MGA on its network (H2b), prepared as cluster campaigns
-> ([campaigns.md](../campaigns.md)); not yet run on the cluster. Missing: the PyPSA-Eur
-> time-series import mode of the extractor (so that our LP runs on PyPSA's own time series
-> for §2.2; until then H2 uses the NASA POWER weather of our model files and H2b PyPSA's
-> own atlite series (ERA5, SARAH), and the comparison of the two mixes the weather source with the
-> formulation), PyPSA solves of several weather years (one composed network per year), the
+> ([campaigns.md](../campaigns.md)); not yet run on the cluster. Built too: the time-series
+> import (`model256_pypsa.h5`), so that our LP runs on PyPSA's own series; the other H2 lines
+> use the NASA POWER weather of our model files. Missing: PyPSA solves of several weather years (one composed network per year), the
 > stacked PyPSA optimum, ERA5 cutouts for many years (HPC), the comparison step itself, and the
 > stabilization of the $\alpha = 1$ bias. What exists besides: the convergence diagnostics and
 > the multi-chain CPU driver, the LP-dual output for §2.3, and the ERA5 weather import

@@ -15,6 +15,11 @@ Sources (fetched by scripts/download_data.sh and by this script):
 Capacity factors are calibrated per generator so that their mean over the
 network's snapshot window equals the mean of the PyPSA-Eur ``p_max_pu``.
 
+With ``--network <composed.nc> --pypsa-series`` (time-series import mode) the weather is the
+network's own series instead: the renewable ``p_max_pu`` per generator row and the nodal loads,
+as one weather year at its snapshots (no downloads); the written tensors are checked against
+the network.
+
 Output: HDF5 with network arrays and per-field weather tensors
 ``weather/<field>/data[year, hour, node]`` (8760 h per year, Feb 29 dropped).
 """
@@ -65,6 +70,10 @@ def parse_args():
     p.add_argument("--network", default="",
                    help="composed PyPSA-Eur electricity network (resources/<run>/networks/composed_<year>.nc); "
                         "default: the carbon_management example in --raw")
+    p.add_argument("--pypsa-series", action="store_true",
+                   help="with --network: the weather is the network's own time series (renewable p_max_pu per "
+                        "generator row, nodal loads) as one weather year at its snapshots, instead of NASA POWER "
+                        "and the load model (no downloads)")
     return p.parse_args()
 
 
@@ -268,7 +277,8 @@ def extract_network_elec(n, countries, a):
         gens.append(dict(node=nd, carrier=kind, weather=kind, invest=True, kbar=kmax, k=0.0,
                          capex=float((df.capital_cost * w).sum() / w.sum()),
                          mc=float(df.marginal_cost.mean()), avail=1.0, cf_target=target,
-                         k0=float(df.p_nom_min.sum())))
+                         k0=float(df.p_nom_min.sum()),
+                         members=list(df.index), member_w=w.values.astype(float)))
     for kind, cf_ in [("nuclear", 0.9), ("ror", a.ror_cf)]:
         for nd, df in g[g.kind == kind].groupby("bus"):
             if df.p_nom.sum() < 1.0:
@@ -498,6 +508,59 @@ def build_weather(raw, net, gens, snaps):
     return fields
 
 
+def pypsa_series(n, net, gens):
+    """The network's own time series as one weather year (time-series import mode): nodal load =
+    the sum of the node's loads' p_set; per renewable generator row (one unit per node and carrier)
+    the p_nom_max-weighted mean p_max_pu of the PyPSA generators it aggregates, the weights of its
+    window target. Returns (fields, years) with fields[name] = (node indices, data[1, 8760, node])."""
+    snaps = n.snapshots
+    if len(snaps) != 8760 or not (n.snapshot_weightings.objective == 1.0).all():
+        raise SystemExit(f"--pypsa-series needs one hourly year of snapshots ({len(snaps)} found)")
+    year = int(snaps[0].year)
+    nodes = net["nodes"]
+    ld = n.loads[n.loads.bus.isin(set(nodes))]
+    p_set = n.get_switchable_as_dense("Load", "p_set")[ld.index]
+    load = p_set.T.groupby(ld.bus).sum().T.reindex(columns=nodes).fillna(0.0)
+    fields = {"load": (list(range(len(nodes))), load.values[None, :, :])}
+    pmax = n.get_switchable_as_dense("Generator", "p_max_pu")
+    for kind in ["onwind", "offwind", "solar"]:
+        cols, nidx = [], []
+        for g in gens:
+            if g["weather"] != kind:
+                continue
+            w = np.asarray(g["member_w"])
+            cols.append((pmax[g["members"]].values * w).sum(axis=1) / w.sum())
+            nidx.append(nodes.index(g["node"]))
+        fields[kind] = (nidx, np.stack(cols, -1)[None, :, :])
+        print(f"  {kind}: {len(nidx)} rows from the network's p_max_pu, mean CF {np.mean(cols):.3f}")
+    print(f"  load from the network: mean {load.values.mean(axis=0).sum() / 1e3:.1f} GW, "
+          f"peak {load.values.sum(axis=1).max() / 1e3:.1f} GW; weather year {year}")
+    return fields, [year]
+
+
+def check_pypsa_series(path, n, gens):
+    """The weather tensors of a time-series import equal the network's series (float32 round-off)."""
+    with h5py.File(path, "r") as f:
+        nodes = [x.decode() for x in f["network/nodes"][()]]
+        ld = n.loads[n.loads.bus.isin(set(nodes))]
+        p_set = n.get_switchable_as_dense("Load", "p_set")[ld.index]
+        load = p_set.T.groupby(ld.bus).sum().T.reindex(columns=nodes).fillna(0.0).values
+        d = f["weather/load/data"][()][0]
+        assert np.allclose(d, load, rtol=1e-6, atol=1e-3), "load differs from the network"
+        pmax = n.get_switchable_as_dense("Generator", "p_max_pu")
+        worst = 0.0
+        for kind in ["onwind", "offwind", "solar"]:
+            rows = [g for g in gens if g["weather"] == kind]
+            d = f[f"weather/{kind}/data"][()][0]
+            assert [nodes[int(i)] for i in f[f"weather/{kind}/nodes"][()]] == [g["node"] for g in rows]
+            for j, g in enumerate(rows):
+                # a row of one generator is its p_max_pu exactly (to float32)
+                ref = pmax[g["members"]].values @ np.asarray(g["member_w"]) / np.sum(g["member_w"])
+                worst = max(worst, float(np.abs(d[:, j] - ref).max()))
+        assert worst < 1e-6, f"renewable series differ from the network by {worst}"
+    print(f"checked {path}: load and renewable series equal the network's (max |diff| {worst:.1e})")
+
+
 COMPLETION_GEN = ["k0", "mc0", "ef", "ef0"]
 
 
@@ -562,7 +625,12 @@ def main():
         return
     bfg = [c for c in gens if c["brownfield"]]
     gens = [c for c in gens if not c["brownfield"]]
-    fields = build_weather(a.raw, net, gens, snaps)
+    if a.pypsa_series:
+        if not a.network:
+            raise SystemExit("--pypsa-series needs --network")
+        fields, years = pypsa_series(n, net, gens)
+    else:
+        fields, years = build_weather(a.raw, net, gens, snaps), YEARS
 
     nodes = net["nodes"]
     peak = fields["load"][1].max(axis=(0, 1))
@@ -575,7 +643,8 @@ def main():
     with h5py.File(a.out, "w") as f:
         f.attrs["source_network"] = n.name
         f.attrs["countries"] = ",".join(countries)
-        f.attrs["years"] = np.array(YEARS)
+        f.attrs["years"] = np.array(years)
+        f.attrs["weather_source"] = "network time series" if a.pypsa_series else "NASA POWER and the OPSD load model"
         f.attrs["co2_price"] = a.co2_price
         f["network/nodes"] = np.array(nodes, dtype="S")
         f["network/country"] = np.array(net["country"], dtype="S")
@@ -601,6 +670,8 @@ def main():
                                                       hours=("hours", "mean"), capex=("capex", "mean")).to_string())
     print(f"{len(nodes)} nodes, {len(net['line_s'])} lines, {len(net['link_cap'])} DC links")
     print(f"wrote {a.out}")
+    if a.pypsa_series:
+        check_pypsa_series(a.out, n, gens)
 
 
 if __name__ == "__main__":

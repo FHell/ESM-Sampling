@@ -17,14 +17,16 @@ level). Runs on the rebuilt model files (the wind-calibration fix of scripts/pre
 docs/system/data_sources.md §2); the input file and its hash are recorded per run in run.toml.
 Four job arrays by resources, one line per case (hpc/jobs/cpu_array.sbatch):
   list_small.txt  (23)  40 x 24 h: the 22 single years; stacked 2009-2013
-  list_medium.txt (45)  40 x 6 h and 256 x 24 h single years (22 each); 40 x 24 h stacked 2004-2013
-  list_large.txt  (9)   40 x 1 h single years 2003, 2010, 2013, 2017; 40 x 24 h stacked over all 22
+  list_medium.txt (46)  40 x 6 h and 256 x 24 h single years (22 each); 40 x 24 h stacked 2004-2013;
+                        256 x 24 h on model256_pypsa.h5 (the network's own series, D4)
+  list_large.txt  (10)  40 x 1 h single years 2003, 2010, 2013, 2017; 40 x 24 h stacked over all 22
                         years; 40 x 6 h stacked 2009-2013 and 2004-2013; 256 x 24 h stacked
-                        2009-2013; 256 x 6 h at 2013 (HiGHS time limit 240000 s per LP)
+                        2009-2013; 256 x 6 h at 2013 and on model256_pypsa.h5 (HiGHS time limit 240000 s per LP)
   list_mga.txt    (27)  MGA: 40 x 24 h at 2013 (eps 1, 2, 5, 10 %); 40 x 6 h at 2013 (eps 2, 5 %, one line
                         each); 256 x 24 h at 2013 and 40 x 24 h stacked 2009-2013 (eps 2, 5 %, one line
-                        per eps and carrier). Submit after the MGA maximisation is verified (open:
-                        docs/system/validation.md §2.7)
+                        per eps and carrier). Held: PyPSA's optimize_mga on the network we import
+                        from (H2b) is the reference envelope, ours a secondary check
+                        (docs/system/validation.md §2.7)
   list_smoke.txt  (1)   the local smoke case (40 x 24 h, 2013, eps 5 %, onwind)
 Storage and commitment are cyclic within each year (no carry-over between stacked years). Outputs
 per run: summary_lp.toml, years.csv, capacity.csv; with eps: mga.csv, mga_capacity.csv,
