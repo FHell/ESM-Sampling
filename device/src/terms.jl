@@ -493,6 +493,22 @@ function sample_dense(tb::TermBatch, k::Consts, u1, u2; K::Val=Val(2))
     return ifelse.(over, 0.0, t)
 end
 
+"""
+    dense_size(tb, k; K) -> (points, columns)
+
+Static shape of the dense evaluation of a term batch: the points per site (0, the primaries, the
+kept roots and the two ray points of `extend`) and the term columns. Every column is evaluated at
+every point, so a round holds tensors of C·B·points·columns elements.
+"""
+function dense_size(tb::TermBatch, k::Consts; K::Val{NR}=Val(2)) where {NR}
+    S = tb.st
+    np = sum(x -> size(x, 3), primaries(tb, k); init=0)
+    _, Z, _ = eval_terms(tb, k, S.z)
+    nroot = sum(((zq, nrq),) -> size(zq, 4) * (nrq === :fam ? NR : min(nrq, NR)), Z; init=0)
+    ncols(x) = x isa NamedTuple ? maximum((size(v, 4) for v in values(x) if v isa AbstractArray && ndims(v) == 4); init=0) : 0
+    return 1 + np + nroot + 2, sum(ncols, (S.gen, S.uc, S.link, S.line, S.soc, S.kk))
+end
+
 "All kinks of βΔC per site, sorted (C, B, K): primaries, 0 and the roots of the secondary quantities; and the guard."
 function dense_points(tb::TermBatch, k::Consts, z0; K::Val{NR}=Val(2)) where {NR}
     P = primaries(tb, k)

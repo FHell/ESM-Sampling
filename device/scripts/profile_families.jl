@@ -3,7 +3,8 @@
 # Usage (from the repository root):
 #   nice -n 19 julia --project=device -t 4 device/scripts/profile_families.jl <config> [outdir]
 #   FAMILIES=fast (default: FAMILIES_FAST), plain (FAMILIES) or all (with the compensated and cell families); NSWEEPS (default 2) sweeps per call;
-#   FAMS=gen,soc restricts the profile to these families.
+#   FAMS=gen,soc restricts the profile to these families; BUDGET_MB (default 256) the memory budget of a round
+#   (`DENSE_BUDGET`: rounds whose dense tensor exceeds it are split).
 #
 # For every family alone: rounds per sweep, sites per round, real line moves per chain and
 # sweep, compile time, run time per sweep and per line move, the five most expensive kernels.
@@ -16,7 +17,8 @@ outdir = abspath(length(ARGS) > 1 ? ARGS[2] : joinpath("results", "profiles", sp
 mkpath(outdir)
 nsw = parse(Int, get(ENV, "NSWEEPS", "2"))
 fset = get(ENV, "FAMILIES", "fast")
-X = D.device_setup(cfg; families=fset == "all" ? :all : fset == "plain" ? D.FAMILIES : D.FAMILIES_FAST)
+budget = parse(Float64, get(ENV, "BUDGET_MB", "256")) * 2.0^20
+X = D.device_setup(cfg; families=fset == "all" ? :all : fset == "plain" ? D.FAMILIES : D.FAMILIES_FAST, budget=budget)
 (; pl, st, cp, sp, kk, tabs, drng) = X
 mv = D.moves_per_sweep(pl)
 ns = Reactant.ConcreteRNumber(nsw)

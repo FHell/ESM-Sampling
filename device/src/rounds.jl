@@ -681,15 +681,35 @@ moves_per_sweep(pl) = NamedTuple{pl.fams}(Tuple(Int(sum(pl.host[f].on)) for f in
 # setup helper
 # ---------------------------------------------------------------------------
 
+"""
+Memory budget of a round, bytes: the dense tensor C·B·points·columns·8 of `sample_dense` (see
+`dense_size`); the compiled round holds about six of them at once. `plan` splits the rounds of a
+compensated, cell or block family whose largest round exceeds it (`budget = Inf`: no split); the
+probe (one round built on host arrays) costs a few seconds of compilation per family.
+"""
+const DENSE_BUDGET = Ref(2.0^28)
+
 "Everything the device loop needs for model M and device state S (host Arrays)."
 function plan(M::DeviceModel, S::DeviceState, β; κmin=1.0, families=FAMILIES, bmax=Dict{Symbol,Int}(), bdefault=1 << 15,
-              cpumap::Bool=false, cls=nothing, rng=MersenneTwister(1), cells=nothing)
+              cpumap::Bool=false, cls=nothing, rng=MersenneTwister(1), cells=nothing, budget=DENSE_BUDGET[])
     tp = topo(M)
     cells === nothing || (CELLINFO[] = cells)            # cell structure of the partition levels (cells.jl)
     sch = schedule(tp, M; families=families, bmax=bmax, bdefault=bdefault, rng=rng)
     fams = Tuple(f for f in families if haskey(sch, f) && !isempty(sch[f]))
-    hts = NamedTuple{fams}(Tuple(host_table(f, tp, sch[f]; D=family_degree(f, tp, sch[f])) for f in fams))
+    sp, cp, k, st = static_params(M), chain_params(M, S; cls=cls), consts(M, β; κmin=κmin, cpumap=cpumap), flat_state(M, S)
+    C = size(st.θ, 1)
+    ht = Dict(f => host_table(f, tp, sch[f]; D=family_degree(f, tp, sch[f])) for f in fams)
+    for f in fams                                         # memory cap: even chunks of at most b sites
+        (f in FAMILIES || f in FAMILIES_FAST) && continue # plain: ≤ 40 points × 7 columns per site, far below
+        tab = device_table(f, ht[f])
+        np, nc = dense_size(build(Val(f), st, cp, sp, tab, 1, k)[1], k; K=nroots(Val(f)))
+        bf = budget / (8.0 * C * np * nc)
+        size(tab.on, 1) <= bf && continue
+        b = max(1, floor(Int, bf))
+        sch[f] = [ch for r in sch[f] for ch in chunks(r, cld(length(r), cld(length(r), b)))]
+        ht[f] = host_table(f, tp, sch[f]; D=family_degree(f, tp, sch[f]))
+    end
+    hts = NamedTuple{fams}(Tuple(ht[f] for f in fams))
     dts = NamedTuple{fams}(Tuple(device_table(f, hts[f]) for f in fams))
-    return (tp=tp, sched=sch, fams=fams, host=hts, dev=dts, sp=static_params(M), cp=chain_params(M, S; cls=cls),
-            k=consts(M, β; κmin=κmin, cpumap=cpumap), st=flat_state(M, S))
+    return (tp=tp, sched=sch, fams=fams, host=hts, dev=dts, sp=sp, cp=cp, k=k, st=st)
 end

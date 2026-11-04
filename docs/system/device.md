@@ -127,8 +127,8 @@ A **round** is a set of conditionally independent sites: two sites can share a r
 terms they touch are disjoint. Time classes (odd and even steps, three when $T$ is odd)
 separate the steps a SoC or commitment term couples; per node one unit slot (or pair) per
 round; a distance-2 colouring of the node graph for angle moves; an edge colouring of the
-links on their buses. Large rounds are split into chunks. `check_conflicts` verifies every
-round on the host. A sweep runs every family's rounds in a fixed order; each round leaves the
+links on their buses. Large rounds are split into chunks (`bmax`, and the memory cap below).
+`check_conflicts` verifies every round on the host. A sweep runs every family's rounds in a fixed order; each round leaves the
 target invariant, so the sweep does. All rounds of `ns` sweeps run in one compiled program
 (`run_sweeps`: device loops `@trace for` over sweeps and rounds, the sweep count traced) with
 Reactant's RNG; for comparisons the uniforms can be passed in as arrays.
@@ -140,7 +140,28 @@ identically zero for them, and no coupling of $\tau-1$ and $\tau$, so one round 
 steps; `:gen`/`:pair` then keep the committable units and pairs), and the angle moves
 bucketed by node degree (`THETA_BUCKETS`), each padded to its own largest degree. The cost of
 a site is roughly points × terms, so padding to the global maximum degree costs about the
-square of the ratio.
+square of the ratio. `families = :all` (`device_families`) adds:
+* `:spair0`, `:spair`;
+* `:tsoc`, `:tpot` (`:tsocL`, `:tpotL` with requirement tracking);
+* the storage blocks of `BLOCK_SCHED` ($L$ = 2, 4, 8, 16; `:sblk…`, or `:sblkL…` with tracking);
+* the cell families of the partition, except `:cellpairu1` (§3).
+
+**Memory cap.** A round evaluates every term at every point: tensors of
+$C \cdot B \cdot \text{points} \cdot \text{columns}$ elements (`dense_size`; points and columns
+are static per family). `plan` splits the rounds of a compensated, cell or block family into
+even chunks so that this tensor stays within `DENSE_BUDGET` (256 MB by default, keyword
+`budget` of `plan` and `device_setup`, `BUDGET_MB` in `profile_families.jl`). The compiled round
+holds about six such tensors (CPU backend: about 1.4 GB above the base at the default). At
+40 nodes daily with 4 chains, points × columns per site:
+
+| family | points × columns | sites per round (capped) |
+|---|---|---|
+| `:tsoc` | 101 × 16 | 4 914 |
+| `:tpot` | 520 × 87 | 182 |
+| `:sblk2`, `:sblk4`, `:sblk8`, `:sblk16`, `:sblk32` | 227 × 27, 395 × 43, 731 × 75, 1 403 × 139, 2 747 × 267 | 1 229, 450, 149, 43, 11 |
+| `:cellpair1` | 403 × 80 | 182 (not capped) |
+
+The plain families stay below 40 points × 7 columns.
 
 > **Status: deviation.** Parallel lines are not supported by the angle family (none exist in
 > the 40- and 256-node networks).
@@ -203,8 +224,9 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | device model, exact cost, round trip | done |
 | term batch, exact dense sampler, plain families, rounds, compiled multi-sweep program | done |
 | compensated families `:spair`, `:spair0`, `:tsoc(L)`, `:tpot(L)` | verified on arrays and compiled (CPU backend); scheduled with `families = :all` |
-| cell templates (all partition levels) | verified on arrays; compiled except `:cellpairu1` (see §3); scheduled with `families = :all` |
-| storage blocks, one unit (plateau, shapes) | verified on arrays and compiled (`:sblkL4`, `:sblkL16`, `:sblk*`); not yet scheduled |
+| cell templates (all partition levels) | verified on arrays; compiled except `:cellpairu1` (see §3); scheduled with `families = :all` except `:cellpairu1` |
+| storage blocks, one unit (plateau, shapes) | verified on arrays ($L$ = 2–32) and compiled; $L$ = 2–16 scheduled with `families = :all` |
+| memory cap of a round (`DENSE_BUDGET`) | done |
 | term axis (program size independent of the term count) | done |
 | one program per checkpoint (operation sweeps + capacity pass) | done (`sweep_program`, `merged = true`); not the default (compile time) |
 | capacity pass (`kren`, `kscale`, `kpeak` absorb) with the bias, host loop | done |
