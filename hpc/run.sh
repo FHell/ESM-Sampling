@@ -27,11 +27,10 @@ shift $(( $# < 3 ? $# : 3 ))
 code="$ESM_PROJ/campaigns/$campaign/code"
 [ -d "$code" ] || { echo "run.sh: no campaign $campaign (hpc/new_campaign.sh)" >&2; exit 2; }
 cd "$code"
-# every result must be reproducible from its commit: no modified and no untracked files
-# (ignored files such as the data link and device/LocalPreferences.toml are fine)
-if [ -n "$(git status --porcelain)" ]; then
-    echo "run.sh: the campaign code $code has uncommitted or untracked files; refusing to run:" >&2
-    git status --porcelain | head -5 >&2; exit 2
+# the recorded commit must describe the code: no modified tracked files (untracked files are fine)
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+    echo "run.sh: the campaign code $code has uncommitted changes; refusing to run:" >&2
+    git status --porcelain --untracked-files=no | head -5 >&2; exit 2
 fi
 commit=$(git rev-parse HEAD)
 esm_load_julia || exit 2

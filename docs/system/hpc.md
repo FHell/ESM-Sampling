@@ -149,14 +149,16 @@ sbatch hpc/jobs/cpu.sbatch <campaign> <config> [cpu | device | script <path> [ar
 
 `hpc/run.sh` (paths in the config are relative to the campaign code):
 
-1. checks that the campaign code is clean, loads `julia/1.12.2`, sets the offline variables and
+1. checks that the campaign code has no uncommitted changes to tracked files (untracked files
+   are fine), loads `julia/1.12.2`, sets the offline variables and
    `ESM_IGNORE_SIGTERM=1`;
 2. makes the run directory `runs/⟨id⟩/⟨run id⟩/` with the run id `⟨id⟩-⟨config⟩-⟨job id⟩[_⟨task⟩]`
    (or `$RUN_ID`), which a Slurm requeue keeps, so a requeued job resumes;
 3. copies the config (`config.orig.toml`) and writes the config as run (`config.toml`: `out`,
    `cache_dir`, `cache_mirror`, `checkpoint`, `stop_file` set to the run directory and caches);
 4. appends the start of an attempt to `run.toml`: run id, campaign, config and its hash,
-   commit, mode, command, job id, array task, partition, QOS, nodes, cores, GPUs, memory,
+   commit, Julia version, the input data file and its hash (the model files are not in git),
+   mode, command, job id, array task, partition, QOS, nodes, cores, GPUs, memory,
    restart count, start;
 5. sets the threads from the allocation (§5) and runs the driver under `srun`; SIGTERM
    (preemption, `scancel`) and SIGUSR1 (the templates' `--signal=B:USR1@⟨lead⟩` before the time
