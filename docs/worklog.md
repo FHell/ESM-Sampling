@@ -35,6 +35,9 @@ concrete next steps. Update it at the end of every work session.
   nominal storage requirement (`soc_qadj`) for `:tsoc` and `:sblk`.
 
 **Decisions taken:**
+- PyPSA is upstream (user, 2026-11-04): the PyPSA reference is PyPSA's own `optimize`/`optimize_mga`
+  on the network we import from (H2b); PyPSA's time series are imported into a model file so
+  that H2 and H2b share the weather; our Julia MGA is held as a secondary check. LP agent on it.
 - LP against the sampler (user, 2026-11-04): the LP prices curtailment as the sampler does
   (renewables at A·k, excess dumped; storage balance an equality, no free spill; cycling
   disposal reported as the remaining gap, ~0.02 %); comparison runs with losses, soft limits and
