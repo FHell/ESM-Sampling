@@ -1,0 +1,1 @@
+campaigns/H2b/configs/pypsa256.toml python scripts/pypsa_baseline.py resolution=1h

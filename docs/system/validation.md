@@ -224,7 +224,7 @@ over blocks of 24, 6, 3 or 1 h (PyPSA-Eur's `average_every_nhours`). MGA as PyPS
 `optimize_mga` (budget on capex + opex including the fixed cost of the existing fleet), on one
 model with the budget's right-hand side and the objective changed per solve; carrier groups
 mapped to our k fields (onwind; solar and solar-hsat; the three offwind kinds; CCGT and OCGT
-as gas; the battery discharger and the H₂ fuel cell as the storage powers).
+as gas; the battery discharger and the H₂ fuel cell as the storage powers). PyPSA's budget includes the fixed cost of the existing fleet (`total_cost_eur_per_a`), ours does not (greenfield objective), so an ε of H2b corresponds to about ε · total/objective of H2; both numbers are in `summary_pypsa.toml`. The local smoke (14 daily snapshots) ends every MGA solve optimal with the scaled budget.
 
 Outputs: [data.md](data.md) §6. The two campaigns are independent; the comparison of their
 results is a separate step.

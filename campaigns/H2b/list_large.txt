@@ -1,1 +1,1 @@
-campaigns/H2b/configs/pypsa256.toml python scripts/pypsa_baseline.py resolution=1h time_limit=80000
+campaigns/H2b/configs/pypsa256.toml python scripts/pypsa_baseline.py resolution=3h time_limit=400000
