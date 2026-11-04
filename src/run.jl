@@ -54,6 +54,8 @@ Base.@kwdef mutable struct Config
     bias_monotone::Bool = true      # fit ĝ with a monotone, bounded implied price (no tail leak)
     bias_online::Bool = true        # refit b̂ from the finest chains' scores during the finest-level warmup, frozen after
     bias_online_every::Int = 1      # ... observing every n-th finest-level step
+    bias_online_min::Int = 16       # ... the first refit after this many observations (2^j ≥ it; the lifted fit until then)
+    bias_trust::Float64 = 0.0       # ... trust region: a refit changes b̂ over the recent states by at most this × its spread (0: off)
     bias_post::Bool = true          # α = 1: refit b̂ after the run and reweight the finest-level samples (weight ESS reported)
     # chains and convergence diagnostics
     nchains::Int = 4                # finest-level chains (mlda_warmup + nsamples sweeps each)

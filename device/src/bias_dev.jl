@@ -7,7 +7,9 @@
 # capacity of one item: Δk_c = clamp(k + δ) − clamp(k). Items are the investable units whose
 # capacity enters b̂, stacked: generators (non-gas: R_t changes by A_t Δk_c, with the chain's
 # availability for ĝ and the sample steps' for Ē ĝ; gas: firm) and storage (firm: u₂ shifts by
-# a constant). ĥ (separable, quadratic in the clamped coefficients) changes by Δzc = Δk_c U[i, :].
+# a constant). ĥ (separable, quadratic in the clamped coefficients, flat beyond its vertex when
+# concave) changes by Δzc = Δk_c U[i, :], and the exact measure term (1 − r) log J by the item's
+# n_u (log(k_c' + κ0) − log(k_c + κ0)).
 # The per-chain aggregates (features per step of the chain's weather and per sample step, and
 # the sums of F₁ + F₂ over them) come from the CPU bias cache and are updated on the device.
 
@@ -22,7 +24,9 @@ struct BiasDev{F,V,Mx,A3}
     isfirm::V                     # 1 for firm items (gas, storage), 0 otherwise
     A0s::Mx                       # (Ni, n) availability of the non-firm items at the sample steps
     a::V; c::V; kscale::V         # ĥ coefficients of the fields of the items
+    hlo::V; hhi::V                # ĥ: range of κ in the regression data per coefficient
     A0x::A3                       # (C, T, Ni) availability of the non-firm items in the chain's weather
+    nJ::V; κ0::F                  # n_u of the measure term log J per item (0: not in log J), capacity floor
 end
 
 "Per-chain aggregates of the device bias."
@@ -65,9 +69,9 @@ function pack_bias(P::ML.Problem, ix::DeviceIndex, ss::Vector{ML.State})
     BCs = [ML.BiasCache(P, s) for s in ss]
     T, ns = BCs[1].T, length(b.sD)
     Uh = zeros(Ni, Mh)
-    lo, hi, isfirm = zeros(Ni), zeros(Ni), zeros(Ni)
+    lo, hi, isfirm, nJ = zeros(Ni), zeros(Ni), zeros(Ni), zeros(Ni)
     A0s = zeros(Ni, ns)
-    a, c, ks = zeros(Mh), zeros(Mh), zeros(Mh)
+    a, c, ks, hlo, hhi = zeros(Mh), zeros(Mh), zeros(Mh), zeros(Mh), zeros(Mh)
     C = length(ss)
     k, zc = zeros(C, Ni), zeros(C, Mh)
     A0x = zeros(C, T, Ni)
@@ -77,8 +81,9 @@ function pack_bias(P::ML.Problem, ix::DeviceIndex, ss::Vector{ML.State})
         Uh[ri, rm] .= U
         lo[ri] .= E.kspecs[f].lo; hi[ri] .= E.kspecs[f].hi
         isfirm[ri] .= firm
+        nJ[ri] .= BCs[1].nJ[f]
         co = lk.off[f]+1:lk.off[f]+lk.m[f]
-        a[rm] .= b.a[co]; c[rm] .= b.c[co]; ks[rm] .= b.kscale[co]
+        a[rm] .= b.a[co]; c[rm] .= b.c[co]; ks[rm] .= b.kscale[co]; hlo[rm] .= b.κlo[co]; hhi[rm] .= b.κhi[co]
         if !firm
             A0s[ri, :] .= permutedims(b.sA[gi])
         end
@@ -105,7 +110,7 @@ function pack_bias(P::ML.Problem, ix::DeviceIndex, ss::Vector{ML.State})
     end
     t1, t2 = ML.tables(b)
     BD = BiasDev(b.Δt, b.Dbar, b.ratio, b.wstep, t1.u0, t1.h, copy(t1.F), t2.u0, t2.h, copy(t2.F),
-                 Matrix{Float64}(I, Ni, Ni), Uh, lo, hi, isfirm, A0s, a, c, ks, A0x)
+                 Matrix{Float64}(I, Ni, Ni), Uh, lo, hi, isfirm, A0s, a, c, ks, hlo, hhi, A0x, nJ, E.κ0)
     return BD, BiasState(k, zc, u1x, u2x, u1s, u2s, gx, gs), gitem, sitem, ritem
 end
 
@@ -123,6 +128,23 @@ function tab_dev(F, u0, h, u)
     return f0 .+ w .* (F[i.+1] .- f0)
 end
 
+"""
+ĥ per coordinate (the CPU's `hcoord`): inside the data range [lo, hi] a κ + ½ c κ², flat beyond
+the vertex −a/c when c < 0; outside it the edge value continued with the edge slope clipped to
+not push away from the data (≥ 0 above hi, ≤ 0 below lo).
+"""
+function hcoord_dev(a, c, lo, hi, κ)
+    neg = c .< 0
+    vtx = -a ./ ifelse.(neg, c, -1.0)
+    above, below = κ .> hi, κ .< lo
+    κc = ifelse.(above, hi, ifelse.(below, lo, κ))
+    sat = neg .& (κc .> vtx)
+    κs = ifelse.(sat, vtx, κc)
+    d = ifelse.(sat, 0.0, a .+ c .* κc)
+    s = ifelse.(above, max.(d, 0.0), ifelse.(below, min.(d, 0.0), 0.0))
+    return a .* κs .+ 0.5 .* c .* κs .^ 2 .+ s .* (κ .- κc)
+end
+
 "Σ over the columns of F₁(u₁) + F₂(u₂): (C, n) features → (C, 1)."
 gsum(BD::BiasDev, u1, u2) = sum(tab_dev(BD.F1, BD.u01, BD.h1, u1) .+ tab_dev(BD.F2, BD.u02, BD.h2, u2); dims=2)
 
@@ -134,7 +156,8 @@ function delta_bias(BD::BiasDev, BS::BiasState, ι, δ)
     e = reshape(BD.Id[ι, :], 1, :)                                           # one-hot row of the item
     kι = vec(sum(BS.k .* e; dims=2))
     lo, hi = Reactant.@allowscalar(BD.lo[ι]), Reactant.@allowscalar(BD.hi[ι])
-    Δkc = clamp.(kι .+ δ, lo, hi) .- clamp.(kι, lo, hi)                       # (C,)
+    kc0, kc1 = clamp.(kι, lo, hi), clamp.(kι .+ δ, lo, hi)
+    Δkc = kc1 .- kc0                                                          # (C,)
     knew = BS.k .+ reshape(δ, :, 1) .* e
     fm = Reactant.@allowscalar BD.isfirm[ι]
     Δren = reshape(Δkc .* (1 .- fm), :, 1)
@@ -147,9 +170,11 @@ function delta_bias(BD::BiasDev, BS::BiasState, ι, δ)
     zcn = BS.zc .+ reshape(Δkc, :, 1) .* reshape(BD.Uh[ι, :], 1, :)
     ksr = reshape(BD.kscale, 1, :)
     κ0, κ1 = BS.zc ./ ksr, zcn ./ ksr
-    a, c = reshape(BD.a, 1, :), reshape(BD.c, 1, :)
-    Δh = vec(sum(a .* (κ1 .- κ0) .+ 0.5 .* c .* (κ1 .^ 2 .- κ0 .^ 2); dims=2))
-    Δb = BD.Δt .* vec(gxn .- BS.gx) .- BD.ratio .* BD.wstep .* vec(gsn .- BS.gs) .+ (1 - BD.ratio) .* Δh
+    a, c, hlo, hhi = reshape(BD.a, 1, :), reshape(BD.c, 1, :), reshape(BD.hlo, 1, :), reshape(BD.hhi, 1, :)
+    Δh = vec(sum(hcoord_dev(a, c, hlo, hhi, κ1) .- hcoord_dev(a, c, hlo, hhi, κ0); dims=2))
+    nJι = Reactant.@allowscalar BD.nJ[ι]
+    Δlj = nJι .* (log.(kc1 .+ BD.κ0) .- log.(kc0 .+ BD.κ0))
+    Δb = BD.Δt .* vec(gxn .- BS.gx) .- BD.ratio .* BD.wstep .* vec(gsn .- BS.gs) .+ (1 - BD.ratio) .* (Δh .+ Δlj)
     return Δb, (knew, zcn, u1xn, u2xn, u1sn, u2sn, gxn, gsn)
 end
 

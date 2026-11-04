@@ -90,6 +90,10 @@ if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
         @test all(diff(λ) .>= -1e-6)
         @test minimum(λ) >= -P.E.c_dump - 1e-6
         @test maximum(λ) <= P.E.c_shed + 1e-6
+        # firm capacity has no negative value: θ_{u₂} ≤ 0, so F₂ is non-increasing (its table too)
+        n1_ = length(b.τ1)
+        @test b.θ[2+n1_] <= 1e-9
+        @test all(diff(b.tab2.F) .<= 1e-9 * maximum(abs, b.tab2.F))
         # the tables equal the analytic ramp sums at the grid points, are close between them,
         # continue linearly beyond the grid, and their secant slopes are non-increasing
         # (F₁, F₂ concave: the implied price of the tabulated ĝ is monotone)
@@ -153,6 +157,75 @@ if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
     end
 
     s = MB.evaluate!(P, copy(sL))
+    # ĥ with every branch near the state: concave coordinates (c < 0) with their vertex close to the
+    # current clamped coefficient (capacity moves cross it into the flat part), convex ones elsewhere,
+    # and data ranges around the current coefficient (moves leave them on both sides)
+    let rng = MersenneTwister(22), κs = MB.clamped_kcoeffs(E, lkL, s.k)[1] ./ b.kscale
+        for j in eachindex(b.a)
+            if isodd(j)
+                b.c[j] = -(0.5 + rand(rng)) * 2.0
+                b.a[j] = -b.c[j] * (κs[j] + 0.05 * randn(rng) * (abs(κs[j]) + 0.1))
+            else
+                b.c[j] = 0.5 * rand(rng); b.a[j] = 2.0 * randn(rng)
+            end
+            w = 0.1 * (abs(κs[j]) + 0.1)
+            b.κlo[j], b.κhi[j] = κs[j] - w * rand(rng), κs[j] + w * rand(rng)
+        end
+    end
+
+    @testset "saturating ĥ and the exact measure term" begin
+        # hsat: the quadratic below the vertex, flat (C¹) beyond it when c < 0
+        for (a, c) in ((2.0, -1.0), (-1.5, -0.5), (1.0, 0.7), (0.3, 0.0))
+            for κ in range(-6.0, 6.0; length=121)
+                c < 0 && κ > -a / c ? (@test MB.hsat(a, c, κ) ≈ -a^2 / (2c)) : (@test MB.hsat(a, c, κ) ≈ a * κ + 0.5 * c * κ^2)
+                h = 1e-6
+                @test MB.hsat_d(a, c, κ) ≈ (MB.hsat(a, c, κ + h) - MB.hsat(a, c, κ - h)) / 2h atol = 1e-5
+            end
+            c < 0 && @test MB.hsat_d(a, c, -a / c) == 0.0
+        end
+        # hcoord: hsat inside the data range, outside continued with the edge slope clipped so that it
+        # never pushes away from the data; continuous at the edges; unbounded range = hsat
+        for (a, c, lo, hi) in ((2.0, -1.0, -1.0, 1.0), (2.0, -1.0, 0.5, 3.0), (-1.0, 0.5, -2.0, 1.0), (1.0, 0.0, -0.5, 0.5),
+                               (-0.7, -0.3, 0.2, 0.2))
+            for κ in range(-6.0, 6.0; length=121)
+                v = MB.hcoord(a, c, lo, hi, κ)
+                if lo <= κ <= hi
+                    @test v ≈ MB.hsat(a, c, κ)
+                elseif κ > hi
+                    @test v ≈ MB.hsat(a, c, hi) + max(MB.hsat_d(a, c, hi), 0.0) * (κ - hi)
+                    @test MB.hcoord_d(a, c, lo, hi, κ) >= 0
+                else
+                    @test v ≈ MB.hsat(a, c, lo) + min(MB.hsat_d(a, c, lo), 0.0) * (κ - lo)
+                    @test MB.hcoord_d(a, c, lo, hi, κ) <= 0
+                end
+                @test MB.hcoord(a, c, -Inf, Inf, κ) == MB.hsat(a, c, κ)
+                h = 1e-7
+                abs(κ - lo) > 1e-3 && abs(κ - hi) > 1e-3 &&
+                    @test MB.hcoord_d(a, c, lo, hi, κ) ≈ (MB.hcoord(a, c, lo, hi, κ + h) - MB.hcoord(a, c, lo, hi, κ - h)) / 2h atol = 1e-5
+            end
+            @test MB.hcoord(a, c, lo, hi, hi + 1e-12) ≈ MB.hcoord(a, c, lo, hi, hi) atol = 1e-9
+            @test MB.hcoord(a, c, lo, hi, lo - 1e-12) ≈ MB.hcoord(a, c, lo, hi, lo) atol = 1e-9
+        end
+        # b̂ carries (1 − r) log J exactly: the global value equals its parts with log_measure
+        lv = P.lv[L+1]
+        Xn = MB.weather_nodes(W, L, s.xs[end])
+        g, gm = MB.ghat(b, E, lkL, s.k, Xn), MB.ghat_mean(b, E, lkL, s.k)
+        h = MB.hhat(b, MB.clamped_kcoeffs(E, lkL, s.k)[1])[1]
+        @test MB.log_measure(E, lkL, lv, s.k) != 0
+        @test MB.bias_term(P, s) ≈ g - b.ratio * gm + (1 - b.ratio) * (h + MB.log_measure(E, lkL, lv, s.k)) rtol = 1e-12
+        BC = MB.BiasCache(P, s)
+        @test BC.lj ≈ MB.log_measure(E, lkL, lv, s.k) rtol = 1e-14
+        @test count(j -> b.c[j] < 0 && BC.zc[j] / b.kscale[j] > -b.a[j] / b.c[j], eachindex(b.a)) > 0
+        # ĥ regresses the score without the exact measure term: y = s_k − ∂ₖlog J − ∂ₖĝ
+        Xb, sx, sk, kb = MB.bias_scores(P, s)
+        PB = MB.PostBias()
+        PB.GtG, PB.Gts, PB.hk = zeros(MB.nθ(b), MB.nθ(b)), zeros(MB.nθ(b)), MB.hk_sums(lkL.n)
+        MB.bias_observe!(b, E, W, lkL, kb, Xb, sx, sk; into=PB)
+        _, gk = MB.bias_design(b, E, W, lkL, kb, Xb)
+        @test PB.hk[:, 4] ≈ (sk .- MB.log_measure_grad(E, lkL, lv, kb) .- gk) .* b.kscale
+        κobs = MB.clamped_kcoeffs(E, lkL, kb)[1] ./ b.kscale
+        @test PB.hk[:, 6] == κobs && PB.hk[:, 7] == κobs     # the data range of ĥ: one observation
+    end
 
     @testset "bias cache: capacity moves of every unit kind" begin
         rng = MersenneTwister(23)
@@ -320,12 +393,67 @@ if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
         @test length(sx) == W.lays[L+1].n && kb == s.k
     end
 
+    @testset "refit safeguards: minimum observations and trust region" begin
+        @test !MB.refit_due(MB.OnlineBias(; nmin=16), 8) && MB.refit_due(MB.OnlineBias(; nmin=16), 16) &&
+              MB.refit_due(MB.OnlineBias(; nmin=16), 32) && !MB.refit_due(MB.OnlineBias(; nmin=16), 24)
+        @test MB.refit_due(MB.OnlineBias(), 4)                    # the default floor of 4
+        mono = (P.βv, E.c_shed, E.c_dump)
+        feasible(θ) = (n1 = length(b.τ1); ramps = vcat(θ[2:1+n1], θ[3+n1:end]);
+                       all(ramps .<= 1e-9) && θ[2+n1] <= 1e-9 && θ[1] + θ[2+n1] <= P.βv * b.Dbar * E.c_dump * (1 + 1e-9) &&
+                       θ[1] + θ[2+n1] + sum(ramps) >= -P.βv * b.Dbar * E.c_shed * (1 + 1e-9))
+        b0 = deepcopy(b)
+        b.θ ./= 3.0                                # the monotone LP warm-start fit (feasible)
+        MB.rebuild_tables!(b)
+        @test feasible(b.θ) && b.nobs == 0
+        # minimum observation count: no refit before 16 observations, the lifted fit stays
+        OB = MB.OnlineBias(; nmin=16, trust=1e-3, nrecent=8)
+        θl, al, cl = copy(b.θ), copy(b.a), copy(b.c)
+        ups = Bool[]
+        s1 = copy(s)
+        for it in 1:16
+            s1 = copy(s)                           # states with other capacities: other b̂, other scores
+            s1.k .*= 1 .+ 0.05 .* randn(MersenneTwister(it), length(s1.k))
+            MB.evaluate!(P, s1)
+            _, upd = MB.online_bias_step!(P, s1, OB; monotone=mono)
+            push!(ups, upd)
+        end
+        @test !any(ups[1:15]) && ups[16] && OB.updates == [16]
+        obs = findall(>(0), b.hk[:, 1])                             # the data ranges of ĥ come with the refit
+        @test !isempty(obs) && b.κlo[obs] == b.hk[obs, 6] && b.κhi[obs] == b.hk[obs, 7] && all(b.κlo[obs] .<= b.κhi[obs])
+        @test length(OB.recent) == 8
+        # trust region: a convex combination of the lifted and the new fit, within the bound, feasible
+        λ = OB.steps[1]
+        @test 0 <= λ < 1
+        old = (θl, al, cl)
+        bnew = deepcopy(b); MB.bias_update!(bnew; monotone=mono)              # the full step (same sums)
+        @test b.θ ≈ (1 - λ) .* θl .+ λ .* bnew.θ && b.a ≈ (1 - λ) .* al .+ λ .* bnew.a && b.c ≈ (1 - λ) .* cl .+ λ .* bnew.c
+        @test feasible(bnew.θ) && feasible(b.θ)
+        vals(bb) = [MB.bias_from_record(bb, E, lkL, r...) for r in OB.recent]
+        bl = deepcopy(b); MB.set_coeffs!(bl, old, old, 0.0)
+        v0 = vals(bl); d = vals(b) .- v0
+        bound = 1e-3 * max(maximum(v0) - minimum(v0), Float64(lkL.n))
+        @test maximum(abs.(d .- mean(d))) <= bound * (1 + 1e-9)
+        dfull = vals(bnew) .- v0
+        @test maximum(abs.(dfull .- mean(dfull))) > bound            # the full step would have left the region
+        # a wide trust region takes the full step
+        bw = deepcopy(bl); bw.GtG .= b.GtG; bw.Gts .= b.Gts; bw.hk .= b.hk; bw.nobs = b.nobs
+        MB.bias_update!(bw; monotone=mono)
+        @test MB.trust_step!(bw, E, lkL, OB.recent, old, 1e12) == 1.0 && bw.θ ≈ bnew.θ
+        # the cache with the stepped coefficients still equals the global evaluation
+        BC = MB.BiasCache(P, s1)
+        @test MB.bias_value(BC, b) ≈ MB.bias_term(P, s1) rtol = 1e-12
+        # back to the bias of the other tests
+        for f in fieldnames(MB.BiasModel)
+            setfield!(b, f, getfield(b0, f))
+        end
+    end
+
     @testset "post-correction records" begin
         PB = MB.PostBias()
         s1 = copy(s)
         MB.post_record!(PB, P, s1, [0.0])
         @test PB.nobs == 1 && size(PB.GtG) == (MB.nθ(b), MB.nθ(b))
-        @test isapprox(MB.bias_from_record(b, E, PB.U1[1], PB.kc[1], PB.zc[1]), PB.bused[1]; rtol=1e-12)
+        @test isapprox(MB.bias_from_record(b, E, lkL, PB.U1[1], PB.kc[1], PB.zc[1]), PB.bused[1]; rtol=1e-12)
         @test length(PB.U1[1]) == lkL.T                    # features per finest step, not the raw weather
     end
 

@@ -108,11 +108,17 @@ differences of $\log Z_x(k)$ across the visited weather and capacities to about 
 
 ### 4.4 The learned bias $\hat b$
 
-The code (`src/bias.jl`) uses the decomposition $\log Z_x(k) \approx \hat g(x,k) + \hat h(k)
-+ \text{const}$, which gives
+Under the physical reference measure (§5), $J$ depends on $k$ only, so
+$\log Z_x(k) = \log J(k) + \log Z^u_x(k)$ with $Z^u$ the partition function in utilization
+coordinates, and the exact bias contains $(1-r)\log J(k)$ exactly. The code (`src/bias.jl`)
+carries that term exactly and uses the decomposition
+$\log Z^u_x(k) \approx \hat g(x,k) + \hat h(k) + \text{const}$, which gives
 $$
-\hat b(x,k) = \hat g(x,k) - r\,\bar{\mathbb E}_{x'}\hat g(x',k) + (1-r)\,\hat h(k).
+\hat b(x,k) = \hat g(x,k) - r\,\bar{\mathbb E}_{x'}\hat g(x',k) + (1-r)\,\big[\hat h(k) + \log J(k)\big].
 $$
+The entropic force of the reference measure, $n_u/(k_u+\kappa_0)$ per unit, is then damped to
+$r\,n_u/(k_u+\kappa_0)$ in the target exactly, whatever the fit. Under the utilization measure,
+and at level 0 (where no field is complete), $\log J = 0$.
 $\hat b$ is evaluated at one level $\ell_b$ of the hierarchy, on the restriction of the state
 to that level: the anomalies $x_{\ell_b}$ of the weather and the capacity coefficients
 $k_{\ell_b}$. During the level-0 warmup $\ell_b = 0$; before the finest chains start, the bias
@@ -179,27 +185,59 @@ that $\lambda$ is non-decreasing (every ramp coefficient $\le 0$) and bounded in
 $[-c_{\rm dump}, c_{\rm shed}]$. $\hat g$ can then grow at most at physical price slopes,
 which keeps it from leaking into the load tail where there are few samples. $F_1$ and $F_2$
 are then concave, so the secant slopes of their tables are non-increasing and the implied
-price of the tabulated $\hat g$ is monotone as well.
+price of the tabulated $\hat g$ is monotone as well. In addition the linear coefficient of
+$u_2$ is non-positive, $\theta_{u_2}\le 0$: the shortfall part $-F_2'/(\beta_v\bar D)$ of the
+price is non-negative, so firm capacity never has a negative value,
+$\partial\hat g/\partial F = -(\Delta t_b/\bar D)\sum_t F_2'(u_{2,t})\ge 0$. The weather
+scores do not separate $\theta_{u_1}$ from $\theta_{u_2}$ (their design columns are equal), so
+without the constraint the ridge splits them equally, and a positive $\theta_{u_2}$ makes the
+target push firm capacity up in surplus at about $\Delta t_b T\theta_{u_2}/\bar D$ nats per MW.
 
-**Capacity part.** $\hat h(k) = \sum_i a_i\kappa_i + \tfrac12 c_i\kappa_i^2$ is separable and
-quadratic in the scaled, clamped capacity coefficients $\kappa_i$ of the level (all
-coefficients of the level's layout). Per coordinate, the residual capacity score
-$s_{k,i} - \partial_i\hat g$, with
+**Capacity part.** $\hat h(k) = \sum_i h_i(\kappa_i)$ is separable in the scaled, clamped
+capacity coefficients $\kappa_i$ of the level (all coefficients of the level's layout). Each
+$h_i$ is a fitted quadratic that can neither turn over inside the box nor run outward beyond its
+data (`hcoord`). With $[\kappa^-_i,\kappa^+_i]$ the range of $\kappa_i$ in the regression data
+and $q(\kappa) = a\kappa + \tfrac12 c\kappa^2$, flat beyond its vertex $\kappa^* = -a/c$ when
+$c < 0$ ($C^1$, the value $-a^2/(2c)$ there; `hsat`),
+$$
+h_i(\kappa) = \begin{cases}
+q(\kappa^+) + \max\big(q'(\kappa^+), 0\big)(\kappa-\kappa^+) & \kappa > \kappa^+,\\
+q(\kappa) & \kappa^-\le\kappa\le\kappa^+,\\
+q(\kappa^-) + \min\big(q'(\kappa^-), 0\big)(\kappa-\kappa^-) & \kappa < \kappa^-,
+\end{cases}
+$$
+so that outside its data $e^{-\hat h}$ never grows away from the data. Per coordinate, the
+residual capacity score $s_{k,i} - \partial_i\log J - \partial_i\hat g$, with
 $$
 s_k = -\beta_v\,\partial_k C + \partial_k\log J(k)
 $$
-(the measure term of §5, `log_measure_grad`; zero under the utilization measure and for fields
-that are not complete at the level), is regressed linearly on $\kappa_i$ (slope only until
-$\kappa_i$ has varied). Evaluating $\hat h$ on clamped coefficients keeps it from outweighing
-the capacity box penalty.
+(the score of $\log Z$; the measure term is `log_measure_grad`, zero under the utilization
+measure and for fields that are not complete at the level, and it is subtracted again because
+$\hat b$ carries it exactly), is regressed linearly on $\kappa_i$ (slope only until $\kappa_i$
+has varied); the regression sums also keep the minimum and maximum of $\kappa_i$, which become
+the data range at a refit (no data: an unbounded range, and $a = c = 0$). Evaluating $\hat h$
+on clamped coefficients keeps it from outweighing the capacity box penalty.
+
+Why this form: the score regression only knows $\log Z$ where the chains have been. A quadratic
+fitted from states far apart is concave ($\log Z^u$ is) with its maximum inside the box, and
+beyond the maximum $e^{-\hat h}$ grows with the capacity; a linear or convex extrapolation with
+a slope that points away from the data does the same. Either makes the target run outward in
+that capacity until the box stops it, by up to $10^9$ nats. Saturated beyond the vertex and
+not pushing outward beyond the data, $\hat h$ leaves the target there to the cost and the
+damped measure term: in utilization coordinates $\log Z^u$ decreases with a capacity beyond its
+need (the volume of the confined dispatch shrinks like $k^{-n_{\rm conf}}$), so the target is
+confined, and the chains extend the data range only where the cost leads them. A linear
+continuation with the unclipped edge slope would still run away whenever the vertex lies inside
+the data.
 
 **Lift** (`lift_bias!`). The level-0 warmup learns at $\ell_b = 0$. Before the finest chains
-start, the bias is lifted to their level $L$: $\theta$ and $\bar D$ are kept; $a$, $c$ and the
-coefficient scales are mapped to the fine layout (the level-0 coefficients are the prefix of
-each field's coefficients, the new detail coefficients start at $a = c = 0$, so $\hat h$ of
-capacities without details beyond level 0 is unchanged); the regression sums are reset, so the
-fine refits use fine data only; and the sample steps of $\bar{\mathbb E}$ are redrawn at level
-$L$. The online refits of the finest warmup then fit at level $L$.
+start, the bias is lifted to their level $L$: $\theta$ and $\bar D$ are kept; $a$, $c$, the data
+ranges of $\hat h$ and the coefficient scales are mapped to the fine layout (the level-0
+coefficients are the prefix of each field's coefficients, the new detail coefficients start at
+$a = c = 0$, so $\hat h$ of capacities without details beyond level 0 is unchanged); the
+regression sums are reset, so the fine refits use fine data only; and the sample steps of
+$\bar{\mathbb E}$ are redrawn at level $L$. The online refits of the finest warmup then fit at
+level $L$, the first after `bias_online_min` observations (sampler.md §7.1).
 
 How $\hat b$ is learned during a run (level-0 warmup, lift, online refits on a geometric
 schedule, post-correction by reweighting) is described in [sampler.md](sampler.md) §7.1, and

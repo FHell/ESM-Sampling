@@ -112,7 +112,7 @@ function run_chains(cfg::Config)
     rngs = [MersenneTwister(cfg.seed + 1000 * c) for c in 1:K]
     nwarm, nprod = cfg.mlda_warmup, cfg.nsamples
     online = P.use_bias && cfg.bias_online
-    OB = OnlineBias(; every=cfg.bias_online_every, freeze=K * nwarm)   # refits during the warmup only
+    OB = OnlineBias(; every=cfg.bias_online_every, freeze=K * nwarm, nmin=cfg.bias_online_min, trust=cfg.bias_trust)   # refits during the warmup only
     PB = (P.use_bias && cfg.bias_post) ? PostBias() : nothing
     names = monitor_names(P)
     LM = LocalModel(P, L)

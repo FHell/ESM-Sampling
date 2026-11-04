@@ -222,7 +222,7 @@ function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST)
     # ---- loop
     nwarm, nprod = cfg.mlda_warmup, cfg.nsamples
     online = usebias && cfg.bias_online
-    OB = ML.OnlineBias(; every=cfg.bias_online_every, freeze=K * nwarm)
+    OB = ML.OnlineBias(; every=cfg.bias_online_every, freeze=K * nwarm, nmin=cfg.bias_online_min, trust=cfg.bias_trust)
     PB = (usebias && cfg.bias_post) ? ML.PostBias() : nothing
     names = ML.monitor_names(P)
     traces = [Vector{Vector{Float64}}() for _ in 1:K]

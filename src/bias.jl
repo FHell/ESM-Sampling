@@ -71,6 +71,8 @@ mutable struct BiasModel
     θ::Vector{Float64}
     a::Vector{Float64}             # ĥ coefficients per capacity coordinate of level ℓ_b
     c::Vector{Float64}
+    κlo::Vector{Float64}           # ĥ: range of κ in the regression data per coordinate (±Inf: none)
+    κhi::Vector{Float64}
     kscale::Vector{Float64}
     Dbar::Float64
     ratio::Float64                 # β_k / β_v
@@ -89,7 +91,7 @@ mutable struct BiasModel
     # accumulated normal equations of the score regressions
     GtG::Matrix{Float64}
     Gts::Vector{Float64}
-    hk::Matrix{Float64}            # per k coordinate: [Σ1 Σκ Σκ² Σy Σyκ]
+    hk::Matrix{Float64}            # per k coordinate: [Σ1 Σκ Σκ² Σy Σyκ min κ max κ]
     nobs::Int
     active::Bool
 end
@@ -355,36 +357,90 @@ function clamped_kcoeffs(E::EnergyModel, lk::Layout, zk)
     return zc, vjp
 end
 
+"The fitted quadratic a κ + ½ c κ² of one ĥ coordinate, flat beyond its vertex κ* = −a/c when c < 0 (C¹)."
+@inline function hsat(a::Float64, c::Float64, κ::Float64)
+    c < 0 && κ > -a / c && (κ = -a / c)
+    return a * κ + 0.5 * c * κ^2
+end
+@inline hsat_d(a::Float64, c::Float64, κ::Float64) = (c < 0 && κ > -a / c) ? 0.0 : a + c * κ
+
+"""
+ĥ of one coordinate: inside the range [lo, hi] of κ in the regression data the quadratic, flat
+beyond its vertex when concave (`hsat`); outside the range continued linearly from the edge
+with the edge slope clipped so that it never pushes away from the data (≥ 0 above hi, ≤ 0 below
+lo). The fit can neither turn over inside the box nor run outward beyond its data.
+"""
+@inline function hcoord(a::Float64, c::Float64, lo::Float64, hi::Float64, κ::Float64)
+    κc = κ > hi ? hi : (κ < lo ? lo : κ)
+    s = κ > hi ? max(hsat_d(a, c, κc), 0.0) : (κ < lo ? min(hsat_d(a, c, κc), 0.0) : 0.0)
+    return hsat(a, c, κc) + s * (κ - κc)
+end
+"Derivative of `hcoord` w.r.t. κ."
+@inline hcoord_d(a::Float64, c::Float64, lo::Float64, hi::Float64, κ::Float64) =
+    κ > hi ? max(hsat_d(a, c, hi), 0.0) : (κ < lo ? min(hsat_d(a, c, lo), 0.0) : hsat_d(a, c, κ))
+
 "ĥ(k) on (clamped) k coordinates of level ℓ_b and its gradient."
 function hhat(b::BiasModel, zk)
     val = 0.0
     for j in eachindex(zk)
-        κ = zk[j] / b.kscale[j]
-        val += b.a[j] * κ + 0.5 * b.c[j] * κ^2
+        val += hcoord(b.a[j], b.c[j], b.κlo[j], b.κhi[j], zk[j] / b.kscale[j])
     end
-    return val, (b.a .+ b.c .* (zk ./ b.kscale)) ./ b.kscale
+    return val, [hcoord_d(b.a[j], b.c[j], b.κlo[j], b.κhi[j], zk[j] / b.kscale[j]) / b.kscale[j] for j in eachindex(zk)]
+end
+
+"Empty regression sums of ĥ for n coordinates (the min/max columns at ±Inf)."
+hk_sums(n::Int) = hcat(zeros(n, 5), fill(Inf, n), fill(-Inf, n))
+
+"""
+The fields of the reference-measure term log J(k) = Σ_u n_u log(k_u + κ0) at the level of `lk`
+(ensemble.md §5, `log_measure`), in its order: (k field, n_u) per counted unit group.
+"""
+function measure_fields(E::EnergyModel, lk::Layout)
+    out = NTuple{2,Int}[]
+    E.measure == :physical || return out
+    lv = Layout(E.vspecs, lk.M, lk.h)
+    for g in E.gens
+        (g.kf > 0 && g.wf == 0 && g.vf > 0 && iscomplete(lv, E.vspecs, g.vf) && iscomplete(lk, E.kspecs, g.kf)) || continue
+        push!(out, (g.kf, (g.ucf > 0 && iscomplete(lv, E.vspecs, g.ucf) ? 2 : 1) * lv.T))
+    end
+    for st in E.stors
+        (st.kf > 0 && iscomplete(lv, E.vspecs, st.fe) && iscomplete(lk, E.kspecs, st.kf)) || continue
+        push!(out, (st.kf, lv.T))
+    end
+    return out
+end
+
+"log J of the clamped node capacities kc (the value of `log_measure`)."
+function logJ_kc(E::EnergyModel, mf, kc)
+    val = 0.0
+    for (f, n) in mf
+        val += n * sum(log.(kc[f] .+ E.κ0))
+    end
+    return val
 end
 
 """
     bias_value(b, E, lk, zk, Xraw; grad)
 
-b̂ at the level ℓ_b of the bias (layout `lk`, raw node weather `Xraw` of that level).
+b̂ at the level ℓ_b of the bias (layout `lk`, raw node weather `Xraw` of that level):
+ĝ − r Ē ĝ + (1 − r)(ĥ + log J), with the reference-measure term log J of the level exact.
 Returns the value and, optionally, the gradients (analytic ĝ) w.r.t. the raw node
 weather and the k coordinates.
 """
 function bias_value(b::BiasModel, E::EnergyModel, lk::Layout, zk, Xraw; grad=false)
+    lj = logJ_kc(E, measure_fields(E, lk), node_capacities(E, lk, zk)[1])
     if !grad
         g = ghat(b, E, lk, zk, Xraw)
         gm = ghat_mean(b, E, lk, zk)
         h, _ = hhat(b, clamped_kcoeffs(E, lk, zk)[1])
-        return g - b.ratio * gm + (1 - b.ratio) * h
+        return g - b.ratio * gm + (1 - b.ratio) * (h + lj)
     end
     g, gX, gk = ghat(b, E, lk, zk, Xraw; grad=true)
     gm, gkm = ghat_mean(b, E, lk, zk; grad=true)
     zc, vjp = clamped_kcoeffs(E, lk, zk)
     h, gkh = hhat(b, zc)
-    gkh = vjp(gkh)
-    return g - b.ratio * gm + (1 - b.ratio) * h, gX, gk .- b.ratio .* gkm .+ (1 - b.ratio) .* gkh
+    gkh = vjp(gkh) .+ log_measure_grad(E, lk, Layout(E.vspecs, lk.M, lk.h), zk)
+    return g - b.ratio * gm + (1 - b.ratio) * (h + lj), gX, gk .- b.ratio .* gkm .+ (1 - b.ratio) .* gkh
 end
 
 """
@@ -401,7 +457,9 @@ min ½ θᵀAθ − θᵀg (the normal equations of the score regression) is sol
 these constraints as a small convex QP. ĝ can then grow at most at physical
 price slopes, which removes the tail leak of the unconstrained fit. F₁ and F₂ are
 then concave, so the secant slopes of their tables are non-increasing and the
-implied price of the tabulated ĝ is monotone as well.
+implied price of the tabulated ĝ is monotone as well. In addition θ_{u₂} ≤ 0: the
+shortfall part of the price is non-negative, so firm capacity never has a negative
+value (∂ĝ/∂firm ≥ 0); the weather scores do not separate θ_{u₁} from θ_{u₂}.
 """
 function monotone_fit(b::BiasModel, A::AbstractMatrix, g::AbstractVector, βv::Float64, c_shed::Float64, c_dump::Float64)
     n = length(g)
@@ -414,6 +472,10 @@ function monotone_fit(b::BiasModel, A::AbstractMatrix, g::AbstractVector, βv::F
     set_silent(model)
     @variable(model, θ[1:n])
     @constraint(model, [j in ramps], θ[j] <= 0.0)
+    # firm capacity never has a negative value: F₂' ≤ 0 everywhere, i.e. its left-tail slope θ_{u₂} ≤ 0.
+    # The weather scores do not separate θ_{u₁} and θ_{u₂} (their design columns are equal), so
+    # this resolves a degeneracy without loss of fit.
+    @constraint(model, θ[i2] <= 0.0)
     @constraint(model, θ[i1] + θ[i2] <= βv * b.Dbar * c_dump)
     @constraint(model, θ[i1] + θ[i2] + sum(θ[j] for j in ramps) >= -βv * b.Dbar * c_shed)
     As = Symmetric(Matrix(A))
@@ -485,9 +547,9 @@ function init_bias(E::EnergyModel, W::WeatherModel, lk::Layout, ratio; rng, nsam
     sD, sA, wstep, Dbar = bias_samples(E, W, ℓ, rng; nsamples=nsamples, nsteps=nsteps)
     nb = 2 + length(τ1) + length(τ2)
     θ = zeros(nb)
-    b = BiasModel(τ1, τ2, s, θ, zeros(lk.n), zeros(lk.n), coeff_scales(E, lk), Dbar, ratio, ℓ, Float64(lk.h),
-                  sD, sA, wstep, nsamples, res, RampTable(0.0, 1.0, [0.0, 0.0]), RampTable(0.0, 1.0, [0.0, 0.0]), Float64[],
-                  zeros(nb, nb), zeros(nb), zeros(lk.n, 5), 0, true)
+    b = BiasModel(τ1, τ2, s, θ, zeros(lk.n), zeros(lk.n), fill(-Inf, lk.n), fill(Inf, lk.n), coeff_scales(E, lk), Dbar,
+                  ratio, ℓ, Float64(lk.h), sD, sA, wstep, nsamples, res, RampTable(0.0, 1.0, [0.0, 0.0]),
+                  RampTable(0.0, 1.0, [0.0, 0.0]), Float64[], zeros(nb, nb), zeros(nb), hk_sums(lk.n), 0, true)
     return rebuild_tables!(b)
 end
 
@@ -508,10 +570,12 @@ function lift_bias!(b::BiasModel, E::EnergyModel, W::WeatherModel, lks::Vector{L
     lk = lks[ℓ+1]
     b.a = prolong_to(b.a, lks, trks, E.kspecs, b.ℓb, ℓ)
     b.c = prolong_to(b.c, lks, trks, E.kspecs, b.ℓb, ℓ)
+    b.κlo = prolong_to(b.κlo, lks, trks, E.kspecs, b.ℓb, ℓ)     # detail coefficients: a = c = 0, range [0, 0]
+    b.κhi = prolong_to(b.κhi, lks, trks, E.kspecs, b.ℓb, ℓ)
     b.kscale = coeff_scales(E, lk)
     b.ℓb, b.Δt = ℓ, Float64(lk.h)
     nb = nθ(b)
-    b.GtG, b.Gts, b.hk, b.nobs = zeros(nb, nb), zeros(nb), zeros(lk.n, 5), 0
+    b.GtG, b.Gts, b.hk, b.nobs = zeros(nb, nb), zeros(nb), hk_sums(lk.n), 0
     b.sD, b.sA, b.wstep, _ = bias_samples(E, W, ℓ, rng; nsamples=nsamples, nsteps=nsteps)
     b.nsamp = nsamples
     return rebuild_tables!(b)
@@ -550,20 +614,24 @@ end
 Accumulate one learning sample with scores in the state coordinates of level ℓ_b:
 sz = −β_v ∇C in the weather state coordinates (z0, ξ₁, …, ξ_ℓb) and
 sk = −β_v ∂ₖC + ∂ₖ log J in the k coordinates of the level. The score identity holds
-in any coordinates, so ∇ĝ is taken in the same ones. The sums go into `into` (the
-bias itself, or the accumulators of the post-correction).
+in any coordinates, so ∇ĝ is taken in the same ones. ĥ regresses what ĝ and the exact
+measure term do not carry, sk − ∂ₖ log J − ∂ₖĝ. The sums go into `into` (the bias itself,
+or the accumulators of the post-correction).
 """
 function bias_observe!(b::BiasModel, E::EnergyModel, W::WeatherModel, lk::Layout, zk, Xraw, sz, sk; weight=1.0, into=b)
     Jz, gk = bias_design(b, E, W, lk, zk, Xraw)
     into.GtG .+= weight .* (Jz' * Jz)
     into.Gts .+= weight .* (Jz' * sz)
     κ = clamped_kcoeffs(E, lk, zk)[1] ./ b.kscale
-    y = (sk .- gk) .* b.kscale     # target for ∂ĥ/∂κ
+    gJ = log_measure_grad(E, lk, Layout(E.vspecs, lk.M, lk.h), zk)
+    y = (sk .- gJ .- gk) .* b.kscale     # target for ∂ĥ/∂κ
     @. into.hk[:, 1] += weight
     @. into.hk[:, 2] += weight * κ
     @. into.hk[:, 3] += weight * κ^2
     @. into.hk[:, 4] += weight * y
     @. into.hk[:, 5] += weight * y * κ
+    @views into.hk[:, 6] .= min.(into.hk[:, 6], κ)
+    @views into.hk[:, 7] .= max.(into.hk[:, 7], κ)
     into.nobs += 1
     return into
 end
@@ -577,7 +645,8 @@ function bias_update!(b::BiasModel; ridge=1e-6, monotone=nothing)
         b.θ .= monotone_fit(b, b.GtG + λ * I, b.Gts, monotone...)
     end
     for i in axes(b.hk, 1)
-        n, sκ, sκ2, sy, syκ = b.hk[i, :]
+        n, sκ, sκ2, sy, syκ, κmin, κmax = b.hk[i, :]
+        b.κlo[i], b.κhi[i] = n > 0 ? (κmin, κmax) : (-Inf, Inf)
         # the curvature is only identified once κ has varied; otherwise fit the slope
         varκ = sκ2 / n - (sκ / n)^2
         if varκ > 1e-6 * (1 + sκ2 / n)
@@ -598,10 +667,10 @@ end
 # capacities are the node capacities of every unit): the features per step for the
 # chain's weather (D, R, u₁, F₁(u₁), F₂(u₂)) and per sample step (R, u₁, F₁, F₂), the
 # firm capacity, the raw and clamped node capacities, the clamped coefficients of ĥ,
-# and the three sums ĝ, Ē ĝ, ĥ. A capacity change of one unit moves R_t at every step
-# (non-gas generators: A_{i,t} Δ) or the firm capacity (gas, storage), and the
-# clamped coefficients of its node; a weather change moves D_t and R_t at the steps of
-# its window (Ē ĝ and ĥ do not change).
+# and the sums ĝ, Ē ĝ, ĥ, log J. A capacity change of one unit moves R_t at every step
+# (non-gas generators: A_{i,t} Δ) or the firm capacity (gas, storage), the clamped
+# coefficients of its node and its term of log J; a weather change moves D_t and R_t at
+# the steps of its window (Ē ĝ, ĥ and log J do not change).
 
 mutable struct BiasCache
     T::Int
@@ -622,9 +691,13 @@ mutable struct BiasCache
     kraw::Vector{Vector{Float64}}   # raw node capacities per k field
     kc::Vector{Vector{Float64}}     # clamped node capacities
     zc::Vector{Float64}             # clamped coefficients (ĥ)
+    mf::Vector{NTuple{2,Int}}       # reference-measure term: (k field, n_u) in the order of `log_measure`
+    nJ::Vector{Int}                 # n_u per k field (0: not in log J)
+    κ0::Float64
     g::Float64
     gm::Float64
     h::Float64
+    lj::Float64                     # log J
 end
 
 "Bias cache of capacity coordinates `zk` and raw node weather `Xraw` at the level ℓ_b of `b` (layout `lk`, complete)."
@@ -640,8 +713,13 @@ function BiasCache(b::BiasModel, E::EnergyModel, lk::Layout, zk, Xraw)
     Kw = weather_capacity(E, kc, length(Xraw), [size(x, 1) for x in Xraw])
     Rs = sample_R(b, E, kc)
     t1, t2 = tables(b)
+    mf = measure_fields(E, lk)
+    nJ = zeros(Int, length(E.kspecs))
+    for (f, n) in mf
+        nJ[f] = n
+    end
     BC = BiasCache(T, t1, t2, At, Kw, D, R, zeros(T), zeros(T), zeros(T), Rs, zeros(length(Rs)), zeros(length(Rs)),
-                   zeros(length(Rs)), firm, kraw, kc, clamped_kcoeffs(E, lk, zk)[1], 0.0, 0.0, 0.0)
+                   zeros(length(Rs)), firm, kraw, kc, clamped_kcoeffs(E, lk, zk)[1], mf, nJ, E.κ0, 0.0, 0.0, 0.0, 0.0)
     fd = firm / b.Dbar
     for t in 1:T
         u1 = (D[t] - R[t]) / b.Dbar
@@ -654,7 +732,7 @@ function BiasCache(b::BiasModel, E::EnergyModel, lk::Layout, zk, Xraw)
     return bias_resum!(BC, b)
 end
 
-"Recompute the sums ĝ, Ē ĝ, ĥ of the cache from its per-step values and coefficients."
+"Recompute the sums ĝ, Ē ĝ, ĥ, log J of the cache from its per-step values, coefficients and capacities."
 function bias_resum!(BC::BiasCache, b::BiasModel)
     g = 0.0
     for t in 1:BC.T
@@ -664,12 +742,16 @@ function bias_resum!(BC::BiasCache, b::BiasModel)
     for j in eachindex(BC.F1s)
         gm += BC.F1s[j] + BC.F2s[j]
     end
-    BC.g, BC.gm, BC.h = b.Δt * g, b.wstep * gm, hhat(b, BC.zc)[1]
+    lj = 0.0
+    for (f, n) in BC.mf
+        lj += n * sum(log.(BC.kc[f] .+ BC.κ0))
+    end
+    BC.g, BC.gm, BC.h, BC.lj = b.Δt * g, b.wstep * gm, hhat(b, BC.zc)[1], lj
     return BC
 end
 
 "b̂ of the cached state."
-bias_value(BC::BiasCache, b::BiasModel) = BC.g - b.ratio * BC.gm + (1 - b.ratio) * BC.h
+bias_value(BC::BiasCache, b::BiasModel) = BC.g - b.ratio * BC.gm + (1 - b.ratio) * (BC.h + BC.lj)
 
 "k field of unit i of a generator group (kind 1) or storage group (kind 2), and whether the unit is firm."
 @inline unit_kfield(E::EnergyModel, kind::Int, gi::Int) =
@@ -685,8 +767,8 @@ function hhat_delta!(BC::BiasCache, b::BiasModel, E::EnergyModel, lk::Layout, kf
         j = off + rv[q]
         z0 = BC.zc[j]
         z1 = z0 + nz[q] * Δc
-        κ0, κ1 = z0 / b.kscale[j], z1 / b.kscale[j]
-        dh += b.a[j] * (κ1 - κ0) + 0.5 * b.c[j] * (κ1^2 - κ0^2)
+        dh += hcoord(b.a[j], b.c[j], b.κlo[j], b.κhi[j], z1 / b.kscale[j]) -
+              hcoord(b.a[j], b.c[j], b.κlo[j], b.κhi[j], z0 / b.kscale[j])
         commit && (BC.zc[j] = z1)
     end
     return dh
@@ -729,8 +811,9 @@ function bias_delta_k(BC::BiasCache, b::BiasModel, E::EnergyModel, lk::Layout, k
                       commit::Bool=false)
     kf, firmunit = unit_kfield(E, kind, gi)
     sp = E.kspecs[kf]
+    kc0 = BC.kc[kf][i]
     kc1 = clamp(knew, sp.lo[i], sp.hi[i])
-    Δc = kc1 - BC.kc[kf][i]
+    Δc = kc1 - kc0
     commit && (BC.kraw[kf][i] = knew; BC.kc[kf][i] = kc1)
     Δc == 0.0 && return 0.0
     t1, t2 = BC.tab1, BC.tab2
@@ -758,6 +841,7 @@ function bias_delta_k(BC::BiasCache, b::BiasModel, E::EnergyModel, lk::Layout, k
         commit && g.wf > 0 && (BC.Kw[g.wf][i] += Δc)
     end
     dh = hhat_delta!(BC, b, E, lk, kf, i, Δc, commit)
+    dlj = BC.nJ[kf] > 0 ? BC.nJ[kf] * (log(kc1 + BC.κ0) - log(kc0 + BC.κ0)) : 0.0
     commit && bias_resum!(BC, b)
-    return b.Δt * dg - b.ratio * b.wstep * dgm + (1 - b.ratio) * dh
+    return b.Δt * dg - b.ratio * b.wstep * dgm + (1 - b.ratio) * (dh + dlj)
 end

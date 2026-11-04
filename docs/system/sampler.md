@@ -262,9 +262,21 @@ of $\log J$ alone. The global `evaluate!` equals the incremental sums to round-o
   detail coordinates) and $s_k = -\beta_v\partial_k C + \partial_k\log J$ on all capacity
   coordinates of the level enter the regression every `bias_online_every` steps during the
   finest-level warmup. The coefficients are refitted (monotone QP) only when the observation
-  count reaches $2^j\ge4$. Both drivers pool the scores of all chains and freeze the bias at the
-  end of the warmup, so production samples one fixed target. After a refit every chain's state
-  is re-evaluated.
+  count reaches $2^j\ge$ `bias_online_min` (default 16): the sums are reset at the lift, and a
+  refit from a few cold-start states would replace the lifted level-0 fit by an extrapolation of
+  them, so the lifted fit stays until enough fine data exist. Both drivers pool the scores of
+  all chains and freeze the bias at the end of the warmup, so production samples one fixed
+  target. After a refit every chain's state is re-evaluated.
+- **Trust region** (`bias_trust` $=\tau > 0$, off by default). A refit replaces the
+  coefficients $(\theta, a, c)$ by the convex combination $(1-\lambda)$ old $+\ \lambda$ new with
+  the largest $\lambda\le1$ for which the change of $\hat b$ minus its mean over the
+  last 32 observed states stays below $\tau\max(S, n_k)$, $S$ the spread (max − min) of the old
+  $\hat b$ over those states and $n_k$ the number of capacity coordinates (a floor for an unfitted
+  bias). $\hat g$, $\bar{\mathbb E}\hat g$ and $\log J$ are linear in the coefficients and
+  $\hat h$ nearly so, so $\lambda$ is the bound over the deviation of the full step, halved until
+  it holds (`trust_step!`). A convex combination of two fits satisfies the linear constraints of
+  the monotone fit. The bias stays a fixed function between refits and is frozen after the
+  warmup.
 - **Post-correction** (`bias_post`, default on). Every production sample records what is
   needed to evaluate $\hat b$ and to refit it at the finest level, not the raw weather: the
   features $u_{1,t}$ per step, the clamped node capacities and clamped capacity coefficients,
