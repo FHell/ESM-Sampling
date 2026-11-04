@@ -212,8 +212,7 @@ function prep_storage_ms!(bm::BlockMove, P, LM, LC, us::Vector{NTuple{2,Int}}, b
         empty!(gn)
         for (si, i) in us
             s = E.stors[si]
-            κs = LC.kst[si][i] * s.hours[i] / LM.Δt
-            κs < κmin && continue
+            κs = LC.kst[si][i] * s.hours[i] / LM.Δt   # every moved unit (the requirement must match `soc_qadj`)
             e0 = j == 0 ? 0.0 : Δe(j)
             e1 = (shape === nothing ? (j + 1 <= L ? 1.0 : 0.0) : (j + 1 <= L - 1 ? Δe(j + 1) : 0.0))
             dg = κs * (e1 - e0)
@@ -223,7 +222,8 @@ function prep_storage_ms!(bm::BlockMove, P, LM, LC, us::Vector{NTuple{2,Int}}, b
             gq[node] += dg
         end
         for node in gn
-            prorata!(wq, jac, P, LM, LC, node, gq[node], bm.τs[q]; κmin=κmin, learn=learn)
+            prorata!(wq, jac, P, LM, LC, node, gq[node], bm.τs[q]; κmin=κmin, learn=learn,
+                     qadj=soc_qadj(P, LM, LC, us, node, bm.τs[q]))
         end
         for node in gn
             gq[node] = 0.0
@@ -341,15 +341,17 @@ end
 
 One sweep of the flow design at a complete level with (k, x) fixed: the local
 sweep with the plain and the flow families (frames refreshed if (k, x)
-changed), then with probability `p_storage` the storage multiscale sweep.
+changed), then with probability `p_storage` the storage multiscale sweep and with
+probability `slong.p` the long-range storage sweep (storage_long.jl).
 """
 function flow_sweep!(rng, P::Problem, LM::LocalModel, FF::FlowFrames, s::State; wsets=nothing, pools=nothing, extra=4.0,
-                     p_storage::Float64=0.5)
+                     p_storage::Float64=0.5, slong::NamedTuple=(p=0.0, nmoves=32, hmin=24.0))
     refresh!(FF, P, s)
     fams, mult = flow_families(P.E)
     s, st1 = local_sweep!(rng, P, LM, s; wsets=wsets, extra=extra * mult, families=fams, frames=FF)
     st2 = zeros(2, 2)
     rand(rng) < p_storage && ((s, st2) = storage_ms_sweep!(rng, P, LM, s; pools=pools))
+    rand(rng) < slong.p && ((s, _) = storage_long_sweep!(rng, P, LM, s; pools=pools, nmoves=slong.nmoves, hmin=slong.hmin))
     return s, st1, st2
 end
 

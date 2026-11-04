@@ -1213,6 +1213,9 @@ mv_wss(m::StepMove) = (m.ws,)
 mv_sec(m::BlockMove) = m.sec
 mv_bps(m::BlockMove) = m.bps
 
+"Whether a move has storage terms (their injection kinks split the primary segments in `walk!`)."
+mv_hasstor(mv) = any(ws -> !isempty(ws.stu), mv_wss(mv))
+
 """
 Mask of the storage-term secondaries (charge/discharge switch and power limits, three per
 storage term, pushed first by `eval_move!` and `eval_cached!`) in the secondary vector of a move
@@ -1281,7 +1284,7 @@ function walk!(pts, cs, mv, β, bp, sgn, maxnats, secprev::Vector{Float64}, root
     # feeds inside a primary segment. Those storage quantities are linear between primaries, so
     # their interpolated roots are exact; the segment is split there, and the roots of the other
     # secondaries are interpolated on the pieces, where every secondary is linear.
-    stor = !nonlin && any(ws -> !isempty(ws.stu), mv_wss(mv))
+    stor = !nonlin && mv_hasstor(mv)
     if stor
         L = lb === nothing ? LineBuf() : lb
         gmask, groots, sroots, secB, secE = storage_mask!(L.gmask, mv), L.groots, L.sroots, L.secB, L.secE
@@ -1749,11 +1752,14 @@ Q > 0). Along the line P(t) = (Q + g t)₊ + e: dispatch follows the requirement
 pro rata while it is positive, and once the node is in surplus (Q ≤ 0) dispatch
 stays at e and the transport change goes into the residual (dump). The entries
 are kinked at t* = −Q/g. Jacobian term (P, e, Q, g, |S| − 1): |P(t)/P|^{|S|−1}.
+`qadj` (storage moves, `soc_qadj`) is added to Q so that Q changes by exactly g t along the
+move; with requirement-tracking kinks Q is the actual requirement and `qadj` is ignored.
 """
-function prorata!(ws, jac, P, LM, LC, m, g, τ; κmin=1.0, learn=nothing, dyn=nothing, skipweather::Bool=false)
+function prorata!(ws, jac, P, LM, LC, m, g, τ; κmin=1.0, learn=nothing, dyn=nothing, skipweather::Bool=false, qadj::Float64=0.0)
     g == 0.0 && return false
     learn === nothing || return compensate_learned!(ws, P, LM, LC, learn.AM, learn.FF, m, g, τ; κmin=κmin)
     E = P.E
+    dyn = dyn === nothing ? tracking_kinks(E) : dyn
     units = LM.genunits[m]
     Pm, Qs, nu = 0.0, 0.0, 0                   # P = Σ κ ω, Σ κ clamp(ω) over the units with |κ| ≥ κmin
     @inbounds for (f, i) in units
@@ -1767,9 +1773,8 @@ function prorata!(ws, jac, P, LM, LC, m, g, τ; κmin=1.0, learn=nothing, dyn=no
     end
     nu == 0 && return false
     abs(Pm) < 1e-6 && return false
-    Q = LC.r[m, τ] + Qs
+    Q = LC.r[m, τ] + Qs + (dyn ? 0.0 : qadj)
     e = Pm - max(Q, 0.0)
-    dyn = dyn === nothing ? tracking_kinks(E) : dyn
     nm = Float64(nu - 1)
     k = newkink!(ws, Q, g; node=m, dyn=dyn, P=Pm, nm=nm)
     lv = P.lv[LM.ℓ+1]
@@ -1783,6 +1788,31 @@ function prorata!(ws, jac, P, LM, LC, m, g, τ; κmin=1.0, learn=nothing, dyn=no
     end
     push!(jac, (Pm, e, Q, dyn ? NaN : g, nm))
     return true
+end
+
+"""
+Nominal minus actual injection of the storage units `us` ((si, i) pairs) at node m and step τ:
+Σ k h (Y_{τ+1} − Y_τ)/Δt − k (p⁺ − p⁻), with the unclamped state of charge Y. Along a storage
+move the actual injection is bent by the efficiencies, the power limits and the box, while the
+nominal one changes by exactly κ_s per unit change of the state-of-charge difference; added to
+the requirement of the share-preserving compensation (`prorata!`, `qadj`), it makes that
+requirement change by exactly g t, so the shares and the excess are coordinates of the curve
+(the curve through s(t) is the curve through s).
+"""
+function soc_qadj(P::Problem, LM::LocalModel, LC::LocalCost, us, m::Int, τ::Int)
+    E = P.E
+    T = LM.T
+    τ1 = mod(τ, T) + 1
+    q = 0.0
+    for (si, i) in us
+        s = E.stors[si]
+        s.bus[i] == m || continue
+        Ye = LC.Y[s.fe]
+        k = LC.kst[si][i]
+        pc, mc = soc_power(s, i, LM.Δt, clamp(Ye[i, τ], 0.0, 1.0), clamp(Ye[i, τ1], 0.0, 1.0))
+        q += k * s.hours[i] * (Ye[i, τ1] - Ye[i, τ]) / LM.Δt - k * (pc - mc)
+    end
+    return q
 end
 
 """
@@ -1804,8 +1834,9 @@ function prep_tsoc!(rng, wa, ws, P, LM, LC, τm, τ, jac; κmin=1.0, learn=nothi
     κs < κmin && return false
     empty!(jac)
     prep_node!(ws, P, LM, s.fe, i, 1.0, τ)
-    prorata!(wa, jac, P, LM, LC, n, κs, τm; learn=learn)
-    prorata!(ws, jac, P, LM, LC, n, -κs, τ; learn=learn)
+    u = ((si, i),)
+    prorata!(wa, jac, P, LM, LC, n, κs, τm; learn=learn, qadj=soc_qadj(P, LM, LC, u, n, τm))
+    prorata!(ws, jac, P, LM, LC, n, -κs, τ; learn=learn, qadj=soc_qadj(P, LM, LC, u, n, τ))
     return true
 end
 
@@ -2267,12 +2298,13 @@ struct LocalKernel
     kop::Bool                        # capacity moves with their operation (kop.jl) after kscale and kpeak
     wblocks::Float64                 # fine weather sweeps: joint z0 block moves per sweep (weather_blocks.jl)
     wblockspan::Int                  # ... of the lengths whose window spans at most this many finest-level steps
+    slong::NamedTuple                # long-range storage sweep (storage_long.jl): (p, nmoves, hmin), p = probability per sweep
 end
 LocalKernel(P::Problem; extra=4.0, mode::Symbol=:auto, weather::Float64=0.0, lmkw::NamedTuple=NamedTuple(), kop::Bool=false,
-            wblocks::Float64=0.0, wblockspan::Int=600) =
+            wblocks::Float64=0.0, wblockspan::Int=600, slong::NamedTuple=(p=0.0, nmoves=32, hmin=24.0)) =
     LocalKernel(Dict{Int,LocalModel}(), [MoveWS(P) for _ in 1:Threads.maxthreadid()], extra, ReentrantLock(), Dict{Int,Any}(), Any[],
                 mode == :auto ? (P.E.flow === nothing ? :local : :flow) : mode, Dict{Int,Any}(), weather, Any[], lmkw, kop, wblocks,
-                wblockspan)
+                wblockspan, slong)
 
 "Fine-level weather moves of the local kernel (if enabled and the level is spatially complete)."
 function maybe_weather!(rng, P::Problem, K::LocalKernel, LM::LocalModel, s::State; BC=nothing)
@@ -2287,7 +2319,8 @@ local_model(K::LocalKernel, P::Problem, ℓ::Int) = lock(() -> get!(() -> LocalM
 """
 One π_ℓ-invariant transition of the operation and (where complete) the
 capacities at the level of `s`: the operation sweep (local sweep, then with
-probability 1/2 the storage multiscale sweep; or the flow/adaptive sweep) and the
+probability 1/2 the storage multiscale sweep and with probability `storage_long` the
+long-range storage sweep; or the flow/adaptive sweep) and the
 capacity moves (`kscale`, `kpeak`, and `kop` if enabled) in random order, then the fine
 weather moves if enabled. At α = 1 one
 bias cache serves the capacity and weather moves (the operation sweep changes neither
@@ -2304,9 +2337,9 @@ function fine_local_step(rng, P::Problem, s::State, S)
         isempty(K.pools) && append!(K.pools, [BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
         sweep! = if K.mode == :adaptive
             AM = lock(() -> get!(() -> AdaptiveModes(P, s.ℓ), K.adapt, s.ℓ), K.lk)
-            x -> adaptive_sweep!(rng, P, LM, FF, AM, x; wsets=K.wsets, pools=K.pools, extra=K.extra)[1]
+            x -> adaptive_sweep!(rng, P, LM, FF, AM, x; wsets=K.wsets, pools=K.pools, extra=K.extra, slong=K.slong)[1]
         else
-            x -> flow_sweep!(rng, P, LM, FF, x; wsets=K.wsets, pools=K.pools, extra=K.extra)[1]
+            x -> flow_sweep!(rng, P, LM, FF, x; wsets=K.wsets, pools=K.pools, extra=K.extra, slong=K.slong)[1]
         end
         AMk = K.mode == :adaptive ? get(K.adapt, s.ℓ, nothing) : nothing
         kmoves! = x -> kopmoves!(kpeak_sweep!(rng, P, LM, kscale_sweep!(rng, P, LM, x; BC=BC)[1]; AM=AMk, BC=BC)[1])
@@ -2322,12 +2355,16 @@ function fine_local_step(rng, P::Problem, s::State, S)
     kmoves! = x -> kopmoves!(kpeak_sweep!(rng, P, LM, kscale_sweep!(rng, P, LM, x; BC=BC)[1]; BC=BC)[1])
     # the plain sweep, then (SoC form, complete level) with probability 1/2 the storage multiscale
     # sweep as in the flow kernel: without it the seasonal state of charge does not relax
-    # (docs/mixing_diagnosis.md §6.2); it needs no flow basis
+    # (docs/mixing_diagnosis.md §6.2); it needs no flow basis; then the long-range storage sweep
     function op!(x)
         x, _ = local_sweep!(rng, P, LM, x; wsets=K.wsets, extra=K.extra)
         if rand(rng) < 0.5 && LM.complete[P.E.fθ]
             isempty(K.pools) && append!(K.pools, [BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
             x, _ = storage_ms_sweep!(rng, P, LM, x; pools=K.pools)
+        end
+        if rand(rng) < K.slong.p && LM.complete[P.E.fθ]
+            isempty(K.pools) && append!(K.pools, [BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
+            x, _ = storage_long_sweep!(rng, P, LM, x; pools=K.pools, nmoves=K.slong.nmoves, hmin=K.slong.hmin)
         end
         return x
     end
@@ -2415,28 +2452,31 @@ function commit_block!(bm::BlockMove, v::AbstractVector, t::Float64)
     for q in 1:bm.n
         bm.wss[q].trec = false           # the caches change below
     end
-    LC = bm.LC
     for q in 1:bm.n
-        ws = bm.wss[q]; τ = bm.τs[q]
-        @inbounds for j in eachindex(ws.zidx)
-            v[ws.zidx[j]] += t * ws.zval[j]
-        end
-        @inbounds for j in eachindex(ws.zkidx)
-            v[ws.zkidx[j]] += ws.zkval[j] * ws.kφ[ws.zkid[j]]
-        end
-        @inbounds for (f, i) in ws.ent
-            LC.Y[f][i, τ] += entryΔ(ws, f, i, t)
-        end
-        @inbounds for e in ws.lines
-            LC.F[e, τ] += t * ws.dfl[e]
-        end
-        @inbounds for n in ws.nodes
-            LC.r[n, τ] += ws.dr[n]
-        end
-        @inbounds for c in ws.cells
-            LC.S[c, τ] += ws.dS[c]
-        end
-        commit_weather!(ws, bm.P, LC, τ, t)
+        apply_step!(bm.wss[q], bm.P, bm.LC, v, bm.τs[q], t)
     end
+end
+
+"Apply step τ of a block move evaluated at t (`mv_eval!`) to the coefficients and the caches."
+function apply_step!(ws::MoveWS, P::Problem, LC::LocalCost, v::AbstractVector, τ::Int, t::Float64)
+    @inbounds for j in eachindex(ws.zidx)
+        v[ws.zidx[j]] += t * ws.zval[j]
+    end
+    @inbounds for j in eachindex(ws.zkidx)
+        v[ws.zkidx[j]] += ws.zkval[j] * ws.kφ[ws.zkid[j]]
+    end
+    @inbounds for (f, i) in ws.ent
+        LC.Y[f][i, τ] += entryΔ(ws, f, i, t)
+    end
+    @inbounds for e in ws.lines
+        LC.F[e, τ] += t * ws.dfl[e]
+    end
+    @inbounds for n in ws.nodes
+        LC.r[n, τ] += ws.dr[n]
+    end
+    @inbounds for c in ws.cells
+        LC.S[c, τ] += ws.dS[c]
+    end
+    commit_weather!(ws, P, LC, τ, t)
 end
 

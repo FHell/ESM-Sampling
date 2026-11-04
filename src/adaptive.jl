@@ -349,11 +349,13 @@ end
 
 One sweep of the adaptive flow sampler at a complete level with (k, x) fixed:
 the local sweep with the plain, flow and learned (`amode`, `amode0`) families,
-the storage multiscale sweep and the learned block shapes, then observation of
+the storage multiscale sweep, the long-range storage sweep (probability `slong.p`) and the
+learned block shapes, then observation of
 the state and a mode update on the geometric schedule (diminishing adaptation).
 """
 function adaptive_sweep!(rng, P::Problem, LM::LocalModel, FF::FlowFrames, AM::AdaptiveModes, s::State;
-                         wsets=nothing, pools=nothing, extra=4.0, learned::Bool=true)
+                         wsets=nothing, pools=nothing, extra=4.0, learned::Bool=true,
+                         slong::NamedTuple=(p=0.0, nmoves=32, hmin=24.0))
     refresh!(FF, P, s)
     fams, mult = flow_families(P.E)
     fams = vcat(fams, [(:amode, 0.03), (:acut, 0.1), (:amode0, 0.03)])
@@ -365,6 +367,8 @@ function adaptive_sweep!(rng, P::Problem, LM::LocalModel, FF::FlowFrames, AM::Ad
     lrn = learned && length(AM.updates) > 0 ? (AM=AM, FF=FF) : nothing
     rand(rng) < 0.5 && ((s, _) = storage_ms_sweep!(rng, P, LM, s; pools=pools,
                                                    learn=(lrn !== nothing && rand(rng) < 0.5) ? lrn : nothing))
+    rand(rng) < slong.p && ((s, _) = storage_long_sweep!(rng, P, LM, s; pools=pools, nmoves=slong.nmoves, hmin=slong.hmin,
+                                                         learn=(lrn !== nothing && rand(rng) < 0.5) ? lrn : nothing))
     s, st2 = adaptive_block_sweep!(rng, P, LM, AM, s; pools=pools, learn=lrn)
     LC = LocalCost(P, LM, s)
     observe!(AM, P, LM, LC)

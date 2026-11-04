@@ -220,3 +220,157 @@ if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
         end
     end
 end
+
+if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
+    @testset "long-range storage moves (slong, slevel)" begin
+        cfg = ML.load_config(CFG); cfg.verbose = false
+        P, sL, info = ML.setup(cfg; rng=MersenneTwister(cfg.seed))
+        rng = MersenneTwister(17)
+        ℓ = 1
+        s = ML.restrict_state(P, sL, ℓ)
+        LM = ML.LocalModel(P, ℓ)
+        E = P.E
+        T = LM.T
+        units = [(si, i) for (si, st) in enumerate(E.stors) for i in eachindex(st.bus)]
+        pool = ML.BlockPool(P, 3)
+        newmove(LC) = ML.SLong(pool.wss[1], pool.wss[2], pool.wss[3], P, LM, LC)
+        jac = NTuple{5,Float64}[]
+        drawL() = rand(rng) < 0.25 ? T : rand(rng, [1, 2, 3, rand(rng, 4:T-1)])
+        # incremental = global; recorded = plain (bitwise); lazy interior = full evaluation (round-off)
+        LC = ML.LocalCost(P, LM, s)
+        m = newmove(LC)
+        nmv, nin, nout = 0, 0, 0
+        for trial in 1:120
+            si, i = rand(rng, units)
+            ML.prep_slong!(m, si, i, rand(rng, 1:T), drawL(), jac) || continue
+            inI = m.ilo <= m.ihi && rand(rng) < 0.5
+            t = inI ? m.ilo + rand(rng) * (m.ihi - m.ilo) : 0.02 * randn(rng)
+            Δ = ML.mv_eval!(m, t); sec = copy(ML.mv_sec(m))
+            Δc = (ML.mv_fill!(m); ML.mv_evalc!(m, t))
+            @test Δc == Δ && ML.mv_sec(m) == sec
+            lo, hi, qlo, qhi = m.ilo, m.ihi, copy(m.qlo), copy(m.qhi)
+            m.ilo, m.ihi = Inf, -Inf; fill!(m.qlo, Inf); fill!(m.qhi, -Inf)
+            Δf = ML.mv_eval!(m, t)
+            @test isapprox(Δf, Δ; atol=1e-9 * abs(Δ) + 1e-6)          # € (round-off of the full sum over the steps)
+            @test maximum(abs, ML.mv_sec(m) .- sec; init=0.0) < 1e-6 * (1 + maximum(abs, sec; init=0.0))
+            m.ilo, m.ihi = lo, hi; m.qlo .= qlo; m.qhi .= qhi
+            (lo <= t <= hi) ? (nin += 1) : (nout += 1)
+            op0 = s.parts.op
+            ML.commit_slong!(m, s.v, t)
+            ML.evaluate!(P, s)
+            @test isapprox(s.parts.op - op0, Δ; atol=1e-12 * abs(op0) + 1e-9 * abs(Δ))
+            nmv += 1
+        end
+        @info "slong moves" nmv nin nout
+        @test nmv > 60 && nin > 5 && nout > 5
+        LC2 = ML.LocalCost(P, LM, s)
+        @test isapprox(ML.cache_cost(P, LM, LC), s.parts.op; rtol=1e-10)
+        @test maximum(abs.(LC.S .- LC2.S)) < 1e-6 && maximum(abs.(LC.r .- LC2.r)) < 1e-6
+        @test maximum(maximum(abs.(a .- b)) for (a, b) in zip(LC.Y, LC2.Y)) < 1e-9
+        # the sweep keeps the caches consistent
+        LC = ML.LocalCost(P, LM, s)
+        s, st = ML.storage_long_sweep!(rng, P, LM, s; LC=LC, nmoves=16, hmin=0.0)   # threaded: cells in parallel
+        @test st[1, 1] > 0 && st[2, 1] > 0
+        @test isapprox(ML.cache_cost(P, LM, LC), s.parts.op; rtol=1e-10)
+        LC2 = ML.LocalCost(P, LM, s)
+        @test maximum(abs.(LC.S .- LC2.S)) < 1e-6 && maximum(abs.(LC.r .- LC2.r)) < 1e-6
+        # invariance of the curve: the move prepared at s(t) with the same selection, at −t,
+        # returns to s (shares and excess of the compensation kept, also across its kink), and
+        # the Jacobian of the way back is the inverse
+        LC = ML.LocalCost(P, LM, s)
+        m = newmove(LC)
+        jac2 = NTuple{5,Float64}[]
+        worst, worstj, nk = 0.0, 0.0, 0
+        for trial in 1:40
+            si, i = rand(rng, units)
+            a, Lb = rand(rng, 1:T), rand(rng, 1:T-1)
+            ML.prep_slong!(m, si, i, a, Lb, jac) || continue
+            isempty(jac) && continue
+            Q, g = jac[1][3], jac[1][4]
+            t = isodd(trial) ? 0.3 * randn(rng) * abs(Q / g) : -2.0 * Q / g      # beyond the kink of step a
+            v0 = copy(s.v)
+            lj = ML.logjac(jac, t, m)
+            s1 = deepcopy(s); LC1 = ML.LocalCost(P, LM, s1)
+            m.LC = LC1; ML.prep_slong!(m, si, i, a, Lb, jac); ML.commit_slong!(m, s1.v, t)
+            LC1 = ML.LocalCost(P, LM, ML.evaluate!(P, s1))
+            m.LC = LC1; ML.prep_slong!(m, si, i, a, Lb, jac2)
+            lj2 = ML.logjac(jac2, -t, m)
+            ML.commit_slong!(m, s1.v, -t)
+            worst = max(worst, maximum(abs, s1.v .- v0) / (1 + maximum(abs, v0)))
+            worstj = max(worstj, abs(lj + lj2))
+            nk += abs(t) > abs(Q / g)
+            m.LC = LC
+        end
+        @test nk > 5
+        @test worst < 1e-9
+        @test worstj < 1e-8
+        # the same for the storage multiscale plateaus (one unit, a cell aggregate) and tsoc: the
+        # requirement of their compensation follows the nominal storage injection (soc_qadj)
+        bpool = ML.BlockPool(P, 20)
+        worst, worstj = 0.0, 0.0
+        cellunits = Dict{Tuple{Int,Int},Vector{NTuple{2,Int}}}()
+        for (si, i) in units
+            push!(get!(cellunits, (E.parts[2][E.stors[si].bus[i]], si), NTuple{2,Int}[]), (si, i))
+        end
+        for trial in 1:40
+            kind = trial % 3
+            us = kind == 2 ? rand(rng, collect(values(cellunits))) : [rand(rng, units)]
+            Lb, b0 = rand(rng, [1, 2, 8]), rand(rng, 2:T-10)
+            function prep(LCx, jx)
+                bm = ML.blockmove(bpool.wss, bpool.wss[1], P, LM, LCx)
+                for q in 1:12; ML.clear!(bpool.wss[q]); end
+                if kind == 0
+                    wa, ws = bpool.wss[1], bpool.wss[2]
+                    ok = ML.prep_tsoc!(MersenneTwister(trial), wa, ws, P, LM, LCx, b0 - 1, b0, jx)
+                    ML.finalize!(ws, P, LM, LCx, b0); ML.finalize!(wa, P, LM, LCx, b0 - 1); ML.link_soc!(wa, ws, LM)
+                    bm.n = 2; append!(bm.τs, [b0 - 1, b0]); append!(bm.bps, wa.bps); append!(bm.bps, ws.bps)
+                    return ok ? bm : nothing
+                end
+                return ML.prep_storage_ms!(bm, P, LM, LCx, us, b0, Lb, nothing, jx) ? bm : nothing
+            end
+            LC = ML.LocalCost(P, LM, s)
+            bm = prep(LC, jac)
+            (bm === nothing || isempty(jac)) && continue
+            t = 0.5 * randn(rng) * abs(jac[1][3] / jac[1][4])
+            lj = ML.logjac(jac, t, bm)
+            s1 = deepcopy(s); ML.commit_block!(bm, s1.v, t); ML.evaluate!(P, s1)
+            bm = prep(ML.LocalCost(P, LM, s1), jac2)
+            lj2 = ML.logjac(jac2, -t, bm)
+            ML.commit_block!(bm, s1.v, -t)
+            worst = max(worst, maximum(abs, s1.v .- s.v) / (1 + maximum(abs, s.v)))
+            worstj = max(worstj, abs(lj + lj2))
+        end
+        for q in 1:12; ML.clear!(bpool.wss[q]); end
+        @test worst < 1e-9
+        @test worstj < 1e-8
+        # the walk's points: the potential is linear between consecutive points
+        worst, nl = 0.0, 0
+        for trial in 1:60
+            si, i = rand(rng, units)
+            ML.prep_slong!(m, si, i, rand(rng, 1:T), drawL(), jac) || continue
+            ML.sample_line!(rng, m, P.βv, pool.wss[1].secprev)
+            lb = ML.linebuf(m)
+            pts, cs = copy(lb.pts), copy(lb.cs)
+            for j in 1:length(pts)-1
+                pts[j+1] > pts[j] || continue
+                cm = P.βv * ML.mv_eval!(m, 0.5 * (pts[j] + pts[j+1]))
+                worst = max(worst, abs(cm - 0.5 * (cs[j] + cs[j+1])))
+            end
+            nl += 1
+        end
+        @test nl > 40
+        @test worst < 1e-6
+        # line draws against quadrature: a long plateau and a level move of the largest-energy unit
+        si, i = argmax(u -> LC.kst[u[1]][u[2]] * E.stors[u[1]].hours[u[2]], units)
+        for Lb in (T ÷ 2, T)
+            ML.prep_slong!(m, si, i, 5, Lb, jac)
+            ts = [ML.sample_line!(rng, m, P.βv, pool.wss[1].secprev) for _ in 1:40000]
+            lo, hi = quantile(ts, 0.0005), quantile(ts, 0.9995)
+            grid = range(lo - (hi - lo), hi + (hi - lo); length=20001)
+            lp = [-P.βv * ML.mv_eval!(m, x) for x in grid]
+            w = exp.(lp .- maximum(lp)); cdf = cumsum(w) ./ sum(w)
+            Fq(x) = cdf[clamp(searchsortedlast(grid, x), 1, length(grid))]
+            @test maximum(abs(mean(ts .<= x) - Fq(x)) for x in quantile(ts, 0.01:0.01:0.99)) < 0.015
+        end
+    end
+end
