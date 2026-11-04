@@ -100,7 +100,8 @@ restarts="${SLURM_RESTART_COUNT:-0}"
 } >> "$rundir/run.toml"
 
 # --- run, with the stop-file trap ------------------------------------------------------------
-trap 'touch "$rundir/STOP"' TERM USR1
+signalled=0
+trap 'touch "$rundir/STOP"; signalled=1' TERM USR1
 if [ -n "${SLURM_JOB_ID:-}" ]; then
     srun --ntasks=1 --cpus-per-task="${SLURM_CPUS_PER_TASK:-$threads}" --export=ALL "${cmd[@]}" >> "$rundir/run.log" 2>&1 &
 else
@@ -114,11 +115,13 @@ while true; do
 done
 trap - TERM USR1
 
-case $code_exit in
-    0)  status=finished ;;
-    75) status=checkpointed ;;
-    *)  status=failed ;;
-esac
+# finished; checkpointed (snapshot written, exit 75); preempted (signalled, no snapshot: Slurm
+# requeues it, or it resumes from an earlier snapshot); failed
+if   [ "$code_exit" -eq 0 ];  then status=finished
+elif [ "$code_exit" -eq 75 ]; then status=checkpointed
+elif [ "$signalled" -eq 1 ];  then status=preempted
+else status=failed
+fi
 end=$(date -Iseconds)
 
 # --- sacct of the step, outputs ---------------------------------------------------------------
@@ -141,7 +144,7 @@ IFS='|' read -r _ a_elapsed a_maxrss a_cpu a_energy <<< "${acct:-||||}"
     echo
 } >> "$rundir/run.toml"
 
-# --- archive and runs index (finished or failed runs; a checkpointed run continues) -----------
+# --- archive and runs index (finished or failed runs; checkpointed and preempted runs continue) -
 jstr() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
 line="{\"run_id\":$(jstr "$run_id"),\"campaign\":$(jstr "$campaign"),\"config\":$(jstr "$config"),\"commit\":$(jstr "$commit"),\"mode\":$(jstr "$mode"),\"job_id\":$(jstr "$jobid"),\"status\":$(jstr "$status"),\"exit\":$code_exit,\"start\":$(jstr "$start"),\"end\":$(jstr "$end"),\"restarts\":$restarts,\"cpus\":$threads,\"elapsed\":$(jstr "$a_elapsed"),\"max_rss\":$(jstr "$a_maxrss"),\"energy_j\":$(jstr "$a_energy"),\"rundir\":$(jstr "$rundir")}"
 (
@@ -149,7 +152,7 @@ line="{\"run_id\":$(jstr "$run_id"),\"campaign\":$(jstr "$campaign"),\"config\":
     echo "$line" >> "$ESM_PROJ/ledger/runs.jsonl"
     echo "$line" >> "$ESM_PROJ/campaigns/$campaign/runs.jsonl"
 ) 9>> "$ESM_PROJ/ledger/.lock"
-if [ "$status" != checkpointed ]; then
+if [ "$status" = finished ] || [ "$status" = failed ]; then
     mkdir -p "$ESM_PROJ/archive/$campaign/$run_id"
     rsync -a --exclude 'checkpoint*' --exclude STOP "$rundir/" "$ESM_PROJ/archive/$campaign/$run_id/"
 fi

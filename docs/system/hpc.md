@@ -152,8 +152,8 @@ sbatch hpc/jobs/cpu.sbatch <campaign> <config> [cpu | device | script <path> [ar
 5. sets the threads from the allocation (§5) and runs the driver under `srun`; SIGTERM
    (preemption, `scancel`) and SIGUSR1 (the templates' `--signal=B:USR1@⟨lead⟩` before the time
    limit) create the stop file;
-6. at the end completes the attempt: exit code, status (`finished`, `checkpointed` = exit 75,
-   `failed`), the `sacct` figures (elapsed, MaxRSS, CPU time, energy) and the output files;
+6. at the end completes the attempt: exit code, status (`finished`, `checkpointed` = exit 75 after a
+   snapshot, `preempted` = signalled without a snapshot, `failed`), the `sacct` figures (elapsed, MaxRSS, CPU time, energy) and the output files;
    appends one line to the runs indexes (global and the campaign's, under a lock); archives
    finished and failed runs without checkpoints;
 7. a run stopped by the time limit (exit 75) with `RESUBMIT=n > 0` submits its own
