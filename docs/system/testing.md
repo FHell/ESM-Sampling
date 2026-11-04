@@ -64,7 +64,7 @@ family needs are listed in [moves/adding_a_move.md](moves/adding_a_move.md) §4.
 | `test_comp.jl` | compensated families (`:spair`, `:tsocL`, `:tpotL` with all terms; `:tsoc`, `:tpot` without losses and lossy links), storage blocks (`:sblkL2/4`; `:sblk2/4`), cell templates (all levels): the same explicit CPU moves and uniforms, $t$ (own points, and the device sampler on the CPU walk's points), the Jacobian decision, node values, $r$ and costs after committing, the guard rate; then Reactant against arrays |
 | `test_program.jl` | the merged program (operation sweeps + capacity pass) against the two compiled calls; with `FULL=1` all families in it |
 | `test_kmove.jl`, `test_kpeak.jl`, `test_kren.jl` | capacity moves against the CPU Metropolis forms with the same proposals |
-| `test_kmove_bias.jl`, `test_bias_dev.jl` | capacity moves with the bias; device bias change against differences of `bias_term` |
+| `test_kmove_bias.jl`, `test_bias_dev.jl` | with the bias lifted to the chains' level: capacity moves with the bias against the CPU Metropolis forms (arrays and compiled); the device bias change of the same proposals against the CPU bias cache (`bias_delta_k`) and against differences of `bias_term`, the aggregates after commits against a fresh pack, and the compiled `delta_bias` against the arrays |
 | `test_driver_parts.jl` | device chain parameters = host chain parameters |
 | `test_exact_dev.jl`, `diag_exact_soc.jl` | statistical runs; off unless `RUN_STAT=1` |
 

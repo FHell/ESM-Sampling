@@ -5,9 +5,11 @@ const D = ESMDevice
 include(joinpath(@__DIR__, "mockrng.jl"))
 include(joinpath(@__DIR__, "setup_all_terms.jl"))
 Pb = ML.with_bias(P, true)
+ML.lift_bias!(Pb, L; rng=MersenneTwister(5), nsteps=1024)    # the bias at the chains' level (as after the level-0 warmup)
 rng = MersenneTwister(4)
-Pb.bias.θ .= 0.05 .* randn(rng, length(Pb.bias.θ))
+Pb.bias.θ .= 1.0 .* randn(rng, length(Pb.bias.θ))
 Pb.bias.a .= 0.5 .* randn(rng, length(Pb.bias.a)); Pb.bias.c .= 0.1 .* abs.(randn(rng, length(Pb.bias.c)))
+ML.rebuild_tables!(Pb.bias)
 sb = ML.evaluate!(Pb, copy(sL))
 units = D.kmove_units(M)
 gq = [q for (k, q) in units if k == 1]; sq = [q for (k, q) in units if k == 2]

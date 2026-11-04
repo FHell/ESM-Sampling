@@ -147,10 +147,10 @@ build the move list → per move `clear!`, `prep_*` (direction and compensation)
 (touch sets, primary breakpoints) → `sample_line!` (`walk!` over `eval_move!`) → Jacobian step
 (`logjac`) → `commit!`/`commit_block!` → `evaluate!` of the state.
 
-**Device driver** (`run_device`): `setup` → level-0 warmup at $\alpha = 1$ → `chain_start` →
-`pack`, `to_device`, `plan` → compile `run_sweeps` and `capacity_pass` → per checkpoint: sweeps,
-capacity pass, `unflat!`, `to_host!`, online bias, `monitor_quantities`, `post_record!` →
-`chains_report`.
+**Device driver** (`run_device`): `setup` → level-0 warmup and lift at $\alpha = 1$ →
+`chain_start` → `pack`, `to_device`, `plan`, `pack_bias` → compile `run_sweeps` and
+`capacity_pass` → per checkpoint: sweeps, capacity pass, `unflat!`, `to_host!`, online bias (the
+bias re-packed after a refit), `monitor_quantities`, `post_record!` → `chains_report`.
 
 ## 5. Caches
 
