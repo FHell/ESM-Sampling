@@ -112,7 +112,8 @@ concrete next steps. Update it at the end of every work session.
   requirements: the user's shell exports `UV_INDEX` (a PyTorch wheel index), Slurm passes it
   into the job, and uv used that index first (`certifi==2026.10.23` not found). `hpc/env.sh`
   now unsets the inherited uv/pip index variables.
-- Not committed or resubmitted yet.
+- Fixes ba6caee (merged a8673c8); resubmitted as jobs 2902883 (`small`) and 2902884
+  (`pypsa256`).
 
 ### 2026-11-04 (HPC: shared cache and state snapshots)
 
