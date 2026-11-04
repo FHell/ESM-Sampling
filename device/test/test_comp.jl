@@ -77,12 +77,13 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
         B, R = size(tabs[f].on)
         x = reshape(weyl(C * B * 3 * R, off[]), C, B, 3, R); off[] += length(x); x
     end for f in pl.fams))
-    learnof(f, c) = (f in (:tsocL, :tpotL, :tdirL, :tcutL, :tcutLw) || startswith(string(f), "sblkL") || startswith(string(f), "sblkgL")) ? (AM=AM, FF=FFs[c]) : nothing
+    learnof(f, c) = (f in (:tsocL, :tpotL, :tdirL, :tcutL, :tcutLw) || f == :slongL || startswith(string(f), "sblkL") || startswith(string(f), "sblkgL")) ? (AM=AM, FF=FFs[c]) : nothing
     cpumove(c, LC, f, site) = (jac = NTuple{5,Float64}[];
                               bm = cpu_move(P, LM, LC, ix, f, site; jac=jac, learn=learnof(f, c), chain=c); (bm, jac))
     ok_conf = all(D.check_conflicts(f, D.host_table(f, pl.tp, pl.sched[f]))[1] for f in pl.fams)
     # exactness of the dense form with kinked and LINEAR entries: ≤ 2 sign changes per secondary quantity
-    maxroots = Dict(f => maximum(maximum(D.root_count(D.build(Val(f), st0, pl.cp, pl.sp, tabs[f], r, pl.k)[1], pl.k))
+    maxroots = Dict(f => f in (:slong, :slongL) ? NaN :         # (a dense diagnostic: too large for the long-range moves)
+                         maximum(maximum(D.root_count(D.build(Val(f), st0, pl.cp, pl.sp, tabs[f], r, pl.k)[1], pl.k))
                                  for r in 1:size(tabs[f].on, 2)) for f in pl.fams)
     t0 = time()
     stJ, stats, scpu = mock_compare(pl, st0, LCs, ss, pl.fams, rounds, tabs, U, cpumove; P=P, β=β)
@@ -154,6 +155,12 @@ if get(ENV, "CASE", "ABC") in ("F",)
 end
 if get(ENV, "CASE", "ABC") in ("G",)
     comp_case("G (all terms; dense angle directions, LINEAR and none)"; tracking_model=true, fams=(:tdirL, :tdir0))
+end
+if get(ENV, "CASE", "ABC") in ("M",)
+    comp_case("M (no losses; long-range storage moves, T2)"; tracking_model=false, fams=(:slong,))
+end
+if get(ENV, "CASE", "ABC") in ("N",)
+    comp_case("N (all terms; long-range storage moves, LINEAR)"; tracking_model=true, fams=(:slongL,))
 end
 if get(ENV, "CASE", "ABC") in ("K",)
     comp_case("K (no losses; storage blocks and cell–class aggregates, T2)"; tracking_model=false, fams=(:sblk2, :sblkg2, :sblkg4))

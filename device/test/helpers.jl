@@ -10,6 +10,13 @@ function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], 
     τ = fam == :spair ? site[2] : (fam in D.TDIR_FAMILIES || haskey(D.SPARSE_FAMILIES, fam)) ? site[1] : site[end]; τm = mod1(τ - 1, T)   # spair: (s, τ, q1, q2); tdir: (τ, d, g)
     gi(q) = ix.gidx[q]
     sf = string(fam)
+    if fam in (:slong, :slongL)                                # long-range plateau or level move (`prep_slong!`)
+        s, a, L = site
+        si, i = ix.sidx[s]
+        m = ML.SLong(ML.MoveWS(P), ML.MoveWS(P), ML.MoveWS(P), P, LM, LC)
+        ML.prep_slong!(m, si, i, a, L, jac; κmin=κmin, learn=learn) || return nothing
+        return m
+    end
     if startswith(sf, "dshp")                                  # dispatch shape of a unit pair (`prep_adshape!`)
         L = parse(Int, replace(sf, "dshp" => ""))
         q1, q2, b0, p = site
@@ -126,6 +133,17 @@ function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], 
     return bm
 end
 
+"The term batch of the sites `rows` (every stacked array sliced along its site axis 2)."
+function sub_tb(tb::D.TermBatch, rows)
+    B = size(tb.st.z, 2)
+    sl(x) = x isa AbstractArray && ndims(x) >= 2 && size(x, 2) == B ? copy(selectdim(x, 2, rows)) :
+            x isa NamedTuple ? map(sl, x) : x
+    return D.TermBatch(nothing, nothing, nothing, nothing, nothing, Any[], tb.kinks, map(sl, tb.st))
+end
+"Term columns of a batch (the largest column count of its term types)."
+ncolumns(tb) = sum(x -> x isa NamedTuple ? maximum((size(v, 4) for v in values(x) if v isa AbstractArray && ndims(v) == 4); init=0) : 0,
+                   (tb.st.gen, tb.st.uc, tb.st.line, tb.st.soc); init=0)
+
 "Device term batch of family `fam` for the given sites (one round), on the loop state st."
 function dev_tb(pl, fam, sites, st=pl.st)
     ht = D.host_table(fam, pl.tp, [sites]); dt = D.device_table(fam, ht)
@@ -178,7 +196,7 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
                     t = 0.0
                 end
                 tc[c, b] = t
-                ML.commit_block!(bm, scpu[c].v, tfin[c, b, 1])
+                bm isa ML.SLong ? ML.commit_slong!(bm, scpu[c].v, tfin[c, b, 1]) : ML.commit_block!(bm, scpu[c].v, tfin[c, b, 1])
             end
         end
         # the CPU's points inside the CPU walk's range, the device's own kinks outside it (the CPU walk
@@ -188,13 +206,22 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
             lo, hi = extrema(pts[c, b]); o = own[c, b, :]
             vcat(pts[c, b], unique(o[(o .< lo) .| (o .> hi)]))
         end for c in 1:C, b in 1:B]
-        K = maximum(length.(merged))
-        Pc = zeros(C, B, K)
-        for c in 1:C, b in 1:B; Pc[c, b, :] .= sort(vcat(merged[c, b], zeros(K - length(merged[c, b])))); end
-        tcp = D.sample_points(tb, pl.k, Pc, u[:, :, 1:1], u[:, :, 2:2])
-        cPc = D.eval_terms(tb, pl.k, Pc; sec=false)[1]          # potential at the merged points
-        tcpf = D.jac_accept(tb, tcp, u[:, :, 3:3])[:, :, 1]
-        tcp = tcp[:, :, 1]
+        # the device sampler on the merged points, in chunks of sites (a dense evaluation: points × columns)
+        tcp, tcpf = zeros(C, B), zeros(C, B)
+        cPc = Dict{Tuple{Int,Int},Vector{Float64}}(); Pcs = Dict{Tuple{Int,Int},Vector{Float64}}()
+        nchunk = max(1, round(Int, 2e7 / (C * maximum(length.(merged)) * max(1, ncolumns(tb)))))
+        for bs in Iterators.partition(1:B, nchunk)
+            bs = collect(bs)
+            tbb = sub_tb(tb, bs)
+            K = maximum(length.(merged[:, bs]))
+            Pc = zeros(C, length(bs), K)
+            for c in 1:C, (jb, b) in enumerate(bs); Pc[c, jb, :] .= sort(vcat(merged[c, b], zeros(K - length(merged[c, b])))); end
+            tq = D.sample_points(tbb, pl.k, Pc, u[:, bs, 1:1], u[:, bs, 2:2])
+            cq = D.eval_terms(tbb, pl.k, Pc; sec=false)[1]          # potential at the merged points
+            tcpf[:, bs] .= D.jac_accept(tbb, tq, u[:, bs, 3:3])[:, :, 1]
+            tcp[:, bs] .= tq[:, :, 1]
+            for c in 1:C, (jb, b) in enumerate(bs); cPc[(c, b)] = cq[c, jb, :]; Pcs[(c, b)] = Pc[c, jb, :]; end
+        end
         for c in 1:C, (b, site) in enumerate(sites)
             stats[:n] += 1
             td, tdp = tfin[c, b, 1], tpre[c, b, 1]
@@ -216,8 +243,8 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
             # points cover the whole line), so the draws differ by construction
             if d2 > 1e-9
                 lo, hi = extrema(pts[c, b])
-                pin_ = [x for (x, p) in zip(cPc[c, b, :], Pc[c, b, :]) if lo <= p <= hi]
-                pout = [x for (x, p) in zip(cPc[c, b, :], Pc[c, b, :]) if !(lo <= p <= hi)]
+                pin_ = [x for (x, p) in zip(cPc[(c, b)], Pcs[(c, b)]) if lo <= p <= hi]
+                pout = [x for (x, p) in zip(cPc[(c, b)], Pcs[(c, b)]) if !(lo <= p <= hi)]
                 if !isempty(pout) && !isempty(pin_) && minimum(pout) < minimum(pin_) + 40
                     stats[:truncated] += 1
                     continue
