@@ -12,6 +12,17 @@ ML.lift_bias!(Pb, L; rng=MersenneTwister(5), nsteps=1024)
 rng = MersenneTwister(4)
 b.θ .= 500.0 .* randn(rng, length(b.θ))                     # a non-trivial bias (Δb̂ of nats per proposal)
 b.a .= 0.5 .* randn(rng, length(b.a)); b.c .= 0.1 .* abs.(randn(rng, length(b.c)))
+# ĥ with both branches: concave coordinates with the vertex near the start (proposals cross into the flat part)
+let κs = ML.clamped_kcoeffs(Pb.E, Pb.lk[L+1], sL.k)[1] ./ b.kscale
+    for j in 1:2:length(b.a)
+        b.c[j] = -(0.5 + rand(rng)) * 2.0
+        b.a[j] = -b.c[j] * (κs[j] + 0.05 * randn(rng) * (abs(κs[j]) + 0.1))
+    end
+    for j in eachindex(b.a)                                   # data ranges around the start: proposals leave them
+        w = 0.1 * (abs(κs[j]) + 0.1)
+        b.κlo[j], b.κhi[j] = κs[j] - w * rand(rng), κs[j] + w * rand(rng)
+    end
+end
 ML.rebuild_tables!(b)
 C = 2
 ss = [ML.evaluate!(Pb, copy(sL)) for _ in 1:C]

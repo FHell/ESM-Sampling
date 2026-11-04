@@ -34,9 +34,9 @@ In include order (`src/ESMSampling.jl`):
 | `energy.jl` | `GenGroup`, `StorGroup`, `LineTerms`, `EnergyModel`, `build_energy_model`, `energy_cost` (with gradients), `log_measure` and `log_measure_grad`, `set_co2_price!` |
 | `lp.jl` | the reference capacity-expansion LP (JuMP/HiGHS), `LPSolution`, cache, `interior_center`, `to_modes` |
 | `weather.jl` | `WeatherModel`, `DetailModel`, fit (EM, details), exact sampling, `weather_nodes`, cache; `season`, the one season definition (DJF, MAM, JJA, SON) |
-| `bias.jl` | `BiasModel` at its level $\ell_b$: tables of $F_1$, $F_2$ (`RampTable`), $\hat g$, $\hat h$, $\hat b$, sample steps of $\bar{\mathbb E}$ (`bias_samples`), `lift_bias!`, score regression (`bias_design`, `bias_observe!`), monotone QP; the incremental `BiasCache` with the capacity update `bias_delta_k` |
+| `bias.jl` | `BiasModel` at its level $\ell_b$: tables of $F_1$, $F_2$ (`RampTable`), $\hat g$, the confined per-coordinate $\hat h$ (`hcoord`), the exact measure term (`measure_fields`, `logJ_kc`), $\hat b$, sample steps of $\bar{\mathbb E}$ (`bias_samples`), `lift_bias!`, score regression (`bias_design`, `bias_observe!`), monotone QP; the incremental `BiasCache` with the capacity update `bias_delta_k` |
 | `hierarchy.jl` | `Problem`, `State`, `logtarget`, `make_state`, `bias_term` and `bias_restrict` (the state at the level of the bias), `BiasCache` of a state, `level0_potential` (pre-descent) |
-| `bias_online.jl` | `OnlineBias`, `bias_scores` (scores at the level of the bias), `online_bias_step!` |
+| `bias_online.jl` | `OnlineBias`, `bias_scores` (scores at the level of the bias), `online_bias_step!` with the refit floor (`refit_due`) and the trust region (`trust_step!`) |
 | `bias_post.jl` | `PostBias` (per-sample bias features and score statistics), `post_record!`, `post_correct` |
 | `level0.jl` | level-0 slice updates of the bias warmup (`GibbsState`, `SweepCtx`, `StepWS`, `step_term`, `update_colour!`, `update_k!`, `slice_coord!`) |
 | `local.jl` | the local exact kernel: `GridSolver`, `LocalModel`, `LocalCost`, `MoveWS`, `eval_move!`, line sampler, move preparation, `local_sweep!`, `kscale_sweep!`, `LocalKernel`, `fine_local_step`, `local_base_step`, block-move workspaces and `commit_block!` |

@@ -32,10 +32,11 @@ end
 PostBias(; scores::Bool=true) = PostBias(Vector{Float64}[], Vector{Vector{Float64}}[], Vector{Float64}[], Float64[],
                                          Vector{Float64}[], Vector{Float64}[], zeros(0, 0), Float64[], zeros(0, 0), 0, scores)
 
-"b̂ of a recorded sample (features, clamped node capacities and coefficients at level ℓ_b) under the bias `b`."
-function bias_from_record(b::BiasModel, E::EnergyModel, U1, kc, zc)
+"b̂ of a recorded sample (features, clamped node capacities and coefficients at level ℓ_b, layout `lk`) under the bias `b`."
+function bias_from_record(b::BiasModel, E::EnergyModel, lk::Layout, U1, kc, zc)
     firm = firm_capacity(E, kc)
-    return ghat_features(b, U1, firm) - b.ratio * ghat_mean_kc(b, E, kc, firm) + (1 - b.ratio) * hhat(b, zc)[1]
+    return ghat_features(b, U1, firm) - b.ratio * ghat_mean_kc(b, E, kc, firm) +
+           (1 - b.ratio) * (hhat(b, zc)[1] + logJ_kc(E, measure_fields(E, lk), kc))
 end
 
 """
@@ -57,7 +58,7 @@ function post_record!(PB::PostBias, P::Problem, s::State, q)
     if PB.scores
         if PB.nobs == 0
             nb = nθ(b)
-            PB.GtG, PB.Gts, PB.hk = zeros(nb, nb), zeros(nb), zeros(lkb.n, 5)
+            PB.GtG, PB.Gts, PB.hk = zeros(nb, nb), zeros(nb), hk_sums(lkb.n)
         end
         _, sx, sk, _ = bias_scores(P, s)
         bias_observe!(b, E, P.W, lkb, kb, Xb, sx, sk; into=PB)
@@ -77,10 +78,13 @@ function post_correct(P::Problem, PB::PostBias; monotone=nothing)
     n == 0 && return nothing
     b = P.bias
     if PB.nobs > 0
-        b.GtG .+= PB.GtG; b.Gts .+= PB.Gts; b.hk .+= PB.hk; b.nobs += PB.nobs
+        b.GtG .+= PB.GtG; b.Gts .+= PB.Gts; b.nobs += PB.nobs
+        @views b.hk[:, 1:5] .+= PB.hk[:, 1:5]
+        @views b.hk[:, 6] .= min.(b.hk[:, 6], PB.hk[:, 6]); @views b.hk[:, 7] .= max.(b.hk[:, 7], PB.hk[:, 7])
     end
     bias_update!(b; monotone=monotone)
-    bt = [bias_from_record(b, P.E, PB.U1[i], PB.kc[i], PB.zc[i]) for i in 1:n]
+    lkb = P.lk[b.ℓb+1]
+    bt = [bias_from_record(b, P.E, lkb, PB.U1[i], PB.kc[i], PB.zc[i]) for i in 1:n]
     lw = PB.bused .- bt
     w = exp.(lw .- maximum(lw))
     w ./= sum(w)
