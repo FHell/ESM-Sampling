@@ -489,12 +489,12 @@ COMPLETION_GEN = ["k0", "mc0", "ef", "ef0"]
 def write_completion(f, net, gens, bfg, nodes):
     """Model-completion datasets: line losses, link efficiencies, vintages and emissions, brownfield fleets."""
     for k in ["line_alpha", "line_length", "link_eta", "link_length"]:
-        if k in f["network"]:
+        if f"network/{k}" in f:
             del f[f"network/{k}"]
         f[f"network/{k}"] = np.asarray(net[k], dtype=float)
     gdf = pd.DataFrame(gens)
     for col in COMPLETION_GEN:
-        if col in f["generators"]:
+        if f"generators/{col}" in f:   # a fresh file has no generators group yet
             del f[f"generators/{col}"]
         f[f"generators/{col}"] = gdf[col].values.astype(float)
     if "brownfield" in f:
