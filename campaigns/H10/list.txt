@@ -1,0 +1,6 @@
+campaigns/H10/chains40_e15.toml script scripts/mixing/opmix_hpc.jl results/mixing/a1/a1_kop0_chains.jls 4 5000 slong 32
+campaigns/H10/chains40_e15.toml script scripts/mixing/opmix_hpc.jl results/mixing/a1/a1_kop0_chains.jls 4 5000 sx 32 8 0.1
+campaigns/H10/chains40_e15.toml script scripts/mixing/opmix_hpc.jl results/mixing/a1/a1_kop0_chains.jls 4 5000 sx 32 16 0.2
+campaigns/H10/chains40_e15.toml script scripts/mixing/opmix_hpc.jl results/mixing/a1/a1_kop0_chains.jls 1 5000 slong 32
+campaigns/H10/chains40_e15.toml script scripts/mixing/opmix_hpc.jl results/mixing/a1/a1_kop0_chains.jls 1 5000 sx 32 8 0.1
+campaigns/H10/chains40_e15.toml script scripts/mixing/opmix_hpc.jl results/mixing/a1/a1_kop0_chains.jls 1 5000 sx 32 16 0.2

@@ -27,6 +27,10 @@ Base.@kwdef mutable struct Config
     storage_long::Float64 = 1.0     # probability per operation sweep of the long-range storage sweep (slong, slevel; storage_long.jl)
     storage_long_moves::Int = 32    # ... long-range plateaus per storage unit and sweep
     storage_long_hours::Float64 = 24.0  # ... for the storage units with at least this many hours of storage
+    storage_xpair::Float64 = 0.1    # rate of the single-instant storage pair sxpair in the local sweep (plain-family scale; storage_cross.jl)
+    storage_xlong::Int = 8          # interval storage pairs sxlong per storage unit in the long-range storage sweep
+    storage_xpair_hops::Int = 1     # storage pairs: partner nodes within this many hops (and the unit's own node)
+    storage_xpair_ball::Int = 1     # ... flow re-routed on the nodes within this many hops of the pair
     measure::String = "utilization" # reference measure of dispatchable units: "utilization" or "physical" (MW); open choice
     storage::String = "soc"         # storage form: "soc" (state-of-charge trajectory; the only form)
     renewables::String = "load"     # renewables: "load" (output A·k; curtailment = nodal dump; the only form)
@@ -385,9 +389,11 @@ function new_sampler(P::Problem, s::State, cfg::Config)
     return ChainSampler(fill(1e-3, nkf), zeros(Int, nkf), zeros(Int, nkf), false, GibbsState(P),
                         LocalKernel(P; extra=cfg.local_extra, mode=Symbol(cfg.fine_kernel), weather=cfg.fine_weather,
                                     lmkw=(cell_power=cfg.cell_level_power, xr_partner=cfg.xloc_partner_hops,
-                                          xr_ball=cfg.xloc_ball_hops), kop=cfg.kop, wblocks=cfg.fine_weather_blocks,
-                                    wblockspan=cfg.fine_weather_block_steps,
-                                    slong=(p=cfg.storage_long, nmoves=cfg.storage_long_moves, hmin=cfg.storage_long_hours)))
+                                          xr_ball=cfg.xloc_ball_hops, sx_partner=cfg.storage_xpair_hops,
+                                          sx_ball=cfg.storage_xpair_ball, sx_hmin=cfg.storage_long_hours),
+                                    kop=cfg.kop, wblocks=cfg.fine_weather_blocks, wblockspan=cfg.fine_weather_block_steps,
+                                    slong=(p=cfg.storage_long, nmoves=cfg.storage_long_moves, hmin=cfg.storage_long_hours,
+                                           nx=cfg.storage_xlong, sx=cfg.storage_xpair)))
 end
 
 """

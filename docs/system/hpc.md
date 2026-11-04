@@ -251,15 +251,70 @@ a full-fidelity checkpoint: plain HDF5 data that survives code and Julia version
 Snapshots are also outputs: a later experiment can start from them. They stay in the run
 directory and are not archived (their size grows with the model).
 
-## 8. First steps on the cluster
+## 8. What runs in which order
 
-1. After the next push: `git -C /p/projects/coen/esm/ESM-Sampling pull` on a login node.
-2. `bash hpc/prepare_env.sh` on a login node (or `sbatch hpc/jobs/prepare.sbatch`).
-3. Build the model files: `sbatch hpc/jobs/data.sbatch small` (hours), and later
-   `sbatch hpc/jobs/data.sbatch pypsa256` (the PyPSA-Eur build, longer), then
-   `sbatch hpc/jobs/era5.sbatch` for the ERA5 variant.
-4. `bash hpc/new_campaign.sh H0`, then `sbatch hpc/jobs/h0_cpu.sbatch H0` and
-   `sbatch hpc/jobs/h0_gpu.sbatch H0`; read the logs in `/p/tmp/hellmann/esm/logs/`.
-5. H2 (reference LPs): `bash hpc/new_campaign.sh H2`, then per configuration
-   `sbatch hpc/jobs/build.sbatch H2 <config> script scripts/lp_reference.jl`, then
-   `bash hpc/collect.sh H2 'summary*'` and push.
+All commands on a login node in the clone, `cd /p/projects/coen/esm/ESM-Sampling`; logs in
+`/p/tmp/hellmann/esm/logs/`. Each step names what it needs; steps without a dependency
+between them can be submitted together.
+
+### 8.1 Once: the clone and its environment
+
+1. `git clone https://github.com/FHell/ESM-Sampling /p/projects/coen/esm/ESM-Sampling` (or let
+   `prepare_env.sh` do it).
+2. `bash hpc/prepare_env.sh` (or `sbatch hpc/jobs/prepare.sbatch`): Julia packages of both
+   projects into the shared depot, precompiled; the Python environment (`uv sync`); Reactant's
+   CUDA preferences.
+
+### 8.2 After every pull
+
+1. `git pull` (after a local push; results from the cluster go the other way, §8.5).
+2. `bash hpc/prepare_env.sh` again if `Manifest.toml`, `device/Manifest.toml` or `uv.lock`
+   changed (`git diff --stat HEAD@{1} -- Manifest.toml device/Manifest.toml uv.lock`). The
+   data jobs and `run.sh` use the clone; campaigns use their own worktree (§6), prepared when
+   they are created, so a pull never changes a running campaign.
+
+### 8.3 Once: the model files
+
+Each build appends a record to `/p/projects/coen/esm/data/processed/PROVENANCE.toml`; a
+requeued or resubmitted job continues from its kept downloads and outputs.
+
+| step | command | needs | makes | time |
+|---|---|---|---|---|
+| D1 | `sbatch hpc/jobs/data.sbatch small` | internet (QOS io) | `model.h5` (40 nodes), `model76.h5` (76 nodes), NASA POWER weather 2001–2022 | hours (limit 3 days) |
+| D2 | `sbatch hpc/jobs/data.sbatch pypsa256` | internet (QOS io); independent of D1 | the PyPSA-Eur build `esm256`, then `model256.h5` (256 nodes, NASA POWER weather) | the longest (limit 3 days) |
+| D3 | `sbatch --dependency=afterok:<job id of D2> hpc/jobs/era5.sbatch [years]` | D2 (`model256.h5` and the `esm256` resources) | `model256_era5.h5` (256 nodes, ERA5 weather) | not measured yet (limit 24 h, continues when requeued) |
+
+D1 and D2 can be submitted together. D3 reads the cluster's ERA5 folder in place on a compute
+node (§4); its years are a choice: the default 2003, 2010, 2013, 2017 is enough for a first
+full-resolution test, while the weather model is fitted on all years of the file
+(`src/weather.jl`), so a production run wants more years (2013 must always be among
+them). Each year reads about 57 GB from the shared folder, one file at a time.
+
+ERA5 is mapped onto the 256-node network only: the cut-out box (lon −10.5…25.5,
+lat 40.5…59.5) covers the 10-country region, and `model.h5` and `model76.h5` keep their NASA
+POWER weather ([data_sources.md](data_sources.md) §4–5). `model256_era5.h5` is the input of
+the full-resolution run, 256 nodes × hourly (`configs/full256_era5.toml`). Larger networks
+(512, 1024 nodes, full Europe) need a new PyPSA-Eur build and a wider box
+([roadmap.md](roadmap.md) §6).
+
+### 8.4 Campaigns
+
+The rows of [../campaigns.md](../campaigns.md) give each campaign's commands; the pattern is
+`bash hpc/new_campaign.sh <id>` (worktree at the clone's current commit), the row's `sbatch`
+lines, and `bash hpc/collect.sh <id> [<glob>]` when the runs are done. The order of the
+current ones, with what each needs:
+
+| campaign | needs | then |
+|---|---|---|
+| H0b (SIGTERM and snapshot tests) | D1: the snapshot test is skipped without `model.h5` | `bash hpc/new_campaign.sh H0b`; `sbatch hpc/jobs/h0_cpu.sbatch H0b` |
+| H10 (storage pairs) | two files copied from the local machine (`campaigns/H10/campaign.toml`, `inputs`); not D1, it uses its own copy of the model file | `bash hpc/new_campaign.sh H10`; copy the files; `sbatch --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt` |
+| H2 and the other LP campaigns | D1 for 40 and 76 nodes, D2 for 256, D3 for ERA5 | as in their rows |
+| the full-resolution run | D3 | not yet a campaign ([roadmap.md](roadmap.md) §6) |
+
+### 8.5 Results back
+
+1. `bash hpc/collect.sh <id> [<glob>]` on the cluster commits the run records and small results
+   to `campaigns/<id>/` in the clone (§6); it never pushes.
+2. The user pushes from the cluster; locally `git pull` (or fetch and merge) brings them in, and
+   the campaign's row in `campaigns.md` gets its result.
+

@@ -214,9 +214,20 @@ struct LocalModel
     xval::Vector{Vector{Vector{Float64}}}    # xloc: [n][j] angle changes
     xlkn::Vector{Vector{Vector{Int}}}        # xloc: [n][j] nodes outside the ball whose requirement changes (leak)
     xlkg::Vector{Vector{Vector{Float64}}}    # xloc: [n][j] their requirement change per unit t
+    # cross-node storage pairs (sxpair, sxlong; storage_cross.jl): partner nodes of each node (the node
+    # itself first, then its xloc-type partners) with their re-routing templates and footprints
+    sxpart::Vector{Vector{Int}}
+    sxnod::Vector{Vector{Vector{Int}}}
+    sxval::Vector{Vector{Vector{Float64}}}
+    sxlkn::Vector{Vector{Vector{Int}}}
+    sxlkg::Vector{Vector{Vector{Float64}}}
+    sxfoot::Vector{Vector{Vector{Int}}}      # [n][j] balance cells touched by the re-routing (ball, its lines' ends, leak nodes)
+    sxnodeu::Vector{Vector{NTuple{2,Int}}}   # per node: storage units with at least `sx_hmin` hours of storage (complete fields)
+    sxunits::Vector{NTuple{2,Int}}           # ... all of them
 end
 
-function LocalModel(P::Problem, ℓ::Int; cell_power::Float64=1.0, xr_partner::Int=1, xr_ball::Int=0)
+function LocalModel(P::Problem, ℓ::Int; cell_power::Float64=1.0, xr_partner::Int=1, xr_ball::Int=0,
+                    sx_partner::Int=1, sx_ball::Int=1, sx_hmin::Float64=24.0)
     E = P.E
     sys = E.sys
     lv = P.lv[ℓ+1]
@@ -275,8 +286,13 @@ function LocalModel(P::Problem, ℓ::Int; cell_power::Float64=1.0, xr_partner::I
     xpart, xnod, xval, xlkn, xlkg = complete[E.fθ] ? xloc_directions(sys, GS, nodelines; rp=xr_partner, rb=xr_ball) :
         ([Int[] for _ in 1:N], [Vector{Int}[] for _ in 1:N], [Vector{Float64}[] for _ in 1:N],
          [Vector{Int}[] for _ in 1:N], [Vector{Float64}[] for _ in 1:N])
+    sx = sx_templates(sys, GS, nodelines, cell, complete[E.fθ], (sx_partner, sx_ball) == (xr_partner, xr_ball) ?
+                      (xpart, xnod, xval, xlkn, xlkg) : nothing; rp=sx_partner, rb=sx_ball)
+    sxnodeu = [[(si, i) for (si, i) in nodestor[n] if complete[E.stors[si].fe] && E.stors[si].hours[i] >= sx_hmin] for n in 1:N]
+    sxunits = reduce(vcat, sxnodeu; init=NTuple{2,Int}[])
     return LocalModel(ℓ, lv.T, Float64(lv.h), role, bus, nodelines, cell, ncell, units, GS, comp,
-                      complete, qlev, cellunits, cellfields, qcum, genunits, nodestor, xpart, xnod, xval, xlkn, xlkg)
+                      complete, qlev, cellunits, cellfields, qcum, genunits, nodestor, xpart, xnod, xval, xlkn, xlkg,
+                      sx..., sxnodeu, sxunits)
 end
 
 "Partition level of a cell move (fixed probabilities, independent of the state)."
@@ -1910,17 +1926,23 @@ updated in parallel (a move at τ reads τ±1 only). Returns the updated state
 """
 function local_sweep!(rng, P::Problem, LM::LocalModel, s::State;
                       extra::Float64=4.0, families=nothing,
-                      atoms::Bool=true, wsets=nothing, LC=nothing, check::Bool=false, frames=nothing, adapt=nothing)
+                      atoms::Bool=true, wsets=nothing, LC=nothing, check::Bool=false, frames=nothing, adapt=nothing,
+                      sxpair::Float64=0.0)
     E = P.E
     lv = P.lv[LM.ℓ+1]
     T = lv.T
-    fl = families === nothing ? plain_families(E) : families   # (no reassignment: keeps `fams` concretely typed)
+    fl0 = families === nothing ? plain_families(E) : families
+    # storage pairs (storage_cross.jl) on top of the list, with the random moves scaled up so that
+    # every other family keeps its absolute rate
+    usx = sxpair > 0.0 && !isempty(LM.sxunits)
+    fl = usx ? vcat(fl0, [(:sxpair, sxpair)]) : fl0        # (no reassignment: keeps `fams` concretely typed)
+    xmul = usx ? sum(last.(fl)) / sum(last.(fl0)) : 1.0
     LCc = LC === nothing ? LocalCost(P, LM, s) : LC     # single assignment: not boxed in the threaded closure
     ws0 = wsets === nothing ? [MoveWS(P) for _ in 1:Threads.maxthreadid()] : wsets
     wsl::Vector{MoveWS} = length(ws0) < 2 * Threads.maxthreadid() ? vcat(ws0, [MoveWS(P) for _ in 1:Threads.maxthreadid()]) : ws0
     nth = Threads.maxthreadid()
     β = P.βv
-    nextra = round(Int, extra * E.sys.N)
+    nextra = round(Int, extra * xmul * E.sys.N)
     fams::Vector{Symbol} = first.(fl)
     wts = cumsum(last.(fl)); wts ./= wts[end]
     classes = isodd(T) ? [collect(1:2:T-1), collect(2:2:T-1), [T]] : [collect(1:2:T), collect(2:2:T)]
@@ -1968,6 +1990,9 @@ function local_sweep!(rng, P::Problem, LM::LocalModel, s::State;
                 elseif fams[kind] == :tsoc
                     prep_tsoc!(r, wa, ws, P, LM, LCc, τm, τ, jac) || continue
                     fi = kind
+                elseif fams[kind] == :sxpair
+                    prep_sxpair!(r, wa, ws, P, LM, LCc, τm, τ, jac) || continue
+                    fi = kind
                 elseif fams[kind] in (:amode, :amode0, :amodeL)
                     adapt === nothing && continue
                     lrn = fams[kind] == :amodeL ? (AM=adapt, FF=frames) : nothing
@@ -2013,7 +2038,7 @@ function local_sweep!(rng, P::Problem, LM::LocalModel, s::State;
                 link_soc!(wa, ws, LM)
                 empty!(bm.bps); append!(bm.bps, wa.bps); append!(bm.bps, ws.bps)
                 t = sample_line!(r, bm, β, ws.secprev)
-                if kind > 0 && fams[kind] in (:tpot, :tsoc, :tmode, :tline, :amode, :tcut, :acut, :xlocc) && t != 0.0 && !isempty(jac) &&
+                if kind > 0 && fams[kind] in (:tpot, :tsoc, :tmode, :tline, :amode, :tcut, :acut, :xlocc, :sxpair) && t != 0.0 && !isempty(jac) &&
                    rand(r) >= exp(min(0.0, logjac(jac, t, bm)))
                     t = 0.0                                  # Jacobian correction rejected
                 end
@@ -2307,14 +2332,15 @@ struct LocalKernel
     adapt::Dict{Int,Any}             # AdaptiveModes per level
     weather::Float64                 # fine-level weather moves: fraction of the weather coordinates per step (0: off)
     wpools::Vector{Any}
-    lmkw::NamedTuple                 # LocalModel options (cell_power, xr_partner, xr_ball)
+    lmkw::NamedTuple                 # LocalModel options (cell_power, xr_partner, xr_ball, sx_partner, sx_ball, sx_hmin)
     kop::Bool                        # capacity moves with their operation (kop.jl) after kscale and kpeak
     wblocks::Float64                 # fine weather sweeps: joint z0 block moves per sweep (weather_blocks.jl)
     wblockspan::Int                  # ... of the lengths whose window spans at most this many finest-level steps
-    slong::NamedTuple                # long-range storage sweep (storage_long.jl): (p, nmoves, hmin), p = probability per sweep
+    slong::NamedTuple                # long-range storage sweep (storage_long.jl): (p, nmoves, hmin, nx, sx), p = probability per
+                                     # sweep; nx sxlong moves per unit in it, sx the rate of sxpair in the local sweep (storage_cross.jl)
 end
 LocalKernel(P::Problem; extra=4.0, mode::Symbol=:auto, weather::Float64=0.0, lmkw::NamedTuple=NamedTuple(), kop::Bool=false,
-            wblocks::Float64=0.0, wblockspan::Int=600, slong::NamedTuple=(p=0.0, nmoves=32, hmin=24.0)) =
+            wblocks::Float64=0.0, wblockspan::Int=600, slong::NamedTuple=(p=0.0, nmoves=32, hmin=24.0, nx=0, sx=0.0)) =
     LocalKernel(Dict{Int,LocalModel}(), [MoveWS(P) for _ in 1:Threads.maxthreadid()], extra, ReentrantLock(), Dict{Int,Any}(), Any[],
                 mode == :auto ? (P.E.flow === nothing ? :local : :flow) : mode, Dict{Int,Any}(), weather, Any[], lmkw, kop, wblocks,
                 wblockspan, slong)
@@ -2370,14 +2396,15 @@ function fine_local_step(rng, P::Problem, s::State, S)
     # sweep as in the flow kernel: without it the seasonal state of charge does not relax
     # (docs/mixing_diagnosis.md §6.2); it needs no flow basis; then the long-range storage sweep
     function op!(x)
-        x, _ = local_sweep!(rng, P, LM, x; wsets=K.wsets, extra=K.extra)
+        x, _ = local_sweep!(rng, P, LM, x; wsets=K.wsets, extra=K.extra, sxpair=get(K.slong, :sx, 0.0))
         if rand(rng) < 0.5 && LM.complete[P.E.fθ]
             isempty(K.pools) && append!(K.pools, [BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
             x, _ = storage_ms_sweep!(rng, P, LM, x; pools=K.pools)
         end
         if rand(rng) < K.slong.p && LM.complete[P.E.fθ]
             isempty(K.pools) && append!(K.pools, [BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
-            x, _ = storage_long_sweep!(rng, P, LM, x; pools=K.pools, nmoves=K.slong.nmoves, hmin=K.slong.hmin)
+            x, _ = storage_long_sweep!(rng, P, LM, x; pools=K.pools, nmoves=K.slong.nmoves, hmin=K.slong.hmin,
+                                       nxmoves=get(K.slong, :nx, 0))
         end
         return x
     end

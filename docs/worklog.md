@@ -31,15 +31,15 @@ concrete next steps. Update it at the end of every work session.
   functional Φ, and whether M = 4 replicas give usable weights (self-normalised, ESS).
 - Rao-Blackwellized capacity scores (averages over the exact line conditionals) to cut the
   per-sweep score noise.
-- Cross-node storage move: store at A, release at B, flows re-routed with the `xloc` templates
-  (single-instant and `slong`-style interval forms), to avoid the node's own gas wall at the end
-  steps; after the `storage_long` merge.
-- Seasonal storage at fixed (k, x) after the long-range moves (ledger E21): the hydro seasonal
-  shape, the large PHS units and opex still drift over 1000 sweeps; their moves stop where the
-  node's own gas saturates at an end step. Next: a run of 3000 sweeps with the new kernel to see
-  whether opex settles; a compensation that spreads over the node's gas and storage units or
-  over several steps; the device port of `slong`/`slevel` and of the nominal storage
-  requirement (`soc_qadj`) for `:tsoc` and `:sblk`.
+- Seasonal storage at fixed (k, x) after the long-range moves and the storage pairs (ledger
+  E21, E27): per-unit hydro and PHS shapes relax about twice as fast with `sxpair`/`sxlong`
+  (equal CPU, chain 4), but the large hydro units and opex still drift over 3000 sweeps; the
+  walls are now the reservoirs' zero discharge at the end steps. Next: submit campaign H10
+  (`sbatch --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt`, after copying
+  the E15 chains file and checking the model hash, campaigns/H10/campaign.toml); a direction
+  whose power change is spread over several steps where the reservoir discharges (selection
+  must not depend on v); the device port of `slong`/`slevel`, of the storage pairs and of the
+  nominal storage requirement (`soc_qadj`) for `:tsoc` and `:sblk`.
 
 **Decisions taken:**
 - The learned bias is retired as part of the target (user, 2026-11-04): work proceeds on the
@@ -78,8 +78,9 @@ concrete next steps. Update it at the end of every work session.
   hellmann, project directory coen, Slurm account icone, julia/1.12.2, CUDA 13 → Reactant 13.1, ERA5 at
   /p/projects/climate_data_central/reanalysis/ERA5, clone at /p/projects/coen/esm/ESM-Sampling).
   Model files built on the cluster (`hpc/prepare_data.sh`, `hpc/jobs/data.sbatch`), no manual
-  copy. Next on the cluster: pull, prepare_env.sh, data.sbatch small, H0; then H2 with
-  `scripts/lp_reference.jl` (MGA alternatives still to be scripted).
+  copy. H0 done except the SIGTERM and snapshot-resume tests (a test bug, fixed in f89c77e):
+  rerun as H0b. Next on the cluster: the data jobs (2902883 small, 2902884 pypsa256), H0b, H10;
+  then H2 with `scripts/lp_reference.jl` (MGA alternatives still to be scripted).
 - Device driver checkpoint (after the device agent's work).
 
 **Tests and validation:**
@@ -90,6 +91,11 @@ concrete next steps. Update it at the end of every work session.
   to ~1e-5 nats between walk points on weather moves; `test_moves.jl` reports it as broken);
   an iterated secant made other lines worse. Needs a root placement that is exact where a
   quantity bends at its own root.
+- `test_moves.jl` is order-dependent: the families run in sequence on one shared state, and
+  entries placed before others changed their outcome (with the storage pairs early, `kopC`'s
+  `lo` check missed by 2.1e-12 against an absolute 1e-12, and `wz0`'s sweep accepted no move).
+  The storage pairs now run last; better: a fresh copy of the setup state per family, and
+  relative tolerances.
 - Exactness tests do not detect small invariance violations (missed the `kpeak` width and the
   storage walk bug): longer reference runs (ledger P6).
 - Sweeps to equilibrium against network size and resolution; 256-node ERA5 run (ledger P7, P8).
@@ -99,11 +105,24 @@ concrete next steps. Update it at the end of every work session.
 - `docs/reactant_design.md` mentions archived notes by bare file name in its text.
 - Worktrees to remove when done: `.claude/worktrees/gpu-timing` (GPU timing copy), and the
   locked worktrees of finished agents whose branches are merged (review 72e12c2, storage
-  09790f6; their outputs are copied to `results/review/` and `results/smix/`).
+  09790f6; their outputs are copied to `results/review/` and `results/smix/`; storage pairs
+  a2ce14d, whose raw runs are in its `results/sxmix/`).
 - Julia MCP sessions of agents restart at nice 0 with 16 threads unless every call passes the
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 
 ## Log
+
+### 2026-11-04 (storage pairs across nodes)
+
+- `sxpair` (single instant, local-sweep family, `storage_xpair` 0.1) and `sxlong` (cyclic
+  interval in the long-range storage sweep, `storage_xlong` 8 per unit): a second storage unit at
+  the same or a partner node absorbs the end-step imbalance, flows re-routed on 1-hop ball
+  templates (`storage_xpair_hops`, `storage_xpair_ball`), leak and reservoir losses compensated
+  share-preservingly (`sx_qloss`), interval pairs in rounds of disjoint footprints
+  (`src/storage_cross.jl`); entries in `test_moves.jl`, checks in `test_local.jl`; E21 protocol
+  on chain 4 for 3000 sweeps (ledger E27); the long runs as campaign H10 (`campaigns/H10/`,
+  `scripts/mixing/opmix_hpc.jl`, smoke-tested locally through `hpc/run.sh` with a stop and a
+  resume).
 
 ### 2026-11-04 (deterministic move checks)
 
@@ -117,6 +136,19 @@ concrete next steps. Update it at the end of every work session.
 - Found and fixed: `kop` without the commitment walls of its compensators (`kop_uc`); the walk's
   storage mask with commitment walls before the storage secondaries (`MoveWS.soff`). Open: the
   event walk's root placement (up to ~1e-5 nats, sampler.md §3.3).
+
+### 2026-11-04 (HPC: first data jobs fixed)
+
+- `data.sbatch small` (job 2902805) failed in `prepare_data.py`: `write_completion` checked
+  `col in f["generators"]` before a fresh file had that group (only `--augment` worked). It
+  now checks the full path (`"generators/k0" in f`). The failed run's 18 KB partial
+  `model.h5` is overwritten on rerun.
+- `data.sbatch pypsa256` (job 2902812) failed in `uv pip install` of the PyPSA-Eur
+  requirements: the user's shell exports `UV_INDEX` (a PyTorch wheel index), Slurm passes it
+  into the job, and uv used that index first (`certifi==2026.10.23` not found). `hpc/env.sh`
+  now unsets the inherited uv/pip index variables.
+- Fixes ba6caee (merged a8673c8); resubmitted as jobs 2902883 (`small`) and 2902884
+  (`pypsa256`).
 
 ### 2026-11-04 (HPC: shared cache and state snapshots)
 

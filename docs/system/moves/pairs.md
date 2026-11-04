@@ -2,8 +2,9 @@
 
 Pair moves shift injection between two units so that the nodal residuals stay fixed inside
 the boxes. This document covers the same-node pair, the cross-node pair with global flow
-re-routing, its localized versions, and the storage–generator pair across two steps. See
-[README.md](README.md) for the other families.
+re-routing, its localized versions, and the storage–generator pair across two steps. The storage pairs
+across nodes (`sxpair`, `sxlong`), which use the localized re-routing templates of `xloc`, are in
+[storage.md](storage.md). See [README.md](README.md) for the other families.
 
 ## `pair`: two units at one node
 

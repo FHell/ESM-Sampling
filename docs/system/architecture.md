@@ -44,7 +44,8 @@ In include order (`src/ESMSampling.jl`):
 | `weather_fine.jl` | fine-level weather moves, with their bias change `bias_delta_weather` |
 | `weather_blocks.jl` | joint low-frequency block moves of $z_0$: `z0_block_directions`, `z0_block_quad`, `z0_block_prepare!`, `z0_block_move!`, `z0_block_sweep!` |
 | `flowmoves.jl` | `FlowFrames`, transport families, storage multiscale sweep, `flow_sweep!`, localized modes |
-| `storage_long.jl` | long-range storage moves: `SLong` (lazy interior), `prep_slong!`, `commit_slong!`, `storage_long_sweep!` (`slong`, `slevel`) |
+| `storage_long.jl` | long-range storage moves: `SLong` (lazy interior), `prep_slong!`, `commit_slong!`, `storage_long_sweep!` (`slong`, `slevel`, then the `sxlong` phase) |
+| `storage_cross.jl` | storage pairs across nodes: templates `sx_templates` (in `LocalModel`), `sx_partner`, `sx_step!` (re-routing, leak and loss compensation), `prep_sxpair!` (local-sweep family `sxpair`), `SXLong`, `prep_sxlong!`, `commit_sxlong!`, `sx_rounds`, `storage_cross_phase!` (`sxlong`) |
 | `adaptive.jl` | `AdaptiveModes`, learned families, `adaptive_sweep!`, `kpeak_sweep!` |
 | `kop.jl` | capacity moves with their operation: `KopTerm`, `KopMove`, `kop_prepare`, `kop_logdensity`, `kop_commit!`, `kop_sweep!` |
 | `sampler.jl` | `ChainSampler` (the kernels of one chain), `quantities`, carrier scaling `scale_step`, `base_step` |
@@ -151,7 +152,7 @@ exists; then it throws `CheckpointStop`, which `run_chains` turns into the resul
 **Fine step** (`fine_local_step`): `local_model` → for the flow and adaptive kernels
 `FlowFrames` (refreshed) and `AdaptiveModes` → in random order the operation sweep
 (`local_sweep!` followed with probability 1/2 by `storage_ms_sweep!` and with probability
-`storage_long` by `storage_long_sweep!`, `flow_sweep!` or `adaptive_sweep!`) and the capacity moves
+`storage_long` by `storage_long_sweep!` with its `sxlong` phase; `local_sweep!` carries `sxpair`; `flow_sweep!` or `adaptive_sweep!`) and the capacity moves
 (`kscale_sweep!` then `kpeak_sweep!`, then `kop_sweep!` with `kop = true`) → `maybe_weather!` →
 `fine_weather_sweep!` (regimes, coordinate moves, then `z0_block_sweep!`); at
 $\alpha = 1$ one `BiasCache`, built at the start, serves the capacity and weather moves.

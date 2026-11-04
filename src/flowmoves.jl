@@ -342,16 +342,18 @@ end
 One sweep of the flow design at a complete level with (k, x) fixed: the local
 sweep with the plain and the flow families (frames refreshed if (k, x)
 changed), then with probability `p_storage` the storage multiscale sweep and with
-probability `slong.p` the long-range storage sweep (storage_long.jl).
+probability `slong.p` the long-range storage sweep (storage_long.jl, with `slong.nx` storage
+pairs `sxlong` per unit); `sxpair` at rate `slong.sx` in the local sweep (storage_cross.jl).
 """
 function flow_sweep!(rng, P::Problem, LM::LocalModel, FF::FlowFrames, s::State; wsets=nothing, pools=nothing, extra=4.0,
-                     p_storage::Float64=0.5, slong::NamedTuple=(p=0.0, nmoves=32, hmin=24.0))
+                     p_storage::Float64=0.5, slong::NamedTuple=(p=0.0, nmoves=32, hmin=24.0, nx=0, sx=0.0))
     refresh!(FF, P, s)
     fams, mult = flow_families(P.E)
-    s, st1 = local_sweep!(rng, P, LM, s; wsets=wsets, extra=extra * mult, families=fams, frames=FF)
+    s, st1 = local_sweep!(rng, P, LM, s; wsets=wsets, extra=extra * mult, families=fams, frames=FF, sxpair=get(slong, :sx, 0.0))
     st2 = zeros(2, 2)
     rand(rng) < p_storage && ((s, st2) = storage_ms_sweep!(rng, P, LM, s; pools=pools))
-    rand(rng) < slong.p && ((s, _) = storage_long_sweep!(rng, P, LM, s; pools=pools, nmoves=slong.nmoves, hmin=slong.hmin))
+    rand(rng) < slong.p && ((s, _) = storage_long_sweep!(rng, P, LM, s; pools=pools, nmoves=slong.nmoves, hmin=slong.hmin,
+                                                         nxmoves=get(slong, :nx, 0)))
     return s, st1, st2
 end
 

@@ -28,6 +28,11 @@ export REACTANT_GPU=${REACTANT_GPU:-cuda}
 export REACTANT_GPU_VERSION=${REACTANT_GPU_VERSION:-13.1}
 
 # --- Python (data preparation, PyPSA-Eur) ---------------------------------------------------
+# Package indexes from the user's shell (e.g. UV_INDEX for a PyTorch wheel index) reach the jobs
+# through Slurm's environment export and would redirect the resolution of the pinned PyPSA-Eur
+# requirements; only the default index (PyPI) and uv.lock are used here.
+unset UV_INDEX UV_INDEX_URL UV_EXTRA_INDEX_URL UV_DEFAULT_INDEX UV_FIND_LINKS UV_INDEX_STRATEGY \
+      PIP_INDEX_URL PIP_EXTRA_INDEX_URL PIP_FIND_LINKS
 export UV_CACHE_DIR=$ESM_PROJ/env/uv_cache
 export UV_PROJECT_ENVIRONMENT=$ESM_PROJ/env/venv
 export UV_PYTHON_INSTALL_DIR=$ESM_PROJ/env/uv_python               # uv-managed Python builds
