@@ -232,6 +232,18 @@ function slsite(c::MCtx, r; level::Bool=false, learn::Bool=false)
                  t -> MV.commit_slong!(m, c.s.v, t), () -> nothing)
 end
 
+"Level model of the storage pairs with every storage unit pairing (`sx_hmin = 0`: setup B has no long-duration capacity)."
+const SXLM = Dict{Symbol,Any}()
+sxLM(c::MCtx) = get!(() -> MV.LocalModel(c.P, c.s.ℓ; sx_hmin=0.0), SXLM, c.name)
+
+"Storage pair over a cyclic interval (`sxlong`): unit, partner, start and length from the site's generator."
+function sxsite(c::MCtx, r; learn::Bool=false)
+    m = MV.SXLong(c.pool.wss[1], c.pool.wss[2], c.pool.wss[3], c.P, sxLM(c), c.LC)
+    MV.prep_sxlong_random!(r, m, c.jac; learn=learn ? (AM=c.AM, FF=c.FF) : nothing) || return nothing
+    return LSite(m, c.jac, signature(m, r; extra=(m.us..., m.j, m.a, m.L, m.τi...)), (0.0, 0.0), x -> 0.0,
+                 t -> MV.commit_sxlong!(m, c.s.v, t), () -> nothing)
+end
+
 "Weather state of a context (compared after the round trip of a weather move)."
 wstate(c::MCtx) = (copy(c.s.z0), [copy(w) for w in c.s.ws], copy(c.s.xs[end]))
 
@@ -610,6 +622,12 @@ msweep(; p_shape=0.0, learn=false) = (c, rng) -> swept!(c, () -> MV.storage_ms_s
                                        p_shape=p_shape, LC=c.LC, learn=learn ? lrn(c) : nothing))
 slsweep(; level=false, learn=false) = (c, rng) -> swept!(c, () -> MV.storage_long_sweep!(rng, c.P, c.LM, c.s; nmoves=level ? 0 : 2,
                                        p_level=level ? 1.0 : 0.0, hmin=0.0, LC=c.LC, learn=learn ? lrn(c) : nothing))
+sxsweep(; learn=false) = (c, rng) -> swept!(c, () -> MV.storage_long_sweep!(rng, c.P, sxLM(c), c.s; nmoves=0, p_level=0.0,
+                                       nxmoves=2, LC=c.LC, learn=learn ? lrn(c) : nothing))
+function sxpsweep(c::MCtx, rng)
+    c.s, st = MV.local_sweep!(rng, c.P, sxLM(c), c.s; families=[(:sxpair, 1.0)], atoms=false, extra=2.0 / c.P.E.sys.N, LC=c.LC)
+    return st[1, 2]
+end
 ksweep(f) = (c, rng) -> ((s, n) = f(c, rng); c.s = s; n)
 
 const FAMILIES = [
@@ -685,6 +703,12 @@ const FAMILIES = [
      sweep=(c, rng) -> swept!(c, () -> MV.fine_weather_sweep!(rng, c.P, c.LM, c.s; frac=0.002, frac0=0.0, LC=c.LC, BC=c.BC))),
     (; name=:wblock, setups=(:A, :B), kind=:line, jac=true, known_lin=true, prep=(c, r) -> zsite(c, r),
      sweep=(c, rng) -> swept!(c, () -> MV.z0_block_sweep!(rng, c.P, c.LM, c.s, 2; LC=c.LC, BC=c.BC, lengths=(4,)))),
+    # storage pairs across nodes, last: the families run in sequence on one state, and the earlier
+    # entries keep the states they were tuned at (test_local.jl: footprints, lazy interior = full evaluation, disjoint rounds)
+    (; name=:sxpair, setups=(:A, :B), kind=:line, jac=true, sweep=sxpsweep,
+     prep=(c, r) -> stepsite(c, r, (r_, wa, ws, τm, τ, jac) -> MV.prep_sxpair!(r_, wa, ws, c.P, sxLM(c), c.LC, τm, τ, jac))),
+    (; name=:sxlong, setups=(:A, :B), kind=:line, jac=true, prep=(c, r) -> sxsite(c, r), sweep=sxsweep()),
+    (; name=:sxlongL, setups=(:B,), kind=:line, jac=true, prep=(c, r) -> sxsite(c, r; learn=true), sweep=sxsweep(learn=true)),
 ]
 
 # ---------------------------------------------------------------------------

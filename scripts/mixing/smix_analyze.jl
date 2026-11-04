@@ -5,12 +5,22 @@
 # PCs, and the split into the regional level (annual mean) and the seasonal shape (quarter
 # minus annual mean).
 #
-# Usage: julia --project=. smix_analyze.jl <base dir> <new dir> [new file prefix] [burn-in]
+# Ledger E27: the same with base and new runs of any kernel (base prefix "slong_", new "sx_"), plus
+# the seasonal shape per storage unit (Q1 − Q3 of the stored energy) and the long-range sweep's
+# move statistics.
+#
+# Usage: julia --project=. smix_analyze.jl <base dir> <new dir> [new file prefix] [burn-in] [base file prefix] [chains, e.g. 4,1] [cost ratio new/base]
 using Serialization, Statistics, LinearAlgebra, Printf
 
 base, new = ARGS[1], ARGS[2]
 prefix = length(ARGS) >= 3 ? ARGS[3] : "slong_"
 burn = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 200
+bprefix = length(ARGS) >= 5 ? ARGS[5] : ""
+chains_ = length(ARGS) >= 6 ? parse.(Int, split(ARGS[6], ",")) : [4, 1]
+# cost ratio new/base per sweep from an interleaved benchmark: replaces the recorded times (which
+# carry the machine load of the time of each run) by base 1 and new `ratio` per sweep (in base sweeps)
+ratio = length(ARGS) >= 7 ? parse(Float64, ARGS[7]) : NaN
+fixt!(r, c) = (isnan(ratio) || (r["time"] = fill(c, length(r["time"]))); r)
 
 "Integrated autocorrelation time, Sokal's automatic window (c = 5)."
 function iat(x)
@@ -59,9 +69,10 @@ function storage_summary(r, sel)
     return res
 end
 
-for c in (4, 1)
-    rb = deserialize(joinpath(base, "chain$c.jls"))
+for c in chains_
+    rb = deserialize(joinpath(base, bprefix * "chain$c.jls"))
     rn = deserialize(joinpath(new, prefix * "chain$c.jls"))
+    fixt!(rb, 1.0); fixt!(rn, ratio)
     tb, tn = cumsum(rb["time"]), cumsum(rn["time"])
     nb, nn = length(tb), length(tn)
     neq = searchsortedlast(tn, tb[end])               # sweeps of the new run within the base run's CPU time
@@ -96,6 +107,35 @@ for c in (4, 1)
                 k <= length(n.pcs) || continue
                 @printf("    %-8s PC%d base %4.1f%% τ %6.1f drift %+5.2f | new %4.1f%% τ %6.1f drift %+5.2f\n", "", k, b.pcs[k]..., n.pcs[k]...)
             end
+        end
+        # seasonal shape per unit: Q1 − Q3 of the stored energy (units with ≥ 24 h and a range)
+        if haskey(rb, "unitq") && haskey(rn, "unitq") && !isempty(rb["unitq"])
+            us = get(rn, "ustore", nothing)
+            Ub, Un = rb["unitq"][selb], rn["unitq"][seln]
+            byc = Dict{String,Vector{NTuple{4,Float64}}}()
+            for r in axes(Ub[1], 1)
+                us === nothing && continue
+                car, node, h = us[r]
+                h >= 24 || continue
+                xb = [x[r, 1] - x[r, 3] for x in Ub]; xn = [x[r, 1] - x[r, 3] for x in Un]
+                (std(xb) > 1e-9 * max(1.0, maximum(abs, xb)) && std(xn) > 1e-9 * max(1.0, maximum(abs, xn))) || continue
+                push!(get!(byc, car, NTuple{4,Float64}[]), (iat(xb), drift(xb), iat(xn), drift(xn)))
+                car == "hydro" && @printf("    hydro %-8s Q1−Q3 base τ %6.1f drift %+5.2f | new τ %6.1f drift %+5.2f\n", node, iat(xb), drift(xb), iat(xn), drift(xn))
+            end
+            for (car, v) in sort(collect(byc))
+                fin(x) = filter(isfinite, x)
+                @printf("    %-8s Q1−Q3 per unit (%d): τ med/max base %.0f/%.0f |drift| med %.2f | new %.0f/%.0f |drift| med %.2f\n", car, length(v),
+                        median(fin(first.(v))), maximum(fin(first.(v))), median(abs.(getindex.(v, 2))),
+                        median(fin(getindex.(v, 3))), maximum(fin(getindex.(v, 3))), median(abs.(getindex.(v, 4))))
+            end
+        end
+    end
+    for (lab, r) in (("base", rb), ("new", rn))
+        haskey(r, "lstats") && !isempty(r["lstats"]) || continue
+        S = sum(r["lstats"]) ./ length(r["lstats"])
+        rows = size(S, 1) >= 3 ? ("slong", "slevel", "sxlong") : ("slong", "slevel")
+        for (q, nm) in enumerate(rows)
+            S[q, 1] > 0 && @printf("  %s %-7s per sweep: %.0f moves, acceptance %.3f, %.3g MWh per move\n", lab, nm, S[q, 1], S[q, 2] / S[q, 1], S[q, 3] / S[q, 1])
         end
     end
 end

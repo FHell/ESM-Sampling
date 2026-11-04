@@ -31,15 +31,15 @@ concrete next steps. Update it at the end of every work session.
   functional Φ, and whether M = 4 replicas give usable weights (self-normalised, ESS).
 - Rao-Blackwellized capacity scores (averages over the exact line conditionals) to cut the
   per-sweep score noise.
-- Cross-node storage move: store at A, release at B, flows re-routed with the `xloc` templates
-  (single-instant and `slong`-style interval forms), to avoid the node's own gas wall at the end
-  steps; after the `storage_long` merge.
-- Seasonal storage at fixed (k, x) after the long-range moves (ledger E21): the hydro seasonal
-  shape, the large PHS units and opex still drift over 1000 sweeps; their moves stop where the
-  node's own gas saturates at an end step. Next: a run of 3000 sweeps with the new kernel to see
-  whether opex settles; a compensation that spreads over the node's gas and storage units or
-  over several steps; the device port of `slong`/`slevel` and of the nominal storage
-  requirement (`soc_qadj`) for `:tsoc` and `:sblk`.
+- Seasonal storage at fixed (k, x) after the long-range moves and the storage pairs (ledger
+  E21, E27): per-unit hydro and PHS shapes relax about twice as fast with `sxpair`/`sxlong`
+  (equal CPU, chain 4), but the large hydro units and opex still drift over 3000 sweeps; the
+  walls are now the reservoirs' zero discharge at the end steps. Next: submit campaign H10
+  (`sbatch --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt`, after copying
+  the E15 chains file and checking the model hash, campaigns/H10/campaign.toml); a direction
+  whose power change is spread over several steps where the reservoir discharges (selection
+  must not depend on v); the device port of `slong`/`slevel`, of the storage pairs and of the
+  nominal storage requirement (`soc_qadj`) for `:tsoc` and `:sblk`.
 
 **Decisions taken:**
 - The learned bias is retired as part of the target (user, 2026-11-04): work proceeds on the
@@ -104,6 +104,18 @@ concrete next steps. Update it at the end of every work session.
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 
 ## Log
+
+### 2026-11-04 (storage pairs across nodes)
+
+- `sxpair` (single instant, local-sweep family, `storage_xpair` 0.1) and `sxlong` (cyclic
+  interval in the long-range storage sweep, `storage_xlong` 8 per unit): a second storage unit at
+  the same or a partner node absorbs the end-step imbalance, flows re-routed on 1-hop ball
+  templates (`storage_xpair_hops`, `storage_xpair_ball`), leak and reservoir losses compensated
+  share-preservingly (`sx_qloss`), interval pairs in rounds of disjoint footprints
+  (`src/storage_cross.jl`); entries in `test_moves.jl`, checks in `test_local.jl`; E21 protocol
+  on chain 4 for 3000 sweeps (ledger E27); the long runs as campaign H10 (`campaigns/H10/`,
+  `scripts/mixing/opmix_hpc.jl`, smoke-tested locally through `hpc/run.sh` with a stop and a
+  resume).
 
 ### 2026-11-04 (deterministic move checks)
 

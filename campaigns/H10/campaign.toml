@@ -1,0 +1,39 @@
+# Campaign H10 (docs/campaigns.md, row H10; ledger E27 in docs/experiments.md; docs/system/hpc.md)
+id = "H10"
+commit = ""          # filled in by hpc/new_campaign.sh H10 <commit> (the merge of the storage-pair branch)
+question = """
+Do the cross-node storage pairs (sxpair, sxlong; ledger E27, docs/system/moves/storage.md) make
+the seasonal storage relax faster at fixed (k, x) than the E21 kernel (slong, slevel), at equal
+CPU: the seasonal shape Q1 − Q3 per hydro and PHS unit, the regional storage shapes, and opex,
+which still drift after 3000 sweeps locally (E27: chain 4 only)?"""
+design = """
+The E17/E21 protocol (scripts/mixing/opmix_hpc.jl, the script form of opmix.jl): chains40, from
+the E15 end states (chains 4 = heuristic start and 1 = low start of
+results/mixing/a1/a1_kop0_chains.jls), operation sweeps only (local sweep, storage multiscale
+sweep with probability 1/2, long-range storage sweep every sweep), no capacity or weather moves,
+5000 sweeps per run. Kernels per chain: slong (E21: 32 slong + 1 slevel per unit with >= 24 h),
+sx (the same plus 8 sxlong per unit and sxpair at rate 0.1: the defaults), sx16 (16 sxlong,
+sxpair 0.2). Six array tasks (campaigns/H10/list.txt), 8 cores each (cpu_array.sbatch default),
+standby and requeued; the script snapshots every 10 minutes and at the stop file and resumes
+exactly. About 0.6-1 s per sweep, so 1-1.5 h per task. Outputs per run: summary_opmix.toml
+(tau, drift, sd per quantity, cost per sweep, long-sweep move statistics), summary_trace.csv
+(per-sweep series for equal-CPU comparisons), opmix.jls (full record, archive only).
+Equal CPU: compare tau x s/sweep of runs on the same node type; the s/sweep of the summaries
+come from the same partition, so the recorded times can be used directly."""
+inputs = """
+Two files are not in the repository; copy both before submitting (untracked files are allowed
+by hpc/run.sh):
+1. the start states, results/mixing/a1/a1_kop0_chains.jls (6.4 MB, sha256 ab8d9273a6d904ba...),
+   into the campaign code:
+     mkdir -p /p/projects/coen/esm/campaigns/H10/code/results/mixing/a1
+     scp results/mixing/a1/a1_kop0_chains.jls <login>:/p/projects/coen/esm/campaigns/H10/code/results/mixing/a1/
+2. the model file the states belong to: data/processed/model.h5 with sha256 d869e9accb69c1b5...
+   (107 MB, the one of the E15/E21/E27 runs). If the cluster's model.h5 has another hash (run.toml
+   records it as data_sha), copy the local one to /p/projects/coen/esm/data/processed/model_e15.h5
+   and run a copy of configs/chains40.toml with data = "data/processed/model_e15.h5" (the states
+   do not fit another model)."""
+submit = "sbatch --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt"
+collect = "bash hpc/collect.sh H10 'summary*'"
+analysis = """
+scripts/mixing/smix_analyze.jl reads the full records (opmix.jls from the archive); the summaries
+alone give tau, drift and the cost per sweep per run; summary_trace.csv the equal-CPU opex."""
