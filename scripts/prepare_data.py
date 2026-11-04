@@ -386,14 +386,27 @@ def wind_cf(ws50, alpha):
     return np.interp(v, grid, pc)
 
 
+def smallest_root(f, lo=0.2, hi=4.0, n=39, xtol=2e-12):
+    """The smallest s in [lo, hi] with f(s) = 0: a grid scanned upwards to the first sign change,
+    then brentq in that cell. f is the window mean minus the target; for wind it is not monotone
+    in s (cut-out at 25 m/s), so a bracket on [lo, hi] can end deep in the cut-out regime, where
+    output falls as the wind rises. Without a root, the grid point of the largest f."""
+    grid = np.linspace(lo, hi, n)
+    fg = []
+    for g in grid:
+        fg.append(f(g))
+        if fg[-1] >= 0:
+            break
+    j = len(fg) - 1
+    if fg[j] < 0:
+        return grid[int(np.argmax(fg))]
+    if j == 0:
+        return grid[0]
+    return brentq(f, grid[j - 1], grid[j], xtol=xtol)
+
+
 def calibrate(series_fn, target, window):
-    f = lambda s: series_fn(s)[window].mean() - target
-    lo, hi = 0.2, 4.0
-    if f(lo) > 0:
-        return lo
-    if f(hi) < 0:
-        return hi
-    return brentq(f, lo, hi)
+    return smallest_root(lambda s: series_fn(s)[window].mean() - target)
 
 
 def hourly(df, col="utc_timestamp"):
@@ -462,7 +475,7 @@ def build_weather(raw, net, gens, snaps):
     print(f"  total mean load {load.mean(axis=0).sum() / 1e3:.1f} GW, peak {load.sum(axis=1).max() / 1e3:.1f} GW")
 
     for kind in ["onwind", "offwind", "solar"]:
-        cols, nidx, means = [], [], []
+        cols, nidx, means, miss = [], [], [], 0
         for g in gens:
             if g["weather"] != kind:
                 continue
@@ -473,11 +486,13 @@ def build_weather(raw, net, gens, snaps):
             else:
                 fn = lambda s, d=df: wind_cf(d["WS50M"].values, s)
             series = fn(calibrate(fn, g["cf_target"], window))
+            miss += abs(series[window].mean() - g["cf_target"]) > 0.005
             means.append(series.mean())
             cols.append(to_tensor(series, index))
             nidx.append(i)
         fields[kind] = (nidx, np.stack(cols, -1))
-        print(f"  {kind}: {len(nidx)} nodes, long-term mean CF {np.mean(means):.3f}")
+        print(f"  {kind}: {len(nidx)} nodes, long-term mean CF {np.mean(means):.3f}; "
+              f"{miss} miss their window target by more than 0.005 (no root on [0.2, 4])")
     for f_, (_, arr) in fields.items():
         assert not np.isnan(arr).any(), f"missing data in {f_}"
     return fields

@@ -232,7 +232,8 @@ The data flow one way, from PyPSA-Eur and the weather sources into one HDF5 file
 3. Weather: NASA POWER hourly point data at every node, 2001–2022 (50 m wind, irradiance,
    2 m temperature). Capacity factors come from a smoothed power curve and a simple PV model,
    with one scale per generator calibrated so that the mean over the network's snapshot
-   window equals the mean PyPSA-Eur `p_max_pu`. Load comes from a national temperature
+   window equals the mean PyPSA-Eur `p_max_pu` (the smallest such scale; above it, wind turbines
+   run into cut-out, [data_sources.md](data_sources.md) §2). Load comes from a national temperature
    model fitted to ENTSO-E load (hour-of-week × seasonal harmonics plus heating and cooling
    degrees), driven by node temperatures and scaled to the network's nodal mean load.
 4. Model-completion data: the line loss coefficient is $\alpha = r/v_{\rm nom}^2$ per line,

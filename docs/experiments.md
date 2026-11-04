@@ -8,6 +8,13 @@ experiment: the question, the setup, the result in one line, and where the full 
 ledger records how they were obtained. Add a row when an experiment is planned, and update it
 when it has run. Outputs under `results/` are not versioned.
 
+**Data defect in all runs up to E27.** They used `model.h5` (and E-rows on 76 or 256 nodes
+their files) with the old wind calibration ([system/data_sources.md](system/data_sources.md)
+§2): in `model.h5` 9 of 19 offwind nodes and 1 onwind node produce less as the wind rises.
+Results about the sampler (mixing, exactness, cost, relaxation times) stand; results about the
+system (capacities, in particular offwind, prices, which carriers meet from far starts) are to
+be rechecked on the rebuilt files.
+
 ## Run
 
 | id | date | question | setup | result | record |

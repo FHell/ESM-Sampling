@@ -34,9 +34,7 @@ concrete next steps. Update it at the end of every work session.
 - Seasonal storage at fixed (k, x) after the long-range moves and the storage pairs (ledger
   E21, E27): per-unit hydro and PHS shapes relax about twice as fast with `sxpair`/`sxlong`
   (equal CPU, chain 4), but the large hydro units and opex still drift over 3000 sweeps; the
-  walls are now the reservoirs' zero discharge at the end steps. Next: submit campaign H10
-  (`sbatch --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt`, after copying
-  the E15 chains file and checking the model hash, campaigns/H10/campaign.toml); a direction
+  walls are now the reservoirs' zero discharge at the end steps. Next: campaign H10, redesigned to make its start states on the cluster; a direction
   whose power change is spread over several steps where the reservoir discharges (selection
   must not depend on v); the device port of `slong`/`slevel`, of the storage pairs and of the
   nominal storage requirement (`soc_qadj`) for `:tsoc` and `:sblk`.
@@ -83,6 +81,17 @@ concrete next steps. Update it at the end of every work session.
   then H2 with `scripts/lp_reference.jl` (MGA alternatives still to be scripted).
 - Device driver checkpoint (after the device agent's work).
 
+**Data:**
+- The POWER model files carry the old wind calibration (scale 4, deep in cut-out, at 9 of 19
+  offwind nodes of `model.h5`, 49 of 64 of `model256.h5`; [system/data_sources.md](system/data_sources.md)
+  §2). Fixed in `prepare_data.py` (`smallest_root`, shared with the ERA5 build); a fixed
+  build of `model.h5` changes exactly the 10 affected columns, all of them now rising with the
+  wind. To do: replace the local files
+  once the running agents are done (they read `data/` through their worktree links), and
+  rebuild on the cluster
+  (hpc.md §8.3, D1 and D2). Then recheck the physical conclusions of the experiments (the
+  ledger's note), in particular offwind in E22–E25.
+
 **Tests and validation:**
 - Move-consistency suite `test/test_moves.jl` built and merged (2026-11-04); it replaces
   `test_exact.jl` as the gate (CLAUDE.md, testing.md, adding_a_move.md). No new statistical tests until the
@@ -111,6 +120,21 @@ concrete next steps. Update it at the end of every work session.
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 
 ## Log
+
+### 2026-11-04 (ERA5 built; wind calibration fixed)
+
+- `model256_era5.h5` built on the cluster (job 2903048, 8 minutes, 2003, 2010, 2013, 2017;
+  every generator within 0.005 of its 2013 target); its comparison with `model256.h5` showed
+  POWER offwind anti-correlated with ERA5 (−0.76). Cause, checked node by node against the POWER
+  points: `calibrate` returned the scale 4 whenever the window mean at 4 lay below the target,
+  deep in cut-out (`model.h5`: 9 of 19 offwind, 1 of 40 onwind; `model76.h5`: 10 of 51, 2 of 76;
+  `model256.h5`: 49 of 64, 33 of 256; every such node correlates negatively with its wind
+  speed). `prepare_data.py` now takes the smallest root (`smallest_root`, also used by
+  `prepare_era5.py`, identical results there) and reports target misses; a rebuild of
+  `model.h5` changes exactly the 10 affected columns.
+- `hpc.md` §8: the run book (what runs in which order). Rule (user): campaigns are
+  self-contained, every input made on the cluster by versioned scripts, no files copied
+  between the machines (CLAUDE.md, hpc.md §6); H10 is redesigned accordingly.
 
 ### 2026-11-04 (storage pairs across nodes)
 

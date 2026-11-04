@@ -6,9 +6,10 @@ results come back. The scripts are in `hpc/`; the campaigns are the rows of the 
 list ([../campaigns.md](../campaigns.md)). User `hellmann`, project directory `coen`
 (`/p/projects/coen`), Slurm account `icone`.
 
-> **Status: partial.** The scripts exist, and the CPU driver's shared cache (§4) and state
-> snapshots with resume (§7) are built; the device driver has no snapshots yet (§7). Nothing
-> has run on the cluster yet; campaign H0 is the first check.
+> **Status: partial.** The scripts exist and have run: the environment (H0: offline CPU and
+> GPU jobs), the model files and the ERA5 file. Open: the SIGTERM and snapshot-resume tests on
+> a compute node (H0b), the rebuild of the POWER model files with the corrected calibration
+> (§8.3), and snapshots of the device driver (§7).
 
 ## 1. The cluster in brief
 
@@ -192,6 +193,13 @@ of 4) and finished with exit 0.
 
 ## 6. Records, the ledger, and results through git
 
+- **Self-contained campaigns.** A campaign needs nothing but its pinned commit and the cluster's
+  own model files: every input (model files, start states, reference solutions) is made on the
+  cluster by versioned, documented scripts, either by the data preparation (§8.3) or by a step
+  of the campaign itself, submitted with a dependency on it. No files are copied between the
+  local machine and the cluster; code goes up and results come back through git. A campaign
+  does not pin a model file's hash; its run records carry the hash (`data_sha`), and the
+  provenance file says how that file was built.
 - **Run record** `run.toml` (one `[[attempt]]` per job attempt) and **runs index** lines in
   `ledger/runs.jsonl` and `campaigns/⟨id⟩/runs.jsonl`, failed runs included.
 - **Campaign:** `hpc/new_campaign.sh ⟨id⟩ [⟨commit⟩]` makes the pinned worktree, prepares it, and
@@ -284,7 +292,13 @@ requeued or resubmitted job continues from its kept downloads and outputs.
 | D2 | `sbatch hpc/jobs/data.sbatch pypsa256` | internet (QOS io); independent of D1 | the PyPSA-Eur build `esm256`, then `model256.h5` (256 nodes, NASA POWER weather) | the longest (limit 3 days) |
 | D3 | `sbatch --dependency=afterok:<job id of D2> hpc/jobs/era5.sbatch [years]` | D2 (`model256.h5` and the `esm256` resources) | `model256_era5.h5` (256 nodes, ERA5 weather) | not measured yet (limit 24 h, continues when requeued) |
 
-D1 and D2 can be submitted together. D3 reads the cluster's ERA5 folder in place on a compute
+D1 and D2 can be submitted together. Files built without the corrected wind calibration
+([data_sources.md](data_sources.md) §2; their `PROVENANCE.toml` commit has no `smallest_root`
+in `scripts/prepare_data.py`) need D1 and D2 again; a rerun of
+D2 reuses the PyPSA-Eur build and only redoes `model256.h5`. D3 does not depend on the POWER
+weather and need not be rerun. Check a build's log for the line per carrier
+`… miss their window target by more than 0.005` (zero for POWER wind is not guaranteed: some
+targets have no root on [0.2, 4]). D3 reads the cluster's ERA5 folder in place on a compute
 node (§4); its years are a choice: the default 2003, 2010, 2013, 2017 is enough for a first
 full-resolution test, while the weather model is fitted on all years of the file
 (`src/weather.jl`), so a production run wants more years (2013 must always be among
@@ -307,7 +321,7 @@ current ones, with what each needs:
 | campaign | needs | then |
 |---|---|---|
 | H0b (SIGTERM and snapshot tests) | D1: the snapshot test is skipped without `model.h5` | `bash hpc/new_campaign.sh H0b`; `sbatch hpc/jobs/h0_cpu.sbatch H0b` |
-| H10 (storage pairs) | two files copied from the local machine (`campaigns/H10/campaign.toml`, `inputs`); not D1, it uses its own copy of the model file | `bash hpc/new_campaign.sh H10`; copy the files; `sbatch --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt` |
+| H10 (storage pairs) | D1 (rebuilt); being redesigned to make its start states on the cluster | as in its row, once prepared again |
 | H2 and the other LP campaigns | D1 for 40 and 76 nodes, D2 for 256, D3 for ERA5 | as in their rows |
 | the full-resolution run | D3 | not yet a campaign ([roadmap.md](roadmap.md) §6) |
 

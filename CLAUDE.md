@@ -48,6 +48,11 @@ The other files in `docs/` are development notes, not a description of the syste
   (docs/system/hpc.md: configs, a script for `hpc/run.sh`, a list file for the array template,
   a ledger row), smoke-test them locally for a few minutes, and commit; the user runs them
   there.
+- Campaigns are self-contained and reproducible: every input (model files, start states,
+  reference solutions) is made on the cluster by versioned, documented scripts, as a step of
+  the campaign or of the data preparation (docs/system/hpc.md §6, §8). No files are copied
+  between this machine and the cluster; code goes up through git, results come back through
+  git.
 - Keep everything inside the project folder (data in `data/`, outputs in `results/`, scratch in
   your scratchpad or `results/`). Install no new external binaries.
 
