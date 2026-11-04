@@ -49,6 +49,7 @@ end
 
 function SweepCtx(P::Problem, k; ℓ::Int=0)
     E = P.E
+    P.use_bias && tables(P.bias)            # the step terms read the tables in parallel: bring them up to date first
     kc, _ = node_capacities(E, P.lk[ℓ+1], k)
     kgen = [g.kf > 0 ? kc[g.kf] : g.kfix for g in E.gens]
     kst = [s.kf > 0 ? kc[s.kf] : s.kfix for s in E.stors]
@@ -170,13 +171,12 @@ function step_term(P::Problem, ℓ::Int, ctx::SweepCtx, ws::StepWS, zv, x, z0, m
     end
     val = P.βv * cost
     ℓ == 0 || return val
-    # bias: the per-step part of ĝ (the k-only parts of b̂ are constant here)
+    # bias: the per-step part of ĝ (tables; the k-only parts of b̂ are constant here)
     if P.use_bias
         b = P.bias
-        φ, d1, d2 = ws.φ, ws.d1, ws.d2
+        b.ℓb == 0 || error("the level-0 step terms need the bias at level 0")
         u1 = (D - R) / b.Dbar
-        bias_basis!(φ, d1, d2, b, u1, u1 - ctx.firm / b.Dbar)
-        val += Δt * dot(b.θ, φ)
+        val += b.Δt * (tabval(b.tab1, u1) + tabval(b.tab2, u1 - ctx.firm / b.Dbar))
     end
     # weather prior, AR(1) term of step τ
     zτ = ws.zτ
@@ -257,7 +257,7 @@ function GibbsState(P::Problem)
     nv, nw = length(P.E.vspecs), length(P.W.specs)
     wv = fill(1e-3, nv)
     wv[P.E.fθ] = 10.0
-    GibbsState(wv, fill(0.05, nw), max.(1e-3 .* P.bias.kscale, 1.0), false, zeros(nv + nw), zeros(nv + nw),
+    GibbsState(wv, fill(0.05, nw), max.(1e-3 .* coeff_scales(P.E, P.lk[1]), 1.0), false, zeros(nv + nw), zeros(nv + nw),
                [StepWS(P) for _ in 1:Threads.maxthreadid()], 0)
 end
 

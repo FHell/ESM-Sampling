@@ -113,62 +113,97 @@ The code (`src/bias.jl`) uses the decomposition $\log Z_x(k) \approx \hat g(x,k)
 $$
 \hat b(x,k) = \hat g(x,k) - r\,\bar{\mathbb E}_{x'}\hat g(x',k) + (1-r)\,\hat h(k).
 $$
-$\bar{\mathbb E}$ is the mean over a fixed set of exact weather draws (`bias_samples`,
-default 16), drawn once when the bias is set up.
+$\hat b$ is evaluated at one level $\ell_b$ of the hierarchy, on the restriction of the state
+to that level: the anomalies $x_{\ell_b}$ of the weather and the capacity coefficients
+$k_{\ell_b}$. During the level-0 warmup $\ell_b = 0$; before the finest chains start, the bias
+is lifted to their level (below), which is spatially complete, so that $\hat b$ sees the full
+weather of the finest level and the node capacity of every unit.
 
-**Weather part.** $\hat g$ is local in time, a sum over the level-0 steps $t$ (length
-$\Delta t_0$) of a function of two system features:
+**Weather part.** $\hat g$ is local in time, a sum over the steps $t$ of level $\ell_b$ (length
+$\Delta t_b$) of two functions of two system features:
 $$
-\hat g(x,k) = \Delta t_0\sum_{t}\theta^\top\phi(u_{1,t},u_{2,t}),\qquad
+\hat g(x,k) = \Delta t_b\sum_{t}\big[F_1(u_{1,t}) + F_2(u_{2,t})\big],\qquad
 u_{1,t} = \frac{D_t - R_t(k)}{\bar D},\qquad u_{2,t} = u_{1,t} - \frac{F(k)}{\bar D}.
 $$
-$D_t$ is the system load after the data map, $R_t(k)$ the available output of every
-generator except gas (renewables at their weather availability, fixed fleets at their
-constant availability), $F(k)$ the firm capacity (gas plus storage power) and $\bar D$ the
-mean system load of the bias samples. The basis $\phi$ is $[u_1,\ \text{ramps}(u_1),\ u_2,\
-\text{ramps}(u_2)]$ with softplus ramps $s\,\mathrm{softplus}((u-\tau_j)/s)$, $s=0.05$, at
-knots $\tau_j$ in $[-1.5,0.75]$ for $u_1$ and $[-0.6,0.4]$ for $u_2$.
+$D_t$ is the system load of the level's node weather after the data map, $R_t(k)$ the available
+output of every generator except gas (renewables at their weather availability, fixed fleets at
+their constant availability) at the clamped node capacities of the level, $F(k)$ the firm
+capacity (gas plus storage power) and $\bar D$ the mean system load of the level-0 bias samples.
+The two functions are ramp sums,
+$$
+F_1(u) = \theta_{1}u + \sum_j\theta_{1j}\,s\,\mathrm{softplus}\big((u-\tau_j)/s\big),\qquad
+F_2(u) = \theta_{2}u + \sum_j\theta_{2j}\,s\,\mathrm{softplus}\big((u-\tau'_j)/s\big),
+$$
+with $s=0.05$ and knots $\tau_j$ in $[-1.5,0.75]$ for $u_1$ and $\tau'_j$ in $[-0.6,0.4]$ for
+$u_2$: the basis $\phi = [u_1,\ \text{ramps}(u_1),\ u_2,\ \text{ramps}(u_2)]$ with
+coefficients $\theta$.
+
+**Tables.** $F_1$ and $F_2$ are evaluated from tables (`RampTable`): the piecewise-linear
+interpolant of the analytic ramp sum on a uniform grid of spacing $s/$`bias_table_res` over the
+knot range widened by $20s$ on both sides, continued linearly with the end slopes beyond it
+(they equal the asymptotic slopes of the ramp sum to $e^{-20}$). The tables are rebuilt
+whenever $\theta$ changes, and they define $\hat g$ everywhere: global and incremental
+evaluation, CPU and device. A capacity move re-evaluates $\hat g$ and $\bar{\mathbb E}\hat g$ at
+every step of the level and at every sample step, which a table lookup makes cheap (an
+evaluation of the ramp sums costs 22 softplus per point). The score regression keeps the
+analytic basis for its design matrix.
+
+**Weather average.** $\bar{\mathbb E}$ is a fixed weighted set of exact weather steps at the same
+level $\ell_b$: of the $S\,T$ steps of $S$ = `bias_samples` exact draws of the weather at that
+level, $n$ = `bias_sample_steps` are kept (uniformly without replacement), each with the weight
+$\Delta t_b\,T/n$, so that $\bar{\mathbb E}\hat g = \Delta t_b\,(T/n)\sum_j[F_1+F_2]$ is an
+unbiased estimate of the mean of $\hat g$ over the draws. Because $\hat g$ is a sum of per-step
+terms, a subsample of steps suffices, and it is a fixed function of $k$, which is all the target
+needs. $\bar{\mathbb E}\hat g$ must use the same $\hat g$ (same level) as the chain's own: through
+the factor $r$ the capacity marginal sees $r(\bar{\mathbb E}\hat g + \hat h)\approx-\beta_k\,
+\mathbb E_xF_x(k)$, the expected operating cost at the investment temperature, of the order of
+the capex, and sub-daily residual-load variability (solar cycle, storage) changes $\hat g$ a
+lot between daily and 6-hourly steps.
 
 **Score identity.** Because no constraint depends on $x$ (§6), differentiating $\log Z$
 under the integral gives
 $$
 \nabla_x\log Z_x(k) = \mathbb E_{\pi(v\mid x,k)}\big[-\beta_v\nabla_x C_x(k,v)\big].
 $$
-$\hat g$ is linear in $\theta$, so $\theta$ is a least-squares fit of $\nabla_{z_0}\hat g$ to
-per-sample scores $s_z = -\beta_v\nabla_{z_0}C$ in the level-0 weather coordinates
-(accumulated normal equations, small ridge).
+$\hat g$ is linear in $\theta$, so $\theta$ is a least-squares fit of $\nabla\hat g$ to per-sample
+scores $s_x = -\beta_v\nabla C$ in the weather state coordinates of level $\ell_b$: $z_0$ and
+the detail coordinates $\xi_1,\dots,\xi_{\ell_b}$ of the level transfers (the gradient w.r.t.
+the anomalies of the level, `weather_grad_to_x`, split by the adjoints of the transfers,
+`weather_coords_grad`). The design matrix is the Jacobian of the analytic $\hat g$ in the same
+coordinates; the normal equations are accumulated with a small ridge.
 
 **Monotone-price constraint** (`bias_monotone = true`, the default). The derivative
-$\partial\hat g/\partial D_t = -\beta_v\Delta t_0\,\lambda(u_t)$ defines an implied price
+$\partial\hat g/\partial D_t = -\beta_v\Delta t_b\,\lambda(u_t)$ defines an implied price
 $\lambda$ of residual load. The fit is solved as a small convex QP under the constraints
 that $\lambda$ is non-decreasing (every ramp coefficient $\le 0$) and bounded in
 $[-c_{\rm dump}, c_{\rm shed}]$. $\hat g$ can then grow at most at physical price slopes,
-which keeps it from leaking into the load tail where there are few samples.
+which keeps it from leaking into the load tail where there are few samples. $F_1$ and $F_2$
+are then concave, so the secant slopes of their tables are non-increasing and the implied
+price of the tabulated $\hat g$ is monotone as well.
 
 **Capacity part.** $\hat h(k) = \sum_i a_i\kappa_i + \tfrac12 c_i\kappa_i^2$ is separable and
-quadratic in the scaled, clamped level-0 capacity coefficients $\kappa_i$. Per coordinate,
-the residual capacity score $s_{k,i} - \partial_i\hat g$, with $s_k = -\beta_v\partial_k C$,
-is regressed linearly on $\kappa_i$ (slope only until $\kappa_i$ has varied). Evaluating
-$\hat h$ on clamped coefficients keeps it from outweighing the capacity box penalty.
+quadratic in the scaled, clamped capacity coefficients $\kappa_i$ of the level (all
+coefficients of the level's layout). Per coordinate, the residual capacity score
+$s_{k,i} - \partial_i\hat g$, with
+$$
+s_k = -\beta_v\,\partial_k C + \partial_k\log J(k)
+$$
+(the measure term of §5, `log_measure_grad`; zero under the utilization measure and for fields
+that are not complete at the level), is regressed linearly on $\kappa_i$ (slope only until
+$\kappa_i$ has varied). Evaluating $\hat h$ on clamped coefficients keeps it from outweighing
+the capacity box penalty.
 
-**Where the bias is evaluated.** $\hat b$ is evaluated on the level-0 restriction of the
-state: the level-0 weather $z_0$ and the level-0 capacity coefficients $k_0$ (the coefficient
-prefix of $k$). Fine-level scores are carried to these coordinates by the adjoint of the
-level transfers.
+**Lift** (`lift_bias!`). The level-0 warmup learns at $\ell_b = 0$. Before the finest chains
+start, the bias is lifted to their level $L$: $\theta$ and $\bar D$ are kept; $a$, $c$ and the
+coefficient scales are mapped to the fine layout (the level-0 coefficients are the prefix of
+each field's coefficients, the new detail coefficients start at $a = c = 0$, so $\hat h$ of
+capacities without details beyond level 0 is unchanged); the regression sums are reset, so the
+fine refits use fine data only; and the sample steps of $\bar{\mathbb E}$ are redrawn at level
+$L$. The online refits of the finest warmup then fit at level $L$.
 
-> **Status: deviation.** Because $\hat b$ depends only on $(z_0, k_0)$, the weather
-> dependence of $\log Z$ through the finer weather details $w_1,\dots,w_L$, and its capacity
-> dependence through the capacity details beyond level 0, are not corrected. In those
-> directions the sampled ensemble is tilted as in $\rho_0$. Whether a richer $\hat b$ is
-> needed is open (see [roadmap.md](roadmap.md)).
-
-> **Status: deviation.** Under the physical reference measure (§5),
-> $\partial_k\log Z = \mathbb E[-\beta_v\partial_k C] + \partial_k\log J(k)$. The capacity
-> scores used for $\hat h$ contain only the first term, so $\hat h$ misses $\partial_k\log J$
-> when `measure = "physical"`.
-
-How $\hat b$ is learned during a run (level-0 warmup, online refits on a geometric
-schedule, post-correction by reweighting) is described in [sampler.md](sampler.md) §6.
+How $\hat b$ is learned during a run (level-0 warmup, lift, online refits on a geometric
+schedule, post-correction by reweighting) is described in [sampler.md](sampler.md) §7.1, and
+how the moves evaluate it incrementally in [sampler.md](sampler.md) §6–§7.
 
 ## 5. The reference measure
 
@@ -230,12 +265,15 @@ With $\alpha\in\{0,1\}$ (`use_bias`), the sampled density in the non-centered we
 coordinates is
 $$
 \log\pi(m,z_0,w,k,v) = \log p^w(m,z_0,w) - \beta_k K(k) - \beta_v C_{X(m,z_0,w)}(k,v)
- - \alpha\,\hat b(z_0,k_0) + \log J(k) + \text{const}.
+ - \alpha\,\hat b(x_{\ell_b},k_{\ell_b}) + \log J(k) + \text{const},
 $$
+with $x_{\ell_b}$, $k_{\ell_b}$ the restrictions of the weather and the capacities to the level
+of the bias (the finest level in the finest chains).
 `logtarget` in `src/hierarchy.jl` returns this quantity without the weather prior; the prior
 enters the weather moves directly (`weather_moves.jl`, `weather_fine.jl`). The cost
 $C$ is `energy_cost` in `src/energy.jl` (or its incremental form `LocalCost`/`eval_move!` in
-`src/local.jl`), $J$ is `log_measure`, and $\hat b$ is `bias_term`.
+`src/local.jl`), $J$ is `log_measure`, and $\hat b$ is `bias_term` (in the moves its incremental
+form `BiasCache`).
 
 ## 8. Temperatures
 

@@ -7,12 +7,6 @@ when done, and the affected document is updated in the same change.
 
 ## 1. Correctness of the ensemble
 
-- **Bias on the full state.** $\hat b$ depends only on the level-0 weather and capacities, so
-  the weather details and the capacity details beyond level 0 are tilted as at $\alpha = 0$.
-  Decide whether $\hat g$ and $\hat h$ need finer features
-  ([ensemble.md](ensemble.md) §4.4).
-- **Capacity scores under the physical measure.** The $\hat h$ regression omits
-  $\partial_k\log J(k)$ when `measure = "physical"` ([ensemble.md](ensemble.md) §4.4).
 - **Bias stabilization at $\alpha = 1$.** A long enough level-0 warmup before fine-level
   refits, damping or a trust region for refits (limit the change of $\hat b$ at recent
   states), regularization of $\hat h$'s slopes. A refit can currently move $\hat b$ by many

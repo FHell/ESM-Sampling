@@ -79,8 +79,8 @@ end
 """
     run_chains(cfg) -> results
 
-The CPU driver (`run`): level-0 warmup for the bias (α = 1), then `nchains`
-finest-level chains for `mlda_warmup + nsamples` sweeps each. During the warmup the
+The CPU driver (`run`): level-0 warmup for the bias (α = 1) and its lift to the
+finest level, then `nchains` finest-level chains for `mlda_warmup + nsamples` sweeps each. During the warmup the
 online bias is refitted from the pooled scores of all chains and, with `co2_cap > 0`,
 the CO₂ price is tuned to the cap; both, and the learned quantities of the adaptive
 fine kernel, are frozen for production. Production
@@ -99,6 +99,8 @@ function run_chains(cfg::Config)
         logmsg(cfg, "level-0 warmup and bias learning ($(cfg.warmup0) its)")
         s0, _, _, _ = run_level0!(rng, P, s0, S0, cfg.warmup0, cfg; learn=true, label="warmup")
         P.bias.active = false
+        lift_bias!(P, cfg)                         # the fine chains evaluate and refit the bias at their level
+        sL = evaluate!(P, sL)
     end
     K = cfg.nchains
     @assert K >= 1 "nchains must be at least 1"
@@ -181,6 +183,9 @@ function write_run_outputs(cfg::Config, P::Problem, info, samplers, pacc, raccs,
         f["bias/theta"] = P.bias.θ
         f["bias/a"] = P.bias.a
         f["bias/c"] = P.bias.c
+        f["bias/level"] = P.bias.ℓb
+        f["bias/Dbar"] = P.bias.Dbar
+        f["bias/sample_steps"] = length(P.bias.sD)
         OB === nothing || (f["bias/online_updates"] = OB.updates)
         isempty(μs) || (f["co2/price_trace"] = μs; f["co2/price"] = P.E.co2[])
         for (c, S) in enumerate(samplers), (ℓ, AM) in S.loc.adapt   # learned quantities of the adaptive fine kernel
@@ -256,6 +261,7 @@ function chains_report(cfg::Config, P::Problem, names, traces, kinds, PB, nwarm,
         f["convergence/thresholds"] = [cfg.rhat_max, cfg.ess_min, cfg.mcse_max, cfg.rhat_screen]
         if pc !== nothing
             f["post/weights"] = pc.w; f["post/ess"] = pc.ess; f["post/Q_weighted"] = pc.Qw
+            f["post/bias_used"] = PB.bused; f["post/bias_refit"] = pc.btilde
         end
     end
     logmsg(cfg, @sprintf("wrote %s  [total %.0fs]", cfg.out, time() - t0))

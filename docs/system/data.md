@@ -48,6 +48,7 @@ h5py). `quantity_names` names the rows.
 | `convergence/warmup_detected`, `window_start`, `converged`, `thresholds` | run-level verdict and the thresholds used |
 | `convergence/post_weight_ess_ok` | 1 if the post-correction weight ESS is at least 30 % of the samples (or there is no post-correction) |
 | `post/weights`, `post/ess`, `post/Q_weighted` | bias post-correction ($\alpha = 1$) |
+| `post/bias_used`, `post/bias_refit` | $\hat b$ in use and the refitted $\tilde b$ at every production sample (the log weights are their difference) |
 
 **CPU driver only** (`write_run_outputs`, appended to the same file):
 
@@ -55,7 +56,8 @@ h5py). `quantity_names` names the rows.
 |---|---|
 | `prices/sampled`, `prices/lp` | sampled prices per node and finest step over all chains (€/MWh); LP duals when the reference LP (`init = "lp"`) is at the finest level |
 | `prices/regions/<country\|system>/{mean,load_weighted,p_shed,p_dump}/{mean,se,trace}`, `regions`, `seasons` | sampled prices and shortage/surplus frequencies per region and meteorological season |
-| `bias/theta`, `bias/a`, `bias/c`, `bias/online_updates` | bias coefficients (after the post-correction refit when `bias_post`) and the observation counts of the online refits |
+| `bias/theta`, `bias/a`, `bias/c`, `bias/online_updates` | bias coefficients (after the post-correction refit when `bias_post`; `a`, `c` per capacity coefficient of the bias level) and the observation counts of the online refits |
+| `bias/level`, `bias/Dbar`, `bias/sample_steps` | level of the bias (0-based; the finest after the lift), the load normalization $\bar D$, the number of sample steps of $\bar{\mathbb E}$ |
 | `co2/price`, `co2/price_trace` | tuned CO₂ price and its warmup trace (`co2_cap > 0`) |
 | `adaptive/chain<c>/level<ℓ>/updates`, `transport_modes`, `shapes/<kind>_L<L>_season<s>`, `response/{nodes,beta_deficit,beta_surplus,units_per_node}` | learned quantities of the adaptive kernel per chain (season `s`: DJF, MAM, JJA, SON) |
 | `weather/transition`, `weather/em_loglik` | fitted regime transition matrix and EM trace |

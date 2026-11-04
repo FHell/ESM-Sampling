@@ -17,7 +17,9 @@
 #   (requirement-tracking kinks), so a weather move is not blocked by the balance.
 #   The line conditional with the Gaussian prior (w: N(0,1); z0: the VAR terms of
 #   its step and the next) is sampled exactly (truncated Gaussian segments); the T2
-#   Jacobian and, for z0, the bias change enter an independence Metropolis step.
+#   Jacobian and, at α = 1, the bias change enter an independence Metropolis step.
+#   The bias is evaluated at the finest level, so every weather coordinate moves it;
+#   its change is local to the steps of the move's window (bias cache, bias.jl).
 
 "Windowed change of the standardized anomalies at weather level ℓ (0-based): steps a..b."
 struct WDelta
@@ -342,9 +344,53 @@ function prep_weather_move!(bm::BlockMove, P::Problem, LM::LocalModel, LC::Local
     return bm
 end
 
-"One exact weather coordinate move (innovation of level ℓ ≥ 1, or z0 with ℓ = 0). Returns t."
+"""
+Change of b̂ (of ĝ: Ē ĝ and ĥ do not depend on x) when the weather move `bm` is taken to t:
+per step of its window, D_t and R_t change by the data-mapped weather entries. With
+`commit = true` the cache follows the move (per-step values only; `bias_resum!` after).
+"""
+function bias_delta_weather(BC::BiasCache, b::BiasModel, E::EnergyModel, bm::BlockMove, t::Float64; commit::Bool=false)
+    D̄ = b.Dbar
+    fd = BC.firm / D̄
+    dg = 0.0
+    @inbounds for q in 1:bm.n
+        ws = bm.wss[q]
+        isempty(ws.wf) && continue
+        τ = bm.τs[q]
+        dD, dR = 0.0, 0.0
+        for e in eachindex(ws.wf)
+            f, pos = ws.wf[e], ws.wpos[e]
+            X0 = ws.wX0[e]
+            X1 = X0 + t * ws.wdX[e]
+            if f == 1                                   # load
+                dD += max(X1, 0.0) - max(X0, 0.0)
+            else                                        # availability, times the non-gas capacity on it
+                a1 = clamp(X1, 0.0, 1.0)
+                dR += BC.Kw[f][pos] * (a1 - clamp(X0, 0.0, 1.0))
+                if commit
+                    for (gi, g) in enumerate(E.gens)
+                        (g.wf == f && g.carrier != "gas") && (BC.At[gi][τ, pos] = a1)
+                    end
+                end
+            end
+        end
+        D1, R1 = BC.Dx[τ] + dD, BC.Rx[τ] + dR
+        u1 = (D1 - R1) / D̄
+        f1, f2 = tabval(BC.tab1, u1), tabval(BC.tab2, u1 - fd)
+        dg += f1 + f2 - BC.F1x[τ] - BC.F2x[τ]
+        commit && (BC.Dx[τ] = D1; BC.Rx[τ] = R1; BC.U1x[τ] = u1; BC.F1x[τ] = f1; BC.F2x[τ] = f2)
+    end
+    return b.Δt * dg
+end
+
+"""
+One exact weather coordinate move (innovation of level ℓ ≥ 1, or z0 with ℓ = 0). Returns t.
+At α = 1 (`BC` the bias cache of the state) the exact draw of the bias-free line
+conditional is followed by a Metropolis correction with e^{−Δb̂}; on acceptance the cache
+follows the move (per-step values; the sums are recomputed by the caller).
+"""
 function weather_coord_move!(rng, P::Problem, LM::LocalModel, LC::LocalCost, s::State, bm::BlockMove, jac,
-                             secprev, ℓ::Int, q::Int; comp::Bool=true, bias::Bool=true)
+                             secprev, ℓ::Int, q::Int; comp::Bool=true, BC=nothing)
     W = P.W
     L = s.ℓ
     if ℓ == 0
@@ -374,16 +420,10 @@ function weather_coord_move!(rng, P::Problem, LM::LocalModel, LC::LocalCost, s::
     t = sample_line!(rng, bm, P.βv, secprev; quad=quad)
     t == 0.0 && return 0.0
     logα = isempty(jac) ? 0.0 : logjac(jac, t, bm)
-    if ℓ == 0 && bias && P.use_bias
-        k0 = k_at0(P, L, s.k)
-        b0 = bias_term(P, k0, s.z0)
-        s.z0[iz] += t
-        b1 = bias_term(P, k0, s.z0)
-        s.z0[iz] -= t
-        logα -= b1 - b0
-    end
+    BC === nothing || (logα -= bias_delta_weather(BC, P.bias, P.E, bm, t))
     (isfinite(logα) && log(rand(rng)) < logα) || return 0.0
     commit_block!(bm, s.v, t)
+    BC === nothing || bias_delta_weather(BC, P.bias, P.E, bm, t; commit=true)
     if ℓ == 0
         s.z0[iz] += t
         s.xs[1] === s.z0 || (s.xs[1][iz] += t)
@@ -400,19 +440,22 @@ end
 
 Weather moves at the level of `s` (complete spatial level): the centered regime
 update, then `frac` of the innovation coordinates of every level ℓ = 1..L and `frac0`
-of the level-0 coordinates (random draws), each an exact compensated line move.
-Moves in coarse blocks j with equal j mod M at their level are independent (their
-windows at the finest level are separated; M from the spread of the windows) and run in parallel; z0 moves with the
-learned bias run in sequence (the bias couples all steps).
+of the level-0 coordinates (random draws), each an exact compensated line move with,
+at α = 1, the Metropolis bias correction from the bias cache `BC` (built from `s` if
+not given; it follows the accepted moves). Moves in coarse blocks j with equal j mod M
+at their level are independent (their windows at the finest level are separated; M
+from the spread of the windows; the bias change of a move is local to its window) and
+run in parallel.
 """
 function fine_weather_sweep!(rng, P::Problem, LM::LocalModel, s::State; frac::Float64=0.05, frac0::Float64=0.05,
-                             comp::Bool=true, pools=nothing, LC=nothing)
+                             comp::Bool=true, pools=nothing, LC=nothing, BC=nothing)
     W = P.W
     L = s.ℓ
     @assert LM.ℓ == L
     s = copy(s)
     fine_regime_step!(rng, P, s)
     LC = LC === nothing ? LocalCost(P, LM, s) : LC
+    BC = (P.use_bias && BC === nothing) ? BiasCache(P, s) : BC
     nth = Threads.maxthreadid()
     # pool size: the longest window at the finest level (z0 at a level-0 step)
     lays = W.lays
@@ -432,16 +475,6 @@ function fine_weather_sweep!(rng, P::Problem, LM::LocalModel, s::State; frac::Fl
         nm == 0 && continue
         qs = rand(rng, 1:ncoord, nm)
         blk(q) = ℓ == 0 ? (q - 1) ÷ n0(W) + 1 : innovation_coord(W, ℓ, q)[5]
-        if ℓ == 0 && P.use_bias                  # sequential (the bias couples all steps)
-            pool = pools[1]
-            bm = BlockMove(pool.wss, 0, Int[], P, LM, LC, Float64[], Float64[])
-            jac, sp = NTuple{5,Float64}[], Float64[]
-            for q in qs
-                t = weather_coord_move!(rng, P, LM, LC, s, bm, jac, sp, 0, q; comp=comp)
-                stats[1, 1] += 1; stats[1, 2] += t != 0.0
-            end
-            continue
-        end
         byblock = Dict{Int,Vector{Int}}()
         for q in qs
             push!(get!(byblock, blk(q), Int[]), q)
@@ -464,7 +497,7 @@ function fine_weather_sweep!(rng, P::Problem, LM::LocalModel, s::State; frac::Fl
                     local bmt = BlockMove(pool.wss, 0, Int[], P, LM, LC, Float64[], Float64[])
                     local jact, spt = NTuple{5,Float64}[], Float64[]
                     for q in byblock[blocks[bi]]
-                        local tt = weather_coord_move!(r, P, LM, LC, s, bmt, jact, spt, ℓ, q; comp=comp, bias=false)
+                        local tt = weather_coord_move!(r, P, LM, LC, s, bmt, jact, spt, ℓ, q; comp=comp, BC=BC)
                         cnt[bi, 1] += 1; cnt[bi, 2] += tt != 0.0
                     end
                 finally
@@ -474,5 +507,6 @@ function fine_weather_sweep!(rng, P::Problem, LM::LocalModel, s::State; frac::Fl
             stats[ℓ+1, :] .+= vec(sum(cnt; dims=1))
         end
     end
+    BC === nothing || bias_resum!(BC, P.bias)
     return evaluate!(P, s), stats
 end

@@ -4,8 +4,9 @@
 #
 # with x_ℓ = (m, z0, w₁…w_ℓ). All constraints are priced in C. States cache
 # L_ℓ = log π_ℓ − log p^w_ℓ (the weather prior enters the moves that change the
-# weather). The bias is learned at level 0 and evaluated on the level-0
-# restriction of (x, k) at all levels.
+# weather). The bias is evaluated at its level ℓ_b (level 0 during the level-0
+# warmup, the finest level after the lift) on the restriction of (x, k) to that
+# level, so states at levels ℓ ≥ ℓ_b can be evaluated.
 
 struct Problem
     E::EnergyModel
@@ -51,17 +52,41 @@ with_bias(P::Problem, use_bias::Bool) =
 
 k_at0(P::Problem, ℓ, k) = restrict_to(k, P.lk, P.trk, P.E.kspecs, ℓ, 0)
 
-function bias_term(P::Problem, k0, z0)
-    P.use_bias || return 0.0
-    X0 = weather_nodes(P.W, 0, z0)
-    return bias_value(P.bias, P.E, P.lk[1], k0, X0, Float64(P.levels[1][2]))
+"Capacity coefficients and weather anomalies of a level-ℓ state restricted to the level ℓ_b of the bias."
+function bias_restrict(P::Problem, ℓ::Int, k, x, z0)
+    ℓb = P.bias.ℓb
+    ℓ >= ℓb || error("the bias is evaluated at level $ℓb, which a level-$ℓ state does not resolve")
+    kb = ℓ == ℓb ? k : restrict_to(k, P.lk, P.trk, P.E.kspecs, ℓ, ℓb)
+    xb = ℓ == ℓb ? x : (ℓb == 0 ? z0 : restrict_to(x, P.W.lays, P.W.trs, P.W.specs, ℓ, ℓb))
+    return kb, xb
 end
+
+"b̂ of a level-ℓ state with capacity coefficients k, anomalies x of level ℓ and level-0 anomalies z0 (0 at α = 0)."
+function bias_term(P::Problem, ℓ::Int, k, x, z0)
+    P.use_bias || return 0.0
+    kb, xb = bias_restrict(P, ℓ, k, x, z0)
+    ℓb = P.bias.ℓb
+    return bias_value(P.bias, P.E, P.lk[ℓb+1], kb, weather_nodes(P.W, ℓb, xb))
+end
+bias_term(P::Problem, s::State) = bias_term(P, s.ℓ, s.k, s.xs[end], s.z0)
+
+"Incremental bias cache of a state at the level ℓ_b of the bias (bias.jl; nothing at α = 0)."
+function BiasCache(P::Problem, s::State)
+    P.use_bias || return nothing
+    s.ℓ == P.bias.ℓb || error("the bias is evaluated at level $(P.bias.ℓb), the state is at level $(s.ℓ): " *
+                             "lift the bias to the chains' level first (lift_bias!)")
+    return BiasCache(P.bias, P.E, P.lk[s.ℓ+1], s.k, weather_nodes(P.W, s.ℓ, s.xs[end]))
+end
+
+"Lift the bias to level ℓ (bias.jl `lift_bias!`), with sample steps drawn from `rng`."
+lift_bias!(P::Problem, ℓ::Int; rng, nsamples::Int=P.bias.nsamp, nsteps::Int=4096) =
+    lift_bias!(P.bias, P.E, P.W, P.lk, P.trk, ℓ; rng=rng, nsamples=nsamples, nsteps=nsteps)
 
 "L_ℓ = log π_ℓ − log p^w_ℓ, and the cost parts."
 function logtarget(P::Problem, ℓ::Int, k, v, x, z0)
     Xn = weather_nodes(P.W, ℓ, x)
     parts = energy_cost(P.E, P.lk[ℓ+1], P.lv[ℓ+1], k, v, Xn)
-    b = bias_term(P, k_at0(P, ℓ, k), z0)
+    b = bias_term(P, ℓ, k, x, z0)
     return -P.βk * parts.capex - P.βv * parts.op - b + log_measure(P.E, P.lk[ℓ+1], P.lv[ℓ+1], k), parts
 end
 
@@ -90,7 +115,6 @@ end
 function level0_potential(P::Problem, m)
     lk, lv, lw = P.lk[1], P.lv[1], P.W.lays[1]
     nk, nv = lk.n, lv.n
-    Δt = Float64(P.levels[1][2])
     return function (q)
         k = view(q, 1:nk)
         v = view(q, nk+1:nk+nv)
@@ -102,7 +126,8 @@ function level0_potential(P::Problem, m)
         gk = P.βk .* gkc .+ P.βv .* gko
         gXs = [P.βv .* g for g in gX]
         if P.use_bias
-            b, gbX, gbk = bias_value(P.bias, P.E, lk, collect(k), Xn, Δt; grad=true)
+            P.bias.ℓb == 0 || error("level0_potential needs the bias at level 0")
+            b, gbX, gbk = bias_value(P.bias, P.E, lk, collect(k), Xn; grad=true)
             U += b
             gk .+= gbk
             for f in eachindex(gXs)

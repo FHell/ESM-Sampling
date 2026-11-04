@@ -136,6 +136,8 @@ function device_setup(cfg::ML.Config; families=FAMILIES_FAST)
         ML.logmsg(cfg, "level-0 warmup and bias learning ($(cfg.warmup0) its)")
         s0, _, _, _ = ML.run_level0!(rng, P, s0, S0, cfg.warmup0, cfg; learn=true, label="warmup")
         P.bias.active = false
+        ML.lift_bias!(P, cfg)                       # as the CPU driver: bias at the chains' level
+        sL = ML.evaluate!(P, sL)
     end
     K = cfg.nchains
     kinds = [cfg.chain_starts[mod1(c, length(cfg.chain_starts))] for c in 1:K]
