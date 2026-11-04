@@ -37,6 +37,7 @@ The other files are working notes, not a description of the system; where they a
 `docs/system/` disagree, `docs/system/` and the code win:
 
 - [worklog.md](worklog.md): the work log by date and the open to-dos not yet tackled.
+- [retired.md](retired.md): approaches tried and retired, each with the reason.
 - [experiments.md](experiments.md): the ledger of experiments run and planned, with the
   question, setup, result and record of each.
 - [archive/](archive/README.md): development notes superseded by `docs/system/` (designs,

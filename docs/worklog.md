@@ -15,7 +15,8 @@ concrete next steps. Update it at the end of every work session.
   merge, rewrite ensemble.md §4 and sampler.md §6–7 for the new design, and retire the bias
   code (ĝ, ĥ, tables, lift, refits, trust region, post-correction, level-0 warmup,
   `device/src/bias_dev.jl`) and the capacity moves `kscale`/`kpeak`/`kop` as targets of the
-  α = 0 density.
+  α = 0 density; record the learned bias in [retired.md](retired.md) with the reason (the
+  precision it needs at r = 1e-3, ledger E16).
 - An explicit, controllable tilt of the weather toward expensive years (stress tests), as a
   weight on the refresh draws.
 - Rao-Blackwellized capacity scores (averages over the exact line conditionals) to cut the
@@ -94,7 +95,7 @@ concrete next steps. Update it at the end of every work session.
 
 **Docs**
 - Superseded notes archived in `docs/archive/` (5037234); the experiment ledger (e7bb129); this
-  work log.
+  work log; the list of retired approaches (`docs/retired.md`).
 
 ### Before 2026-11-04
 
