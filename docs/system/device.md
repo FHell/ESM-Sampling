@@ -222,7 +222,7 @@ peak-set moves of the dispatchable units (`kpeak_mh_loop`, absorb variant). All 
 with fixed-scale proposals (`kmove_sigma` for the log-scale, `kpeak_sigma` times the unit's
 start capacity, at least 100 MW, for $\delta$), `kmove_nprop` proposals per unit, units in
 sequence, chains in parallel; proposal normals and uniforms are drawn on the host. At
-$\alpha = 1$ the bias, lifted to the chains' level ([ensemble.md](ensemble.md) §4.4), changes
+$\alpha = 1$ the bias, lifted to the chains' level ([../archive/learned_bias.md](../archive/learned_bias.md) §4.4), changes
 incrementally from per-chain aggregates (`pack_bias` from the CPU bias cache; `BiasDev`,
 `BiasState`): the features $u_1,u_2$ per finest step $(C,T_L)$ of the chain's weather and per
 sample step of $\bar{\mathbb E}$, their sums of $F_1+F_2$, the raw node capacities of the
@@ -287,6 +287,7 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | dense transport modes (`tmode`, `amode`) | missing; low rate, may be dropped |
 | adaptation on the host with table uploads (modes, shapes, response coefficients); learned `kpeak` | missing |
 | weather moves with compensation as a device family | missing |
+| replica–Langevin sampler ([sampler.md](sampler.md) §11): the weather process per replica (pCN, regime windows), the compensated initialisation, the capacity scores, the Langevin update, the dispatch-following maps (fixed output, kop curve), the gate and the probe; replicas as a batch dimension | missing; CPU reference `src/replicas.jl` with explicit-noise building blocks (`pcn_weather`, `regime_window`, `langevin_update`) |
 | fused kernels, FP32 intermediates, tiling, multi-GPU, full-Europe memory plan | missing |
 
 **Reactant constraints met so far.** Inside `@trace for`, every captured scalar becomes

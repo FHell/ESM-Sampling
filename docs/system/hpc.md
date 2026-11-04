@@ -176,20 +176,30 @@ sbatch hpc/jobs/cpu.sbatch <campaign> <config> [cpu | device | script <path> [ar
    restart count, start;
 5. sets the threads from the allocation (§5) and runs the driver under `srun`; SIGTERM
    (preemption, `scancel`) and SIGUSR1 (the templates' `--signal=B:USR1@⟨lead⟩` before the time
-   limit) create the stop file;
+   limit) create the stop file. `B:` sends the signal to the batch shell only, so the templates
+   `exec` the wrapper: it is the batch shell;
 6. at the end completes the attempt: exit code, status (`finished`, `checkpointed` = exit 75 after a
-   snapshot, `preempted` = signalled without a snapshot, `failed`), the `sacct` figures (elapsed, MaxRSS, CPU time, energy) and the output files;
+   snapshot, `preempted` = signalled without a snapshot, `failed`), the signal (`TERM`, `USR1`
+   or none), the `sacct` figures (elapsed, MaxRSS, CPU time, energy) and the output files;
    appends one line to the runs indexes (global and the campaign's, under a lock); archives
    finished and failed runs without checkpoints;
-7. a run stopped by the time limit (exit 75) with `RESUBMIT=n > 0` submits its own
-   continuation (afterany dependency, same run id, `n−1` left); a preempted run is requeued by
-   Slurm instead. Runs longer than 24 hours are such chains, not `medium`/`long` jobs (`long`
-   allows only 32 cores per job).
+7. a run stopped by the time limit (SIGUSR1, exit 75) submits its own continuation
+   automatically: the same template (`ESM_JOB_SCRIPT`, the campaign worktree's copy) with the
+   same arguments (`ESM_JOB_ARGS`), array index (`ESM_JOB_ARRAY`), cores and memory, the same
+   run id, an afterany dependency on the stopped job; at most `RESUBMIT` in a row (default
+   `ESM_MAX_CONTINUATIONS` = 10; `RESUBMIT=0 sbatch …` for none). A preempted run (SIGTERM) is
+   requeued by Slurm instead, and a cancelled one stays stopped; a run stopped by its stop file
+   alone (no signal) is not continued. Runs longer than 24 hours are such chains, not
+   `medium`/`long` jobs (`long` allows only 32 cores per job).
 
 The wrapper was tested locally on 2026-11-04 with the CPU driver on `hpc/configs/h0_smoke.toml`:
 a SIGTERM to the wrapper during the fine warmup gave a snapshot, exit 75 and the status
 `checkpointed`; the same run id started again resumed from the snapshot (fine warmup, sweep 1
-of 4) and finished with exit 0.
+of 4) and finished with exit 0. The signal path through the templates was simulated locally
+with Slurm stubs (`cpu_array.sbatch`, a script-mode line): SIGUSR1 to the batch shell gave the
+snapshot exit, status `checkpointed`, signal `USR1` and one `sbatch` of the same template with
+`--array=⟨task⟩`, the cores, memory, run id and `RESUBMIT` − 1; the continuation, sent
+SIGTERM, reused the run directory (a second attempt in `run.toml`) and submitted nothing.
 
 ## 6. Records, the ledger, and results through git
 
@@ -253,6 +263,10 @@ a full-fidelity checkpoint: plain HDF5 data that survives code and Julia version
   creates the stop file, and the driver writes the snapshot at the next sweep boundary and
   exits with 75. The grace time must cover one sweep plus the write.
 
+The replica driver (`sampler = "replicas"`) follows the same contract with its own layout
+(every replica's state, the Langevin steps and the gates; [data.md](data.md) §5,
+[sampler.md](sampler.md) §11.5).
+
 > **Status: missing (device).** `run_device` writes no snapshot yet. On the device the state is
 > downloaded at each host checkpoint already; the snapshot adds the file write.
 
@@ -297,8 +311,8 @@ D1 and D2 can be submitted together. Files built without the corrected wind cali
 in `scripts/prepare_data.py`) need D1 and D2 again; a rerun of
 D2 reuses the PyPSA-Eur build and only redoes `model256.h5`. D3 does not depend on the POWER
 weather and need not be rerun. Check a build's log for the line per carrier
-`… miss their window target by more than 0.005` (zero for POWER wind is not guaranteed: some
-targets have no root on [0.2, 4]). D3 reads the cluster's ERA5 folder in place on a compute
+`… miss their window target by more than 0.005` (zero in the local builds of all three POWER
+files). D3 reads the cluster's ERA5 folder in place on a compute
 node (§4); its years are a choice: the default 2003, 2010, 2013, 2017 is enough for a first
 full-resolution test, while the weather model is fitted on all years of the file
 (`src/weather.jl`), so a production run wants more years (2013 must always be among
@@ -321,7 +335,8 @@ current ones, with what each needs:
 | campaign | needs | then |
 |---|---|---|
 | H0b (SIGTERM and snapshot tests) | D1: the snapshot test is skipped without `model.h5` | `bash hpc/new_campaign.sh H0b`; `sbatch hpc/jobs/h0_cpu.sbatch H0b` |
-| H10 (storage pairs) | D1 (rebuilt); its start states and the reference LP are made by the campaign | `bash hpc/new_campaign.sh H10`; `sbatch hpc/jobs/build.sbatch H10 configs/chains40.toml script scripts/lp_reference.jl` (stage 1, the LP into the cache); `sbatch --dependency=afterok:<stage 1 job id> --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt` |
+| H4 (replica sampler, far-apart starts) | D1 rebuilt with the corrected wind calibration | `bash hpc/new_campaign.sh H4`; `sbatch --array=1-6%6 hpc/jobs/cpu_array.sbatch H4 campaigns/H4/list.txt`; `bash hpc/collect.sh H4` |
+| H10 (storage pairs) | D1 (rebuilt); the HiGHS scheduler reset for `ESM_LP_THREADS` (f2d09a3, LP-baseline branch) on main, else stage 1 fails; its start states and the reference LP are made by the campaign | `bash hpc/new_campaign.sh H10`; `sbatch hpc/jobs/build.sbatch H10 configs/chains40.toml script scripts/lp_reference.jl` (stage 1, the LP into the cache); `sbatch --dependency=afterok:<stage 1 job id> --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt`; `bash hpc/collect.sh H10 'summary*'` |
 | H2 and the other LP campaigns | D1 for 40 and 76 nodes, D2 for 256, D3 for ERA5 | as in their rows |
 | the full-resolution run | D3 | not yet a campaign ([roadmap.md](roadmap.md) §6) |
 

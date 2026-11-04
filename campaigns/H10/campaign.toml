@@ -26,7 +26,10 @@ at the stop file, also in the burn-in, and resumes exactly. About 0.6-1 s per sw
 quantity and per storage unit, cost per sweep, long-sweep move statistics), summary_trace.csv
 (per-sweep series for equal-CPU comparisons), summary_burnin.csv, opmix.jls (full record,
 archive only). Equal CPU: tau x s/sweep of runs on the same partition."""
-needs = "D1 (data/processed/model.h5 rebuilt with the corrected wind calibration, hpc.md §8.3)"
+needs = """D1 (data/processed/model.h5 rebuilt with the corrected wind calibration, hpc.md §8.3); for
+stage 1, the HiGHS scheduler reset for ESM_LP_THREADS (f2d09a3, the LP-baseline branch) merged into
+main: without it a solve with threads != half the node fails ('global scheduler has already been
+initialized'), seen in the local smoke test"""
 stage1 = "sbatch hpc/jobs/build.sbatch H10 configs/chains40.toml script scripts/lp_reference.jl"
 stage2 = "sbatch --dependency=afterok:<job id of stage 1> --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt"
 collect = "bash hpc/collect.sh H10 'summary*'"

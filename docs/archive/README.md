@@ -19,4 +19,5 @@ walls, the LP-linearized formulation).
 | [perf_notes.md](perf_notes.md) | CPU performance work | [performance.md](../system/performance.md) |
 | [reactant_performance.md](reactant_performance.md) | what a Reactant port could gain; §4 on Reactant's probabilistic-programming layer (`Reactant.ProbProg`) is still useful background for the device port | [performance.md](../system/performance.md) (including the H100 estimate), [device.md](../system/device.md) |
 | [reactant_phase2.md](reactant_phase2.md) | phase 2 of the device port (term batch, dense sampler, plain rounds) | [device.md](../system/device.md) |
+| [learned_bias.md](learned_bias.md) | the learned bias $\hat b$ of the joint target (old ensemble.md §4): its derivation, accuracy requirements, form, tables, lift | [ensemble.md](../system/ensemble.md) §4 (the replica–Langevin sampler) |
 | [full_resolution_run.md](full_resolution_run.md) | the prepared 256-node hourly ERA5 run; its result sections were never filled | [roadmap.md](../system/roadmap.md) §6, [data_sources.md](../system/data_sources.md) |

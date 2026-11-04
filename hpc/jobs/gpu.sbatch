@@ -17,7 +17,7 @@
 #SBATCH --chdir=/p/tmp/hellmann/esm
 #SBATCH --output=/p/tmp/hellmann/esm/logs/%x-%j.out
 ESM_PROJ=${ESM_PROJ:-/p/projects/coen/esm}
-export TMPDIR=/localscratch/$USER/$SLURM_JOB_ID; mkdir -p "$TMPDIR"
-trap 'rm -rf "$TMPDIR"' EXIT
+export TMPDIR=/localscratch/$USER/$SLURM_JOB_ID ESM_TMPDIR_CLEANUP=1; mkdir -p "$TMPDIR"   # removed by run.sh
+export ESM_JOB_SCRIPT="$ESM_PROJ/campaigns/$1/code/hpc/jobs/gpu.sbatch" ESM_JOB_ARGS="$*"   # continuations (run.sh)
 c="$1"; cfg="$2"; shift 2
-bash "$ESM_PROJ/campaigns/$c/code/hpc/run.sh" "$c" "$cfg" "${@:-device}"
+exec bash "$ESM_PROJ/campaigns/$c/code/hpc/run.sh" "$c" "$cfg" "${@:-device}"
