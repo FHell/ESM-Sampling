@@ -171,16 +171,28 @@ move:
 | | `cellpair1` | 0.274 | 47.0 |
 | | `cell2`, `cell3` | 0.162, 0.028 | 2.78, 0.12 |
 | | `cellpair2`, `cellpair3` | 0.260, 0.027 | 5.57, 0.16 |
-| compensated, capped at 256 MB per round | `spair0` | 0.425 | 0.62 |
+| compensated, dense, capped at 256 MB per round | `spair0` | 0.425 | 0.62 |
 | | `tsoc` | 2.46 | 3.60 |
 | | `tpot` | 17.7 | 77.5 |
-| storage blocks, capped | `sblk2`, `sblk4` | 4.10, 5.07 | 12.0, 29.9 |
+| storage blocks, dense, capped | `sblk2`, `sblk4` | 4.10, 5.07 | 12.0, 29.9 |
 | | `sblk8`, `sblk16` | 8.12, 15.2 | 95.8, 360 |
+| slope-jump form (ad73f13) | `tsoc` | 3.41 | 4.99 |
+| | `tpot` | 8.26 | 36.3 |
+| | `sblk2`, `sblk4`, `sblk8` | 2.79, 2.10, 1.82 | 8.19, 12.4, 21.5 |
+| | `sblk16`, `sblk32` | 1.56, 1.60 | 37.0, 75.9 |
+| | `cell1`, `cell2` | 0.050, 0.133 | 8.57, 2.28 |
+| | `cellpair1`, `cellpair2` | 0.079, 0.184 | 13.6, 3.93 |
 
-With every family of the run set (`device_families`, 4fd3d2c) a sweep costs about 54 s, of which
-`tpot` and the storage blocks take 50 s: their cost per site grows with points × terms (`tpot`
-520 points × 87 columns, `sblk16` 1403 × 139), and the memory cap (`DENSE_BUDGET`, 256 MB)
-splits their rounds into many small ones (`tpot` 312 rounds of 183 sites).
+With every family of the run set (`device_families`) a sweep costs about 23 s in the slope-jump
+form (ad73f13, with `sblk32` added to the set), against about 54 s in the dense form at 4fd3d2c.
+In the dense form `tpot` and the storage blocks took 50 s: their cost per site grows with
+points × terms (`tpot` 520 points × 87 columns, `sblk16` 1403 × 139), and the memory cap
+(`DENSE_BUDGET`, 256 MB) split their rounds into many small ones (`tpot` 312 rounds of 183
+sites). In the slope-jump form `tpot` (8.3 s) and `tsoc` (3.4 s) lead; their most expensive
+kernel is the payload sort of the (point, jump) entries (`sort_0_1`, 1.2 s per sweep in `tpot`
+at 33 % occupancy). `tsoc` is slower on the GPU than in the dense form (3.41 against 2.46 s),
+although the static choice (`plan(...; jump=:auto)`, by the dense/slope-jump entry ratio) picks
+the slope-jump form for it: on the CPU backend it is 2.6× faster.
 
 **Slope-jump form** (§3 of [device.md](device.md); Reactant's CPU backend, `configs/device40.toml`:
 40 nodes daily, $T$ = 365, 4 chains, 4 threads; one family alone, seconds per sweep, dense →
