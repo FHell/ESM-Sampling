@@ -31,9 +31,19 @@ concrete next steps. Update it at the end of every work session.
   functional Φ, and whether M = 4 replicas give usable weights (self-normalised, ESS).
 - Rao-Blackwellized capacity scores (averages over the exact line conditionals) to cut the
   per-sweep score noise.
+- Cross-node storage move: store at A, release at B, flows re-routed with the `xloc` templates
+  (single-instant and `slong`-style interval forms), to avoid the node's own gas wall at the end
+  steps; after the `storage_long` merge.
 - Seasonal storage relaxes slowly at fixed (k, x) (τ ≳ 100 sweeps for hydro, PHS, H₂; ledger
   E17): a longer measurement (3000–5000 sweeps), then longer storage blocks or a seasonal
   plateau move per region in the CPU kernel.
+
+**Decisions taken:**
+- The learned bias is retired as part of the target (user, 2026-11-04): work proceeds on the
+  replica–Langevin structure. A learned weather-response term may return only as an optional
+  control variate for the between-year variance of the Langevin drift (no effect on the
+  target; to be measured once the replica sampler is in `src/`).
+- `storage_long` stays (on by default) once its branch is merged.
 
 **Decisions waiting for the user:**
 - z0 block moves are on by default (`fine_weather_blocks = 1`), a behaviour change for
