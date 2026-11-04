@@ -11,8 +11,16 @@ when done, and the affected document is updated in the same change.
   density need not be exact, only near-optimal and cost-monotone. Planned: a Langevin step on
   $k$ driven by the sampled capacity scores ($-\beta_k\partial K + r\,s_k$), with the weather
   drawn from its prior by refresh rather than corrected by a bias; a prototype and a review of
-  the learned bias's scale problem exist (2026-11-04). The two items below then concern only
-  what is kept of the bias.
+  the learned bias's scale problem exist (2026-11-04). A replica prototype exists
+  (`scripts/replicas/`, [../replica_sampler.md](../replica_sampler.md)): M weather replicas share
+  k, every replica's weather follows a prior-reversible process (pCN in the non-centred
+  innovations, regime window draws; exact for ρ^x by construction and tested), the capacity step
+  uses the replica-averaged score. Open there: the dispatch lags a moving weather (continuous pCN
+  needs θ ≲ 0.02 per sweep, so the weather moves in gated bursts instead); the lag probe cannot
+  tell the capacity lag from the weather lag and drives the gas and battery steps to their floor;
+  gas stays overbuilt (equilibrated marginal value ≈ 0 against its capex); seasonal storage and
+  the regime windows keep the transient shed of the replicas high. The two items below then
+  concern only what is kept of the bias.
 - **Bias convergence at $\alpha = 1$.** Short runs stay bounded with the safeguards
   ([sampler.md](sampler.md) §7.1), but the bias is far from converged: refits change it by
   $10^6$ nats over the visited states and the post-correction weight ESS is 1. Open: an $\hat h$
