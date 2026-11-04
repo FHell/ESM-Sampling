@@ -102,6 +102,18 @@ concrete next steps. Update it at the end of every work session.
 
 ## Log
 
+### 2026-11-04 (HPC: first data jobs fixed)
+
+- `data.sbatch small` (job 2902805) failed in `prepare_data.py`: `write_completion` checked
+  `col in f["generators"]` before a fresh file had that group (only `--augment` worked). It
+  now checks the full path (`"generators/k0" in f`). The failed run's 18 KB partial
+  `model.h5` is overwritten on rerun.
+- `data.sbatch pypsa256` (job 2902812) failed in `uv pip install` of the PyPSA-Eur
+  requirements: the user's shell exports `UV_INDEX` (a PyTorch wheel index), Slurm passes it
+  into the job, and uv used that index first (`certifi==2026.10.23` not found). `hpc/env.sh`
+  now unsets the inherited uv/pip index variables.
+- Not committed or resubmitted yet.
+
 ### 2026-11-04 (HPC: shared cache and state snapshots)
 
 - CPU driver for the cluster (`src/checkpoint.jl`, [system/hpc.md](system/hpc.md) §4, §7):
