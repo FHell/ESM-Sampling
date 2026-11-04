@@ -5,6 +5,8 @@ version = "0.1.0"
 [deps]
 ESMSampling = "6c1f7a52-3e0b-4a7e-9d51-2f0b8c7e4a11"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
+Preferences = "21216c6a-2e73-6563-6e65-726566657250"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
@@ -16,6 +18,8 @@ ESMSampling = {path = ".."}
 
 [compat]
 LinearAlgebra = "1.12.0"
+PrecompileTools = "1"
+Preferences = "1"
 Printf = "1.11.0"
 Random = "1.11.0"
 Reactant = "0.2.304"

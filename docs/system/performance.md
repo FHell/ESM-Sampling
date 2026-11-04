@@ -214,6 +214,18 @@ measured again this session) → after:
 | `FAMILIES_FAST` (sum) | 0.60 | 0.62 | dense |
 | run set (sum) | ≈ 24 | 8.7 | |
 
+**Form choice on the GPU** (same setup; seconds per sweep, dense / slope-jump): `tsoc` 1.08 /
+1.12, `sblk2` 1.08 / 1.20, `cell3` 0.033 / 0.047, `cellpair3` 0.032 / 0.051, `sblk4` 1.10 / 0.92,
+`sblk8` 1.68 / 0.74, `cell1` 0.118 / 0.040, `cellpair1` 0.278 / 0.066. The ratio `JUMP_RATIO["gpu"]`
+= 10 picks the faster form for all of them (`tsoc` has a ratio of 9.6, `sblk2` 16 → dense? no:
+`sblk2` is dense because its dense points × columns are below 10 × its entries after the removal of
+the slot entries).
+
+**Dense angle families** (`configs/device40_6h_flow_gpu.toml`, flow basis, `ADAPT=1`: directions
+from the chains' frames, 4 chains, one site per step and time class): `tdir` 0.216 s per sweep
+(37 µs per move: 325 columns, about 3 300 entries per site), `tdir0` 0.125 s (21 µs). The CPU
+takes about 10 ms per `tmode` move at 40 nodes.
+
 The `sblk32` and cell rows before are those of ad73f13 (the profile of the old code was stopped by
 the memory limit before them). In `tpot` the payload sort fell from 1.26 to 0.26 s per sweep (921
 instead of 1 817 entries per site with commitment, fewer without), and its largest kernel is now a

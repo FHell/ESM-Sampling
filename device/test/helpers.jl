@@ -123,7 +123,7 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
     C = size(st0.θ, 1)
     st = st0
     scpu = [copy(s) for s in ss]
-    stats = Dict(:n => 0, :guard => 0, :own_ok => 0, :own_bad => 0, :cpupts_bad => 0, :improper_mismatch => 0, :overshoot => 0,
+    stats = Dict(:n => 0, :guard => 0, :own_ok => 0, :own_bad => 0, :cpupts_bad => 0, :improper_mismatch => 0, :overshoot => 0, :truncated => 0,
                  :jac_rej => 0, :jac_mismatch => 0, :worst_own => 0.0, :worst_cpu => 0.0)
     for f in fams, r in 1:size(tabs[f].on, 2)
         tb, _ = D.build(Val(f), st, pl.cp, pl.sp, tabs[f], r, pl.k)
@@ -161,6 +161,7 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
         Pc = zeros(C, B, K)
         for c in 1:C, b in 1:B; Pc[c, b, :] .= sort(vcat(merged[c, b], zeros(K - length(merged[c, b])))); end
         tcp = D.sample_points(tb, pl.k, Pc, u[:, :, 1:1], u[:, :, 2:2])
+        cPc = D.eval_terms(tb, pl.k, Pc; sec=false)[1]          # potential at the merged points
         tcpf = D.jac_accept(tb, tcp, u[:, :, 3:3])[:, :, 1]
         tcp = tcp[:, :, 1]
         for c in 1:C, (b, site) in enumerate(sites)
@@ -178,6 +179,18 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
             if d2 > 1e-9 && maximum(abs.(pts[c, b])) > 1e12
                 stats[:overshoot] += 1
                 continue
+            end
+            # the CPU walk stops 40 nats above its running minimum; where the potential falls again
+            # beyond its range to within 40 nats of that minimum, the CPU draw is truncated (the device's
+            # points cover the whole line), so the draws differ by construction
+            if d2 > 1e-9
+                lo, hi = extrema(pts[c, b])
+                pin_ = [x for (x, p) in zip(cPc[c, b, :], Pc[c, b, :]) if lo <= p <= hi]
+                pout = [x for (x, p) in zip(cPc[c, b, :], Pc[c, b, :]) if !(lo <= p <= hi)]
+                if !isempty(pout) && !isempty(pin_) && minimum(pout) < minimum(pin_) + 40
+                    stats[:truncated] += 1
+                    continue
+                end
             end
             stats[:worst_cpu] = max(stats[:worst_cpu], d2)
             if d2 > 1e-9

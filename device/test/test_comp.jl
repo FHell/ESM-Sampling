@@ -84,13 +84,14 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
                 stats[:guard], " of ", stats[:n])
         @test stats[:guard] <= 0.01 * stats[:n]
         @printf("  (a) device own points vs CPU: %d agree (max %.1e), %d differ (CPU ray splitting)\n", stats[:own_ok], stats[:worst_own], stats[:own_bad])
-        @printf("  (c) device sampler on the CPU points vs CPU: max %.1e, %d beyond 1e-9; CPU ray overshoot excluded: %d; improper mismatch %d\n",
-                stats[:worst_cpu], stats[:cpupts_bad], stats[:overshoot], stats[:improper_mismatch])
+        @printf("  (c) device sampler on the CPU points vs CPU: max %.1e, %d beyond 1e-9; CPU ray overshoot excluded: %d; CPU walk truncated (a deeper region beyond its 40-nat stop) excluded: %d; improper mismatch %d\n",
+                stats[:worst_cpu], stats[:cpupts_bad], stats[:overshoot], stats[:truncated], stats[:improper_mismatch])
         @printf("  Jacobian step: CPU rejections %d, decision mismatches on the same t %d\n", stats[:jac_rej], stats[:jac_mismatch])
         @test stats[:cpupts_bad] == 0
         @test stats[:improper_mismatch] == 0
         @test stats[:jac_mismatch] == 0
         @test stats[:overshoot] <= 1e-3 * stats[:n]
+        @test stats[:truncated] <= 1e-2 * stats[:n]
         stC = cpu_flat(P, ix, LCs)
         for fld in (:θ, :ω, :uc, :e, :u, :r)
             a, b = getfield(stJ, fld), getfield(stC, fld)
