@@ -1,40 +1,36 @@
 # Campaign H10 (docs/campaigns.md, row H10; ledger E27 in docs/experiments.md; docs/system/hpc.md)
 id = "H10"
-commit = ""          # filled in by hpc/new_campaign.sh H10 <commit> (the merge of the storage-pair branch)
+commit = ""          # the commit of the campaign worktree (hpc/new_campaign.sh H10); recorded in every run.toml
 question = """
 Do the cross-node storage pairs (sxpair, sxlong; ledger E27, docs/system/moves/storage.md) make
 the seasonal storage relax faster at fixed (k, x) than the E21 kernel (slong, slevel), at equal
 CPU: the seasonal shape Q1 − Q3 per hydro and PHS unit, the regional storage shapes, and opex,
-which still drift after 3000 sweeps locally (E27: chain 4 only)?"""
+which still drifted after 3000 sweeps locally (E27: one start state, the old model file)?"""
 design = """
-The E17/E21 protocol (scripts/mixing/opmix_hpc.jl, the script form of opmix.jl): chains40, from
-the E15 end states (chains 4 = heuristic start and 1 = low start of
-results/mixing/a1/a1_kop0_chains.jls), operation sweeps only (local sweep, storage multiscale
-sweep with probability 1/2, long-range storage sweep every sweep), no capacity or weather moves,
-5000 sweeps per run. Kernels per chain: slong (E21: 32 slong + 1 slevel per unit with >= 24 h),
-sx (the same plus 8 sxlong per unit and sxpair at rate 0.1: the defaults), sx16 (16 sxlong,
-sxpair 0.2). Six array tasks (campaigns/H10/list.txt), 8 cores each (cpu_array.sbatch default),
-standby and requeued; the script snapshots every 10 minutes and at the stop file and resumes
-exactly. About 0.6-1 s per sweep, so 1-1.5 h per task. Outputs per run: summary_opmix.toml
-(tau, drift, sd per quantity, cost per sweep, long-sweep move statistics), summary_trace.csv
-(per-sweep series for equal-CPU comparisons), opmix.jls (full record, archive only).
-Equal CPU: compare tau x s/sweep of runs on the same node type; the s/sweep of the summaries
-come from the same partition, so the recorded times can be used directly."""
-inputs = """
-Two files are not in the repository; copy both from the local machine before submitting
-(untracked files are allowed by hpc/run.sh):
-1. the start states, results/mixing/a1/a1_kop0_chains.jls (6.4 MB, sha256 ab8d9273a6d904ba...),
-   into the campaign code (after new_campaign.sh):
-     mkdir -p /p/projects/coen/esm/campaigns/H10/code/results/mixing/a1
-     scp results/mixing/a1/a1_kop0_chains.jls <login>:/p/projects/coen/esm/campaigns/H10/code/results/mixing/a1/
-2. the model file the states belong to, data/processed/model.h5 (107 MB, sha256
-   d869e9accb69c1b5...), as model_e15.h5 next to the cluster's own model files (the cluster's
-   model.h5 is another build, sha256 be56a52db413e27e at H0):
-     scp data/processed/model.h5 <login>:/p/projects/coen/esm/data/processed/model_e15.h5
-   The runs read it through campaigns/H10/chains40_e15.toml (configs/chains40.toml with this
-   data file); run.toml records its hash (data_sha), which must be d869e9accb69c1b5."""
-submit = "sbatch --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt"
+Self-contained: every input is made on the cluster (hpc.md §6). Model file: the cluster's
+data/processed/model.h5 of step D1 (hpc.md §8.3; the build with the corrected wind calibration),
+read by configs/chains40.toml (40 nodes daily, fixed weather draw from its seed). Two capacity
+configurations, made in the run from the config and its seed: `heuristic` (the set-up's
+heuristic capacities and interior dispatch) and `lp` (the reference LP at the config's levels,
+HiGHS; solved once by stage 1 into the shared cache, then read by the runs). From each, 500
+operation sweeps of the E21 kernel on a stream of their own (identical for the three kernels of a
+start: the summaries carry the state's hash), then 5000 sweeps of each kernel: slong (E21: 32
+slong + 1 slevel per unit with >= 24 h), sx (the defaults: plus 8 sxlong per unit and sxpair at
+rate 0.1), sx16 (16 sxlong, sxpair 0.2). Protocol of opmix.jl (scripts/mixing/opmix_hpc.jl):
+operation sweeps only (local sweep, storage multiscale sweep with probability 1/2, long-range
+storage sweep every sweep), no capacity or weather moves. Six array tasks
+(campaigns/H10/list.txt), 8 cores each (cpu_array.sbatch default; all tasks the same, so the
+burn-in states agree bitwise), standby and requeued; the script snapshots every 10 minutes and
+at the stop file, also in the burn-in, and resumes exactly. About 0.6-1 s per sweep, so
+1.5-2 h per task. Outputs per run: summary_opmix.toml (start, burn-in, tau, drift, sd per
+quantity and per storage unit, cost per sweep, long-sweep move statistics), summary_trace.csv
+(per-sweep series for equal-CPU comparisons), summary_burnin.csv, opmix.jls (full record,
+archive only). Equal CPU: tau x s/sweep of runs on the same partition."""
+needs = "D1 (data/processed/model.h5 rebuilt with the corrected wind calibration, hpc.md §8.3)"
+stage1 = "sbatch hpc/jobs/build.sbatch H10 configs/chains40.toml script scripts/lp_reference.jl"
+stage2 = "sbatch --dependency=afterok:<job id of stage 1> --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt"
 collect = "bash hpc/collect.sh H10 'summary*'"
 analysis = """
-scripts/mixing/smix_analyze.jl reads the full records (opmix.jls from the archive); the summaries
-alone give tau, drift and the cost per sweep per run; summary_trace.csv the equal-CPU opex."""
+The summaries give tau, drift and the cost per sweep per run; summary_trace.csv the equal-CPU
+opex and per-unit shapes; scripts/mixing/smix_analyze.jl reads the full records (opmix.jls from
+the archive, prefixes by run)."""
