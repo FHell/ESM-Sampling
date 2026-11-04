@@ -313,7 +313,11 @@ change comes from the bias cache: $D_t$ and $R_t$ change at the steps of the mov
 $\bar{\mathbb E}\hat g$ and $\hat h$ do not change (`bias_delta_weather`); an accepted move
 updates the cache at those steps. Because the change is local to the window, moves in coarse
 blocks far enough apart run in parallel at every level, $z_0$ included; the sums of the cache
-are recomputed after the sweep. With `fine_weather = 0` the weather stays at its initial draw
+are recomputed after the sweep. Then `fine_weather_blocks` joint block moves of $z_0$ per sweep
+(in expectation) shift $z_0$ along a fixed joint direction over 16, 64 or 365 level-0 steps,
+with the exact VAR quadratic of the block and the same compensation and bias correction, in
+sequence ([moves/weather.md](moves/weather.md)); they mix the annual and seasonal means, which
+the coordinate moves barely move. With `fine_weather = 0` the weather stays at its initial draw
 at the fine level.
 
 ### 7.3 Canonical CO₂ price

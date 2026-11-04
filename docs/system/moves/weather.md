@@ -33,12 +33,44 @@ is that of $\hat g$ at the steps of the window ($D_t$ and $R_t$ from the data-ma
 entries, `bias_delta_weather`), read from and committed to the bias cache of the fine step.
 
 **Selection and schedule.** The regime update first; then, from the finest level down to level
-0, a random sample of a fraction `fine_weather` of the coordinates of each level. Moves whose
+0, a random sample of a fraction `fine_weather` of the coordinates of each level; then the
+block moves of $z_0$ below. Moves whose
 coarse blocks are far enough apart (block index modulo a spacing derived from the window
 spread) run in parallel, at every level including $z_0$: their windows, and so their bias
 changes, are disjoint. **Cost.** A block move over the window of steps the coordinate reaches at
 the finest level, plus compensation at its nodes, plus one table lookup per window step for the
 bias.
+
+**Joint low-frequency blocks of $z_0$** (`z0_block_sweep!`, `fine_weather_blocks` per fine
+step). The rows of $z_0$ are strongly coupled (the load modes are nearly collinear, the VAR is
+persistent), so a coordinate move barely changes an annual or seasonal mean. A block move shifts
+$z_0$ along a fixed joint direction $v$ of all rows over the level-0 steps $a..b$,
+$$
+z_0(\tau)\to z_0(\tau) + t\,v,\qquad \tau = a,\dots,b,
+$$
+with the innovations of the finer levels fixed, so the finest anomalies change by the windowed
+propagation (affine in $t$). The prior on the line is the exact quadratic of the VAR emissions
+of the steps $a..b+1$; compensation, exact line draw with the Gaussian prior, the Jacobian and,
+at $\alpha = 1$, the Metropolis bias correction (`bias_delta_weather` over the window) are those
+of the coordinate moves. The directions are the six leading eigenvectors of the regime-averaged
+long-run covariance of the VAR, $\sum_k\pi_k(I-\Phi_k)^{-1}\Sigma_k(I-\Phi_k)^{-\top}$ with the
+stationary regime frequencies $\pi$ (`z0_block_directions`, built from the weather model): the
+directions in which block means fluctuate most.
+
+**Selection.** In sequence after the coordinate moves, `fine_weather_blocks` moves per sweep in
+expectation (the integer part, plus one with the probability of the remainder); per move a
+length $B\in\{16, 64, 365\}$ level-0 steps with probability $\propto 1/B$, a start uniform over
+the year (the block clipped at its end) and a direction uniform among the six: all independent
+of the state. **Cost.** As a coordinate move whose window spans the block; at 40 nodes daily
+about 24, 108 and 600 ms for $B$ = 16, 64 and 365 at an equilibrated state, 60 ms per move in
+the mixture, and several times more far from equilibrium. The window grows with the number of
+finest steps per level-0 step, so at hourly resolution the long blocks become expensive.
+
+**Use.** Under the weather prior alone, the block mixture moves the annual and seasonal load
+means 60–140 times faster per CPU second than the coordinate moves (which need at least about
+$10^5$ sweeps per independent annual load mean at `fine_weather = 0.05`), wind and solar about
+as fast, offwind slower; both families run. Where the cost confines the weather (at
+$\alpha = 0$), the blocks are confined too and cost about 5 % of a fine step at the default.
 
 ## Level-0 warmup chain
 

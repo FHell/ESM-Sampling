@@ -42,6 +42,7 @@ In include order (`src/ESMSampling.jl`):
 | `local.jl` | the local exact kernel: `GridSolver`, `LocalModel`, `LocalCost`, `MoveWS`, `eval_move!`, line sampler, move preparation, `local_sweep!`, `kscale_sweep!`, `LocalKernel`, `fine_local_step`, `local_base_step`, block-move workspaces and `commit_block!` |
 | `weather_moves.jl` | level-0 weather move with pro-rata shear |
 | `weather_fine.jl` | fine-level weather moves, with their bias change `bias_delta_weather` |
+| `weather_blocks.jl` | joint low-frequency block moves of $z_0$: `z0_block_directions`, `z0_block_quad`, `z0_block_prepare!`, `z0_block_move!`, `z0_block_sweep!` |
 | `flowmoves.jl` | `FlowFrames`, transport families, storage multiscale sweep, `flow_sweep!`, localized modes |
 | `adaptive.jl` | `AdaptiveModes`, learned families, `adaptive_sweep!`, `kpeak_sweep!` |
 | `kop.jl` | capacity moves with their operation: `KopTerm`, `KopMove`, `kop_prepare`, `kop_logdensity`, `kop_commit!`, `kop_sweep!` |
@@ -142,7 +143,7 @@ calibration).
 (`local_sweep!` followed with probability 1/2 by `storage_ms_sweep!`, `flow_sweep!` or
 `adaptive_sweep!`) and the capacity moves
 (`kscale_sweep!` then `kpeak_sweep!`, then `kop_sweep!` with `kop = true`) → `maybe_weather!` →
-`fine_weather_sweep!`; at
+`fine_weather_sweep!` (regimes, coordinate moves, then `z0_block_sweep!`); at
 $\alpha = 1$ one `BiasCache`, built at the start, serves the capacity and weather moves.
 
 **Operation sweep** (`local_sweep!`): `LocalCost` → per parity class, threaded over its steps:

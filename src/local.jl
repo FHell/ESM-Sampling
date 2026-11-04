@@ -2151,15 +2151,17 @@ struct LocalKernel
     wpools::Vector{Any}
     lmkw::NamedTuple                 # LocalModel options (cell_power, xr_partner, xr_ball)
     kop::Bool                        # capacity moves with their operation (kop.jl) after kscale and kpeak
+    wblocks::Float64                 # fine weather sweeps: joint z0 block moves per sweep (weather_blocks.jl)
 end
-LocalKernel(P::Problem; extra=4.0, mode::Symbol=:auto, weather::Float64=0.0, lmkw::NamedTuple=NamedTuple(), kop::Bool=false) =
+LocalKernel(P::Problem; extra=4.0, mode::Symbol=:auto, weather::Float64=0.0, lmkw::NamedTuple=NamedTuple(), kop::Bool=false,
+            wblocks::Float64=0.0) =
     LocalKernel(Dict{Int,LocalModel}(), [MoveWS(P) for _ in 1:Threads.maxthreadid()], extra, ReentrantLock(), Dict{Int,Any}(), Any[],
-                mode == :auto ? (P.E.flow === nothing ? :local : :flow) : mode, Dict{Int,Any}(), weather, Any[], lmkw, kop)
+                mode == :auto ? (P.E.flow === nothing ? :local : :flow) : mode, Dict{Int,Any}(), weather, Any[], lmkw, kop, wblocks)
 
 "Fine-level weather moves of the local kernel (if enabled and the level is spatially complete)."
 function maybe_weather!(rng, P::Problem, K::LocalKernel, LM::LocalModel, s::State; BC=nothing)
     (K.weather > 0 && s.ℓ >= 1 && LM.complete[P.E.fθ]) || return s
-    s, _ = fine_weather_sweep!(rng, P, LM, s; frac=K.weather, frac0=K.weather, pools=K.wpools, BC=BC)
+    s, _ = fine_weather_sweep!(rng, P, LM, s; frac=K.weather, frac0=K.weather, pools=K.wpools, BC=BC, zblocks=K.wblocks)
     return s
 end
 

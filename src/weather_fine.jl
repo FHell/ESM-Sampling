@@ -445,10 +445,11 @@ at α = 1, the Metropolis bias correction from the bias cache `BC` (built from `
 not given; it follows the accepted moves). Moves in coarse blocks j with equal j mod M
 at their level are independent (their windows at the finest level are separated; M
 from the spread of the windows; the bias change of a move is local to its window) and
-run in parallel.
+run in parallel. Then `zblocks` joint block moves of z0 in expectation (weather_blocks.jl),
+in sequence.
 """
 function fine_weather_sweep!(rng, P::Problem, LM::LocalModel, s::State; frac::Float64=0.05, frac0::Float64=0.05,
-                             comp::Bool=true, pools=nothing, LC=nothing, BC=nothing)
+                             comp::Bool=true, pools=nothing, LC=nothing, BC=nothing, zblocks::Float64=0.0)
     W = P.W
     L = s.ℓ
     @assert LM.ℓ == L
@@ -507,6 +508,9 @@ function fine_weather_sweep!(rng, P::Problem, LM::LocalModel, s::State; frac::Fl
             stats[ℓ+1, :] .+= vec(sum(cnt; dims=1))
         end
     end
+    # joint low-frequency block moves of z0 (weather_blocks.jl), `zblocks` per sweep in expectation
+    nb = zblocks > 0 ? floor(Int, zblocks) + (rand(rng) < zblocks - floor(zblocks)) : 0
+    nb > 0 && z0_block_sweep!(rng, P, LM, s, nb; LC=LC, BC=BC, pool=pools[1], comp=comp)
     BC === nothing || bias_resum!(BC, P.bias)
     return evaluate!(P, s), stats
 end
