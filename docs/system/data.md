@@ -149,8 +149,8 @@ older single-LP `summary_lp.toml` of the sampled-weather reference LP in the sam
 
 | file | content |
 |---|---|
-| `summary_lp.toml` | `years`, `weights`, `status`; `objective_eur_per_a` (capex + Σ w opex), `capex_eur_per_a`, `opex_eur_per_a`, `opex_by_year_eur`; `sampler_cost_eur_per_a` (plus the curtailment the sampler prices); `mean_stats` (weighted means of the per-year statistics); `capacity.<k field>.total_MW` and `.by_country_MW`; free-coordinate counts; LP size (`lp_variables`, `lp_constraints`), `seconds_setup`, `seconds_optimum`, `maxrss_MB`, threads; `ignored_model_terms`; commit, run id, data hash |
-| `years.csv` | per year: `year, weight, opex_eur, co2_t, curtail_MWh, curtail_cost_eur, dump_MWh, energy_MWh_<carrier>…, shed_MWh` (storage energy: discharge) |
+| `summary_lp.toml` | `years`, `weights`, `status`; `objective_eur_per_a` (capex + Σ w opex), `capex_eur_per_a`, `opex_eur_per_a`, `opex_by_year_eur`; `sampler_cost_eur_per_a` (objective + the cycling cost: about the sampler's cost at the LP solution, validation.md §2.7); `mean_stats` (weighted means of the per-year statistics); `capacity.<k field>.total_MW` and `.by_country_MW`; free-coordinate counts; LP size (`lp_variables`, `lp_constraints`), `seconds_setup`, `seconds_optimum`, `maxrss_MB`, threads; `ignored_model_terms`; commit, run id, data hash |
+| `years.csv` | per year: `year, weight, opex_eur, co2_t, curtail_MWh, curtail_cost_eur, storage_cycling_MWh, cycling_loss_MWh, cycling_cost_eur, dump_MWh, energy_MWh_<carrier>…, shed_MWh` (storage energy: discharge) |
 | `capacity.csv` | `carrier, country, MW` at the optimum |
 | `mga.csv` | one row per MGA solve: `eps, target, sense, status, attempts, cost_eur, cost_rel_excess, total_MW, seconds` (status `OPTIMAL`, `feasible:<status>` for a primal-feasible point within the bound, or a failure with NaN values) |
 | `mga_capacity.csv` | `eps, target, sense, carrier, country, MW`: every carrier's capacity per country at each extreme |

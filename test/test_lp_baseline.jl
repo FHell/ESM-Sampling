@@ -21,8 +21,8 @@ if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
         @test_throws ErrorException MLB.historical_weather(E, lv, 1990)
         @test_throws ErrorException MLB.historical_weather(E, MLB.Layout(E.vspecs, levels[1]...), yr)
 
-        # the LP's cost is the sampler's cost at its solution, up to the curtailment that the
-        # sampler prices (dump at c_dump plus the renewable's marginal cost) and the LP does not
+        # the LP's cost is the sampler's cost at its solution (renewables produce A·k in both;
+        # their excess is nodal dump at c_dump)
         lp = MLB.solve_lp(E, lk, lv, MLB.datamapped(E, X))
         r1, lpm1 = MLB.solve_lp_years(E, lv, [yr])
         bias = MLB.init_bias(E, W, MLB.Layout(E.kspecs, levels[1]...), 1e-3; rng=MersenneTwister(2), nsamples=4)
@@ -35,8 +35,13 @@ if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
         MLB.evaluate!(P, s)
         @test s.parts.capex ≈ lp.capex rtol = 1e-10
         @test s.parts.shed < 1e-6 * sum(X[1]) * lv.h
-        @test s.parts.capex + s.parts.op ≈ lp.objective + r1.stats[1]["curtail_cost_eur"] rtol = 1e-5
-        @test r1.stats[1]["curtail_cost_eur"] > 0
+        # (up to the energy the LP disposes of by simultaneous charge and discharge, which the
+        # sampler's SoC form must dump: the LP objective is a lower bound, objective + cycling cost
+        # about the sampler's cost at the LP point)
+        Cs = s.parts.capex + s.parts.op
+        @test abs(r1.stats[1]["curtail_cost_eur"]) < 1e-6 * lp.objective
+        @test Cs >= lp.objective * (1 - 1e-6)
+        @test Cs ≈ lp.objective + r1.stats[1]["cycling_cost_eur"] rtol = 1e-4
 
         # the multi-year LP with one year is the single-year LP; with the year twice, the same optimum
         # (the same LP; equal to round-off, HiGHS's parallel factorization need not be bitwise reproducible)

@@ -87,10 +87,14 @@ end
 """
 Summary of one operation block of a solved LP: shed, dump and renewable curtailment (MWh/a),
 CO₂ emissions (t/a), the energy per generator and storage carrier (MWh/a; storage:
-discharge), and `curtail_cost_eur`: the cost that the sampler's energy model charges for the
-curtailment and the LP does not (curtailed output is nodal dump at `c_dump` and pays the
-renewable's marginal cost there, while the LP curtails for free). The sampler's cost at
-the LP solution is the LP's capex + opex + `curtail_cost_eur` (test/test_lp_baseline.jl).
+discharge), and `curtail_cost_eur`: the cost of renewable output below A·k that the sampler
+would charge and the LP would not. Renewables produce A·k exactly in the LP, as in the
+sampler (their excess is nodal dump at `c_dump`), so it is zero up to the solver tolerance. One
+loophole of the LP remains: simultaneous charge and discharge disposes of energy in the round-trip
+losses, which the sampler's SoC form cannot (`storage_cycling_MWh`, `cycling_loss_MWh`; binaries
+would be needed to exclude it). The LP objective is therefore a lower bound of the sampler's
+minimum, and the sampler's cost at the LP solution is about the objective + `cycling_cost_eur`
+(c_dump × the energy lost), an upper bound (test/test_lp_baseline.jl).
 """
 function lp_year_stats(E::EnergyModel, lv::Layout, blk, kval, W)
     Δt = Float64(lv.h)
@@ -119,10 +123,21 @@ function lp_year_stats(E::EnergyModel, lv::Layout, blk, kval, W)
             end
         end
     end
+    cyc, closs = 0.0, 0.0
     for (si, s) in enumerate(E.stors)
-        pm = value.(blk.ps[si][2])
+        pp, pm = value.(blk.ps[si][1]), value.(blk.ps[si][2])
         d["energy_MWh_" * s.carrier] = get(d, "energy_MWh_" * s.carrier, 0.0) + Δt * sum(pm)
+        # simultaneous charge and discharge: energy the LP disposes of in the round-trip losses,
+        # which the sampler's SoC form cannot (it must dump it at c_dump)
+        for i in eachindex(s.bus)
+            y = Δt * sum(min.(pp[i, :], pm[i, :]))
+            cyc += y
+            closs += y * (1 / s.eta_out[i] - s.eta_in[i])
+        end
     end
+    d["storage_cycling_MWh"] = cyc
+    d["cycling_loss_MWh"] = closs
+    d["cycling_cost_eur"] = E.c_dump * closs
     d["curtail_MWh"] = curt
     d["curtail_cost_eur"] = ccost
     d["co2_t"] = co2

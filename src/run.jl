@@ -225,7 +225,7 @@ function setup(cfg::Config; rng=MersenneTwister(cfg.seed))
         lp = heuristic_start(E, lkr, lvr, Wd)
         logmsg(cfg, "no reference LP: heuristic capacities (proxy renewables, gas at nodal peak load), interior dispatch")
     else
-        lp = solve_lp_cached(E, lkr, lvr, Wd, joinpath(cdir, "lp_$(string(key; base=16)).h5"); mirror=mirror)
+        lp = solve_lp_cached(E, lkr, lvr, Wd, joinpath(cdir, "lp$(LP_VERSION)_$(string(key; base=16)).h5"); mirror=mirror)
     end
     T_L, T_ref = 8760 ÷ cfg.levels[end][2], lvr.T
     # equipartition: one unit of β×cost per cost-confined direction; interior

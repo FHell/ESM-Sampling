@@ -21,6 +21,9 @@ struct LPSolution
     dF_dk::Vector{Vector{Float64}}       # w.r.t. node capacities per k field (operational part)
 end
 
+"Version of the LP formulation, part of the LP cache file name (`lp<v>_<key>.h5`): a cached LP of an older formulation is not reused."
+const LP_VERSION = 2
+
 """
     solve_lp(E, lk, lv, W)
 
@@ -158,7 +161,9 @@ function lp_operation!(model, E::EnergyModel, lv::Layout, kv, W)
             for t in 1:T
                 cap = g.kf > 0 ? A[i, t] * kv[g.kf][i] : A[i, t] * g.kfix[i]
                 if κ === nothing
-                    pc[i, t] = @constraint(model, p[i, t] <= cap)
+                    # renewables (no dispatch coordinate, vf = 0) produce A·k exactly, as in the
+                    # sampler's energy model: their excess is nodal dump at c_dump, not free curtailment
+                    pc[i, t] = g.vf == 0 ? @constraint(model, p[i, t] == cap) : @constraint(model, p[i, t] <= cap)
                 else
                     pc[i, t] = @constraint(model, κ[i, t] <= cap)
                     @constraint(model, p[i, t] <= κ[i, t])
@@ -196,7 +201,9 @@ function lp_operation!(model, E::EnergyModel, lv::Layout, kv, W)
                 push!(crefs, @constraint(model, pm[i, t] <= K))
                 push!(crefs, @constraint(model, e[i, t] <= s.hours[i] * K))
                 t1 = mod(t, T) + 1
-                @constraint(model, e[i, t1] - e[i, t] <= Δt * (s.eta_in[i] * pp[i, t] - pm[i, t] / s.eta_out[i] + s.qt[i] * K))
+                # an equality, as in the sampler's SoC form: stored energy and inflow cannot be spilled
+                # for free (the sampler spills only beyond the power limit); excess is nodal dump
+                @constraint(model, e[i, t1] - e[i, t] == Δt * (s.eta_in[i] * pp[i, t] - pm[i, t] / s.eta_out[i] + s.qt[i] * K))
                 add_to_expression!(bal[s.bus[i], t], pp[i, t])
                 add_to_expression!(bal[s.bus[i], t], -1.0, pm[i, t])
                 add_to_expression!(obj, Δt * s.mc[i], pp[i, t])

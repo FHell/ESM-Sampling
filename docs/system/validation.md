@@ -209,18 +209,27 @@ report of HiGHS-specific MGA failures or fixes (searches of the PyPSA docs and i
 SPORES, HiGHS); the budget-row scaling above is our own fix, in line with the rescaling
 advice.
 - **Not in the LP:** line losses and soft thermal limits (hard limits; a configuration with
-  them is solved without them and the summary lists them as ignored). Renewable curtailment is
-  free in the LP; the sampler's energy model charges curtailed output as nodal dump at
-  $c_{
-m dump}$ plus the renewable's marginal cost, so the sampler's cost at the LP solution
-  is the LP objective plus `curtail_cost_eur` (about 0.6 % of the cost at 40 nodes daily; the
-  test checks the identity to 1e-5).
+  them is solved without them and the summary lists them as ignored). The LP follows the
+  sampler's energy model where it can: renewables produce $A\cdot k$ exactly (their excess is
+  nodal dump at $c_{\rm dump}$, not free curtailment), and the storage balance is an equality
+  (stored energy and reservoir inflow are not spilled for free; the sampler's SoC form spills only
+  beyond the power limit). One loophole remains: simultaneous charge and discharge disposes of
+  energy in the round-trip losses (and, with `link_losses`, two-way link flows would do the
+  same), which the sampler cannot; excluding it needs binaries. So the LP objective is a lower
+  bound of the sampler's minimum, and the sampler's cost at the LP solution is the objective
+  plus `cycling_cost_eur` ($c_{\rm dump}$ × the energy lost), an upper bound; at 40 nodes the
+  two differ by about 0.02 % (the test checks the identity to 1e-4). PyPSA curtails and spills
+  for free, so H2b and our LP differ by these prices.
+- **Comparison runs:** until the LP has line losses and soft thermal limits, the sampler runs
+  compared with the LP use `losses = false`, `thermal = "hard"` and `link_losses = false`
+  (user, 2026-11-04). The CO₂ treatment (our LP has the price in the marginal costs, PyPSA the
+  build's cap) and a common weather source for H2 and H2b (e.g. ERA5 on both sides) are decided
+  when the H2b comparison is set up.
 
 **PyPSA-Eur's** (`scripts/pypsa_baseline.py`, campaign H2b). PyPSA solves the composed network
 of the build (`resources/esm256/networks/composed_2050.nc`, 2013) with HiGHS, configured to our
 scope (§2.2): lines and DC links at their current ratings, a load-shedding generator at every
-bus at our $c_{
-m shed}$, the build's CO₂ cap (or none, or a price), the time series averaged
+bus at our $c_{\rm shed}$, the build's CO₂ cap (or none, or a price), the time series averaged
 over blocks of 24, 6, 3 or 1 h (PyPSA-Eur's `average_every_nhours`). MGA as PyPSA's
 `optimize_mga` (budget on capex + opex including the fixed cost of the existing fleet), on one
 model with the budget's right-hand side and the objective changed per solve; carrier groups

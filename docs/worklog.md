@@ -35,6 +35,11 @@ concrete next steps. Update it at the end of every work session.
   nominal storage requirement (`soc_qadj`) for `:tsoc` and `:sblk`.
 
 **Decisions taken:**
+- LP against the sampler (user, 2026-11-04): the LP prices curtailment as the sampler does
+  (renewables at A·k, excess dumped; storage balance an equality, no free spill; cycling
+  disposal reported as the remaining gap, ~0.02 %); comparison runs with losses, soft limits and
+  link losses off until the LP has them; CO₂ treatment and a common weather source decided
+  when the H2b comparison is set up (validation.md §2.7).
 - CPU move kernels frozen as the reference, retired after H5, the device exactness suite and the CPU-node question (user, 2026-11-04; roadmap.md §5).
 - The learned bias is retired as part of the target (user, 2026-11-04): work proceeds on the
   replica–Langevin structure. A learned weather-response term may return only as an optional

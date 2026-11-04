@@ -97,7 +97,7 @@ summary = Dict{String,Any}(
     "years" => years, "weights" => res.weights, "status" => res.status,
     "objective_eur_per_a" => C, "capex_eur_per_a" => res.capex,
     "opex_eur_per_a" => sum(res.weights .* res.opex), "opex_by_year_eur" => res.opex,
-    "sampler_cost_eur_per_a" => C + sum(res.weights .* [s["curtail_cost_eur"] for s in res.stats]),
+    "sampler_cost_eur_per_a" => C + sum(res.weights .* [s["curtail_cost_eur"] + s["cycling_cost_eur"] for s in res.stats]),
     "ignored_model_terms" => ignored,
     "mean_stats" => Dict(k => sum(res.weights .* [get(s, k, 0.0) for s in res.stats]) for k in statkeys),
     "n_k_free" => res.sols[1].n_k_free, "n_k_total" => res.sols[1].n_k_total,
