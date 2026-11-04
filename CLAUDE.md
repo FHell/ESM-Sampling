@@ -42,6 +42,11 @@ The other files in `docs/` are development notes, not a description of the syste
   below about 6 cores; do not run several heavy jobs at once.
 - Kill processes carefully: select PIDs with `ps -eo pid,args | grep "[p]attern"`; never use
   `pkill -f` or `pgrep -f` with a pattern that also matches your own shell command.
+- Long measurements (more than about 15 minutes of compute: convergence and mixing runs, scans,
+  LP batches) do not run on this machine. Prepare them as a campaign for the PIK cluster
+  (docs/system/hpc.md: configs, a script for `hpc/run.sh`, a list file for the array template,
+  a ledger row), smoke-test them locally for a few minutes, and commit; the user runs them
+  there.
 - Keep everything inside the project folder (data in `data/`, outputs in `results/`, scratch in
   your scratchpad or `results/`). Install no new external binaries.
 
