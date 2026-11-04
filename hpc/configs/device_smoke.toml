@@ -1,0 +1,34 @@
+# Smoke run of the device driver through the run wrapper (hpc/run.sh, mode device): the
+# replica–Langevin sampler, 2 chains × 2 replicas on 40 nodes daily, a few steps; exercises
+# the compile, the weather upload, the Langevin step, the snapshot and the resume. Locally on
+# the CPU backend; on a GPU node set device_backend = "gpu". The wrapper sets out, cache_dir,
+# cache_mirror, checkpoint and stop_file.
+data = "data/processed/model.h5"
+basis = "haar"
+storage = "soc"
+renewables = "load"
+measure = "physical"
+levels = [[10, 24], [40, 24]]
+init = "heuristic"
+use_bias = false
+nchains = 2
+chain_starts = ["low", "high"]
+mlda_warmup = 12               # replica steps (multiples of device_sweeps)
+nsamples = 20
+device_backend = "cpu"
+device_sweeps = 4
+device_sampler = "replicas"
+checkpoint_minutes = 30.0
+replicas = 2
+replica_init_sweeps = 5
+replica_burst_every = 4
+replica_gate_min = 1
+replica_gate_max = 2
+replica_gate_min_window = 1
+replica_gate_max_window = 2
+replica_probe_every = 4
+replica_probe_len = 4
+replica_probe_tail = 2
+replica_probe_win = 2
+replica_probe_avg = 1
+tilt_samples = 20

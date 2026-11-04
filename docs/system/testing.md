@@ -91,6 +91,9 @@ family needs are listed in [moves/adding_a_move.md](moves/adding_a_move.md) §4.
 | `test_kbox_dev.jl` | `kscale` and `kpeak` from a state with raw capacities above their box against the CPU Metropolis forms (arrays and compiled) |
 | `test_kmove_bias.jl`, `test_bias_dev.jl` | with the bias lifted to the chains' level: capacity moves with the bias against the CPU Metropolis forms (arrays and compiled); the device bias change of the same proposals against the CPU bias cache (`bias_delta_k`) and against differences of `bias_term`, the aggregates after commits against a fresh pack, and the compiled `delta_bias` against the arrays |
 | `test_driver_parts.jl` | device chain parameters = host chain parameters |
+| `test_langevin_dev.jl` | replica sampler: capacity scores = `capacity_scores`; the Langevin step with the same normals and the dispatch following = `langevin_capacities`, `follow_capacities!` (2 chains × 2 replicas); the weather upload = `compensate_weather!`; then compiled against arrays |
+| `test_replica_driver.jl` | the device replica driver on arrays against `run_replicas`: weather paths and gate schedule bitwise; per step the scores, gates, weights, Langevin step and dispatch following against the CPU functions; a probe step; stop and resume |
+| `test_replica_compiled.jl` | the replica driver's four programs compiled against arrays, and a short compiled run; only with `ESM_DEVICE_COMPILE=1` |
 | `test_exact_dev.jl`, `diag_exact_soc.jl` | statistical runs; off unless `RUN_STAT=1` |
 
 Shared setups: `setup40.jl`, `setup_all_terms.jl` (40 nodes, all model terms), `helpers.jl`

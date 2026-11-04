@@ -331,8 +331,13 @@ include("dshape.jl")       # learned dispatch shapes (adshape)
 include("slong.jl")        # long-range storage moves (slong, slevel)
 export TermBatch, sample_dense, eval_terms, FlatState, plan, run_rounds, check_conflicts, unflat!
 
+include("ren.jl")           # renewable units: index, parameters, state, write-back
 include("kmove.jl")
 include("bias_dev.jl")
 include("kren.jl")
 include("driver.jl")
-export run_device, kscale_mh!, kmove_units, kscale_mh_loop, kpeak_mh_loop, KParams, pack_bias, delta_bias, commit_bias!, ren_units, pack_ren, kren_mh_loop, peak_sets_dev
+include("score.jl")          # capacity score (replica–Langevin sampler)
+include("langevin_dev.jl")   # Langevin capacity step, dispatch following, replica batch, weather upload
+include("snapshot_dev.jl")   # state snapshots and resume of the device drivers
+include("replica_run.jl")    # host loop of the replica–Langevin sampler
+export run_device, run_replicas_device, cap_score, lgv_pass, weather_update, kscale_mh!, kmove_units, kscale_mh_loop, kpeak_mh_loop, KParams, pack_bias, delta_bias, commit_bias!, ren_units, pack_ren, kren_mh_loop, peak_sets_dev

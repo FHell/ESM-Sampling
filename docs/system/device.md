@@ -16,9 +16,13 @@ constraints priced, with every model-completion term (losses and soft limits as 
 sums, lossy links, merged vintages, fleet unit commitment, the CO₂ price through the
 marginal costs). The measure enters only the Jacobians of the capacity moves.
 
-Everything else stays on the CPU host: setup, the weather model, the reference LP and the
-heuristic start, the level-0 warmup that learns the bias, adaptation and bias refits,
-checkpoints and I/O. Coarse levels are not ported.
+Two capacity samplers exist (`device_sampler`): the replica–Langevin sampler
+([../replica_sampler.md](../replica_sampler.md); §5.2, §6.2), which replaces the learned bias,
+and the Metropolis capacity pass with the bias (§5.1, §6.1), which is retired with the bias.
+
+Everything else stays on the CPU host: setup, the weather model and the replicas' weather
+process, the reference LP and the heuristic start, the level-0 warmup that learns the bias,
+adaptation and bias refits, snapshots and I/O. Coarse levels are not ported.
 
 ## 2. State
 
@@ -283,7 +287,9 @@ The slope-jump families are not split at this size. The plain families stay belo
 > **Status: deviation.** Parallel lines are not supported by the angle family (none exist in
 > the 40- and 256-node networks).
 
-## 5. Capacity pass
+## 5. Capacity moves
+
+### 5.1 Metropolis capacity pass (`device_sampler = "mh"`)
 
 After every `device_sweeps` operation sweeps, one compiled capacity pass runs, in order:
 renewable scaling moves (`kren_mh_loop`), the peak sets recomputed from the net load
@@ -305,7 +311,81 @@ $F_1$, $F_2$ come from the CPU's tables, evaluated by a gather of two table entr
 tables are re-packed and uploaded (same shapes, no recompile). The capacity-dependent chain
 parameters are then recomputed on the device.
 
+### 5.2 Replica–Langevin step (`device_sampler = "replicas"`)
+
+The sampler of [sampler.md](sampler.md) §11 (CPU: `src/replicas.jl`): M weather replicas per chain
+share the capacities; the capacities take a Langevin step on the replica-averaged sampled score.
+Code: `device/src/score.jl`, `device/src/langevin_dev.jl`, the renewable units in `device/src/ren.jl`.
+
+**Replica batch.** The batch dimension is $C$ = chains × M, the replicas of a chain contiguous
+($c = j + (\text{chain}-1)M$). Every replica has its own net load, dispatch, states of charge and
+residual; the capacities `kg`, `ks`, `RS.kr` are stored per replica and equal within a chain.
+Reductions over a chain's replicas are reshapes $(C,U)\to(M,C/M,U)$ and sums (`rep_sum`); a
+chain's new capacities go back to its replicas by a broadcast (`rep_bcast`).
+
+**Score** (`cap_score`). Per replica and investable unit, at fixed utilizations,
+$s_k = -\beta_v\,\partial_k C(k,v) + \partial_k\log J(k)$ in node coordinates, and the capex force
+$\beta_k\,\partial_k K$ (with the box penalty $\gamma_k$). The terms are those of the CPU's capacity
+gradient (`energy_cost(…; grad=true)`: `gen_grad` with the vintage kink, `uc_grad`, `soc_grad`,
+renewables at $y = 1$; the balance through its subgradient
+$\Delta t\,(c_{\rm shed}[r>0] - c_{\rm dump}[r<0])$ at the unit's node, from the residual cache)
+plus `log_measure_grad`; a unit outside its box gets a zero operation score. Elementwise maps, sums
+over the steps and one-hot contractions only. `score_acc` adds the score of every replica after
+each of the `inner` operation sweeps of a step (weight 1/`inner`). In the Langevin coordinates
+the score is $(k+\kappa_s)\,s_k$ (`wscore`).
+
+**Step** (`lgv_w`, `lgv_pass`). Per chain and unit, $w = \log(k+\kappa_s)$ ($\kappa_s$ per carrier,
+$\eta_w$ per chain and carrier, `LgvParams`):
+$$
+w' = w + \mathrm{clip}\big(\eta_w((k+\kappa_s)g + 1)\big) + \sqrt{2\eta_w}\,\xi,\qquad
+g = -\beta_k\partial K + r\,\bar s_k,\quad r = \beta_k/\beta_v,
+$$
+$\bar s_k = \sum_j \omega_j s_k^{(j)}$ with the replica weights $\omega$ (`W`, uploaded per step: the
+CPU's `drift_weights` over the replicas active by their gate, with the tilt). Reflection at
+$k = \kappa_{\min}$ and, with `langevin_box`, at the upper bound of the box (`langevin_update`);
+$\eta_w = 0$ freezes a unit (fixed capacities always). The noise $\xi$ is drawn
+by Reactant's RNG in runs (`lgv_pass_rng`) and passed in for the tests.
+
+**Dispatch following** (`lgv_commit`), in every replica, in the order of `follow_capacities!`:
+1. dispatchable units at fixed output: utilizations and commitment scaled by $c(k_0)/c(k_1)$ (the
+   commit map of `kscale`); the residual takes the output lost where the scaled utilization
+   leaves $[0,1]$;
+2. renewables (one carrier at a time; its units sit at distinct nodes, so a carrier is one
+   vectorized update) and then storage, at fixed utilization (output $A k$; the state-of-charge
+   fractions), the node's dispatchable generators following on the kop curve
+   ([moves/capacity.md](moves/capacity.md)): with $P$, $Q$ the compensators' output and
+   requirement and $e = P - Q_+$, the new output $P_1 = (Q-\Delta\mathrm{inj})_+ + e$ is shared as
+   $y_i = \sigma_i P_1/\kappa_i$, $\sigma_i = \kappa_i y_i/P$, for the compensators with
+   $|Ak|\ge\kappa_{\min}$ (`kop_follow`); a unit with $k_0 < \kappa_{\min}$ moves alone. The renewable
+   output change moves the net load, the renewable running cost and its capex.
+
+The chain parameters are then recomputed with the proxy class of the new net load.
+
+**Weather upload** (`weather_arrays`, `weather_update`). After the host's weather step of some
+replicas, their load less the fixed renewables' output $D_0$ $(C,T,N)$, its running cost and the
+clamped availability $A$ $(C,T,U_r)$ are uploaded with a 0/1 mask of the changed replicas. The device
+sets the net load $D_0 - H(A\,c(k_r))$ and the renewable running cost from the current renewable
+capacities, shifts the residual by the change of the net load and (`comp`) re-initialises the
+dispatch compensated (`compensate_weather!`: at every node and step the dispatchable
+generators take up the change, increases in proportion to headroom, decreases in proportion to
+output).
+
+**Verification** (`device/test/test_langevin_dev.jl`, 40 nodes × 6 h, all model terms, 2 chains ×
+2 replicas): on arrays against the CPU, the scores to $7\cdot10^{-13}$ (relative) and the forces to
+$10^{-15}$; the step with the same normals against `langevin_capacities`/`follow_capacities!`
+(capacities to $2\cdot10^{-14}$, utilizations $2\cdot10^{-14}$, residual $4\cdot10^{-11}$ MW, net load,
+running cost and capex to round-off); the weather upload against `compensate_weather!` (utilizations
+$2\cdot10^{-15}$, residual $2\cdot10^{-11}$ MW, proxy classes equal). Compiled by Reactant on the CPU
+backend, the same comparisons hold, and compiled and array outputs agree to round-off.
+
+A capacity exactly on its box bound (the clamped chain starts) can be inside the box for the
+device's node values and outside for the CPU's coefficients (one round trip apart), so the
+scores of such a unit differ in the first step; the Langevin step moves the capacity off the
+bound.
+
 ## 6. Host loop
+
+### 6.1 Metropolis driver (`device_sampler = "mh"`)
 
 `run_device(cfg)` (script `device/scripts/run_device.jl`, configuration e.g.
 `configs/device40.toml`; `run_device(cfg; merged=false, families=…)`):
@@ -331,6 +411,73 @@ parameters are then recomputed on the device.
 
 The loop times every part per call (operation sweeps, capacity pass, host draws, download,
 host work) and writes them to `device_profile/*` in the output file, with the compile times.
+### 6.2 Replica driver (`device_sampler = "replicas"`)
+
+`run_device(cfg)` with `device_sampler = "replicas"` calls `run_replicas_device`
+(`device/src/replica_run.jl`, configuration e.g. `configs/device40_replica.toml`): the driver of
+`run_replicas` (src/replicas.jl, [sampler.md](sampler.md) §11) with the replica batch on the device,
+and its settings (`replicas`, `replica_*`, `langevin_*`, `tilt_*`; [config.md](config.md)):
+
+1. `replica_device_setup`: `setup` (the bias is not used); per chain its start and `init_replicas`
+   without its sweeps (fresh weather draws from the replicas' own streams, the compensated
+   initialisation, `ReplicaSet`), or the replicas of the snapshot; `pack`, `plan`, the device arrays
+   and four programs (operation sweeps, score accumulation, Langevin step with the dispatch
+   following, weather upload), compiled, or with `compile = false` the same functions on Julia
+   arrays; then `replica_init_sweeps` operation sweeps on the device;
+2. per step (`replica_device_step!`):
+   - `replica_device_weather!`: per replica the CPU's `replica_weather!` without its compensation
+     (the schedule, the window and FFBS, the gate reset at a burst; `weather_process_step`), the
+     upload of the changed replicas and the compensation on the device;
+   - `replica_device_operation!`: `replica_inner` × (operation sweep, scores) on the device;
+   - `replica_device_capacity!`: the scores downloaded into the CPU's per-field layout
+     (`unit_map`), the gates (`update_gate!`), the probe windows and `drift_weights` on the host,
+     the Langevin step on the device; every `replica_probe_every` steps per chain `lag_probe` on the
+     host CPU (the candidate replica downloaded, the chain's probe stream) and in the warmup
+     `adapt_step!`, the new steps uploaded;
+3. a host checkpoint every `device_sweeps` steps: download, `State`s, `replica_monitor` and
+   `replica_record`, the snapshot boundary (§6.3);
+4. `chains_report` over the chains, `write_replica_outputs`, `write_replica_summary`, the timings.
+
+The random streams are those of `run_replicas` for the weather (bitwise the same weather paths
+from the same configuration) and the probes; the operation sweeps and the Langevin noise use two
+device streams.
+
+> **Status: deviation.** The monitored quantities and the replica records are taken at the host
+> checkpoints only (every `device_sweeps` steps), not every step as on the CPU. The lag probe runs
+> on the host CPU (`replica_probe_len` sweeps of one replica per chain), synchronously.
+
+**Verification.** `device/test/test_replica_driver.jl` (arrays, against the CPU): the weather paths
+and gate schedules of a run equal those of `run_replicas` bitwise; per step after the operation
+sweeps, the downloaded scores equal `capacity_scores` ($6\cdot10^{-13}$), the gates and weights those
+of `update_gate!` and `drift_weights`, and the Langevin step with the same normals plus the
+dispatch following those of `langevin_capacities` and `follow_capacities!` (capacities $7\cdot10^{-13}$,
+utilizations $2\cdot10^{-10}$, residual $2\cdot10^{-10}$ MW); a probe step adapts and uploads the
+per-chain steps; stop (exit 75) and resume in the CPU layout.
+`device/test/test_replica_compiled.jl` compares the four programs compiled by Reactant with the
+arrays (and runs the compiled driver) when `ESM_DEVICE_COMPILE=1`.
+
+### 6.3 Snapshots and resume
+
+Both drivers follow the CPU driver's contract ([hpc.md](hpc.md) §7): at a host checkpoint, every
+`checkpoint_minutes` and when `stop_file` exists, a snapshot is written atomically. The Metropolis
+driver writes the chains layout ([data.md](data.md) §5) plus a group `device/`
+(`device/src/snapshot_dev.jl`); the replica driver writes the layout of the CPU replica driver
+(`write_replica_snapshot`, `boundary!`; also once after the initialisation), so each replica
+driver resumes from the other's snapshots. With the stop file the driver
+removes it and returns exit code 75 (`device/scripts/run_device.jl` exits with it and ignores
+SIGTERM with `ESM_IGNORE_SIGTERM=1`). If
+the snapshot exists at start, the driver resumes from its states: the device arrays, plan and
+programs are rebuilt from them (the residual cache recomputed), the counters continue, Reactant's
+RNG and the host streams (proposal draws, every replica's weather) are re-seeded from `seed` and
+the restart count; the output records `run/restarts` and `run/resumed_at_checkpoint`
+(Metropolis) or `run/resumed_at_sweep` (replicas, the step). A
+resumed Metropolis run with the bias lifts the set-up bias (as the CPU driver). The grace time
+of a preemption must cover one host checkpoint interval (`device_sweeps` steps) plus the write.
+The device driver builds no caches of its own: `setup` uses `cache_dir` and `cache_mirror` as on
+the CPU.
+
+### 6.4 Setup and profilers
+
 `device_setup(cfg)` builds everything up to the compile and is shared with the profilers:
 `device/scripts/profile_device.jl` (Reactant's profiler on both programs: compile time split
 into tracing, MLIR passes and XLA; run time; kernel and framework-op statistics; xplane traces
@@ -356,7 +503,10 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | term axis (program size independent of the term count); stacked builders (one gather per field) for the compensated, block, cell and dense angle families | done |
 | commitment columns of non-committable units left out (`UC_COLS`); balance jumps on the column entries; entry-axis-first global part; two-level scans; sort networks for short lists | done; verified on arrays against the CPU and the dense form |
 | one program per checkpoint (operation sweeps + capacity pass) | done (`sweep_program`, `merged = true`); not the default (compile time) |
-| capacity pass (`kren`, `kscale`, `kpeak` absorb) with the bias, host loop | done |
+| capacity pass (`kren`, `kscale`, `kpeak` absorb) with the bias, host loop | done (retired with the bias) |
+| replica–Langevin capacity step: score, step in $w$, dispatch following (fixed output, kop curve), replica batch, weather upload with compensation | done; verified on arrays against the CPU and the prototype, compiled (CPU backend) against arrays |
+| replica driver on the CPU sampler (`replicas`, `replica_*`, `langevin_*`, `tilt_*`; weather process, gate, probe and adaptation, weights, snapshot layout) | done; verified on arrays against `run_replicas`; compiled check written (`test_replica_compiled.jl`), not run |
+| snapshots and resume of both drivers, exit code 75 | done; smoke-tested through `hpc/run.sh` (device mode, CPU backend) |
 | sparse angle templates: Haar atoms of the proxy and learned modes (`:tcut`, `:tcutw`, `:tcutL`, `:tcutLw` for `tcut`, `acut`, `tcutL`, `acutL`) | verified on arrays against the CPU (`test_comp.jl` H, I) |
 | local re-routing templates (`:xloc`, `:xlocc`, `:xpair`; `tline` as `:tdir`) | verified on arrays against the CPU (`test_comp.jl` H, I); generator units only (the CPU draws any unit of `LM.units`, which are the generators) |
 | block aggregates (cell–class groups: `:sblkg{L}`, `:sblkgL{L}`) | verified on arrays against the CPU (`test_comp.jl` K, L) |

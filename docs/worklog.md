@@ -28,7 +28,8 @@ concrete next steps. Update it at the end of every work session.
 - Seasonal storage at fixed (k, x) after the long-range moves and the storage pairs (ledger
   E21, E27): per-unit hydro and PHS shapes relax about twice as fast with `sxpair`/`sxlong`
   (equal CPU, chain 4), but the large hydro units and opex still drift over 3000 sweeps; the
-  walls are now the reservoirs' zero discharge at the end steps. Next: campaign H10, redesigned to make its start states on the cluster; a direction
+  walls are now the reservoirs' zero discharge at the end steps. Next: campaign H10 (prepared,
+  self-contained; after D1: stage 1 LP, stage 2 the six runs, docs/campaigns.md); a direction
   whose power change is spread over several steps where the reservoir discharges (selection
   must not depend on v); the device port of `slong`/`slevel`, of the storage pairs and of the
   nominal storage requirement (`soc_qadj`) for `:tsoc` and `:sblk`.
@@ -70,12 +71,15 @@ concrete next steps. Update it at the end of every work session.
 - Device form of the replica sampler: the CPU reference is `src/replicas.jl` (weather process
   with explicit noise, `langevin_update`, `follow_capacities!`; architecture.md §2); it replaces
   the Metropolis capacity pass and the planned `kop` port and per-carrier scales.
+- Device capacity side of the replica sampler: built against the prototype (score, step,
+  dispatch following, replica batch, replica driver; device.md §5.2, §6.2); next: the device
+  driver on the src/ replica sampler (its config keys, gate, probe, snapshot layout).
 - Re-measure the compile times on a quiet machine (239 s / 149 s were measured under load).
 
 **HPC (PIK cluster, [system/hpc.md](system/hpc.md); campaigns H0–H9 in the ledger):**
 - `cache_dir` key or `ESM_CACHE_DIR`: one shared, content-addressed cache with atomic writes
   (now per run directory).
-- Checkpoint and resume with SIGTERM handling in `run_chains` and `run_device`.
+- Checkpoint and resume with SIGTERM handling in `run_chains` and `run_device`: both built.
 - `hpc/` scripts built (env, prepare, campaigns, run wrapper, collection into git, job
   templates, H0 checks; wrapper mechanics tested locally); cluster values filled in (user
   hellmann, project directory coen, Slurm account icone, julia/1.12.2, CUDA 13 → Reactant 13.1, ERA5 at
@@ -147,6 +151,42 @@ concrete next steps. Update it at the end of every work session.
   adaptation in `run_device(…; adapt=true)` (`HostAdapt`: modes, shapes, β; uploads of the same
   shapes).
 
+### 2026-11-04 (device: replica driver on the src/ sampler)
+
+- The device replica driver (`device_sampler = "replicas"`, device/src/replica_run.jl) now runs
+  the CPU sampler's parts: `replica_weather!` without its compensation (weather process, window,
+  FFBS, gate reset), `update_gate!`, `drift_weights` with the tilt, `lag_probe` on the host CPU and
+  `adapt_step!` (per-chain η_w uploaded), the snapshot layout of `write_replica_snapshot`, the
+  outputs and summary of `run_replicas`; settings from the CPU keys (`replicas`, `replica_*`,
+  `langevin_*`, `tilt_*`), the `[device_replica]` table and the prototype include removed.
+  `compile = false` runs the driver on plain arrays.
+- Tests on arrays (`device/test/test_replica_driver.jl`): weather paths and gate schedules equal
+  `run_replicas` bitwise; per step scores, gates, weights, Langevin step and dispatch following
+  equal the CPU functions to round-off; a probe step; stop (exit 75) and resume. The compiled
+  check of the four programs is written, not run (`device/test/test_replica_compiled.jl`,
+  `ESM_DEVICE_COMPILE=1`).
+- `ren_units`, `pack_ren`, `ren_to_host!` and the renewable structs in `device/src/ren.jl` (out of
+  `bias_dev.jl`, `kren.jl`, `driver.jl`).
+- Open: the compiled check and a `hpc/run.sh` device smoke run on the new driver (the port agent's
+  compile pass); records every `device_sweeps` steps only; the probe runs synchronously on the host.
+
+### 2026-11-04 (device: capacity side of the replica sampler, snapshots)
+
+- Device capacity score (`device/src/score.jl`: `cap_score`, the CPU's capacity gradient term by
+  term plus `log_measure_grad`), the Langevin step in w = log(k + κ_s) with reflection and the
+  dispatch following (fixed output for dispatchables, the kop curve for renewables and storage),
+  the replica batch C = chains × M with the weighted score reduction, and the weather upload with
+  the compensated initialisation (`device/src/langevin_dev.jl`); verified on arrays against the
+  CPU and the prototype (scores 7e-13 relative, step and commit to round-off) and compiled on the
+  CPU backend (`device/test/test_langevin_dev.jl`).
+- Replica driver `run_replicas_device` (`device_sampler = "replica"`, table `device_replica`;
+  host weather process from the prototype, gates, tilt weights; `configs/device40_replica.toml`).
+- Snapshots and resume for both device drivers (`device/src/snapshot_dev.jl`), exit code 75 and
+  `ESM_IGNORE_SIGTERM` in `device/scripts/run_device.jl`. Smoke-tested through `hpc/run.sh` in `device` mode on the CPU backend (`hpc/configs/device_smoke.toml`, simulated layout): SIGTERM to the wrapper after checkpoint 1 gave a snapshot, exit 75, status `checkpointed`; the same run id resumed (restart 1) and finished with exit 0, the run archived and indexed. Laptop GPU: score 10 ms, Langevin step 38 ms, weather upload 54 ms per step at 4 × 4 replicas, 40 nodes daily (performance.md §7).
+- Open: switch the references and the host weather process to the src/ replica sampler when it is
+  merged; the lag probe and the η_w adaptation on the device; `ren_units`/`pack_ren` live in
+  `bias_dev.jl` and must move when it is retired; GPU timings of the replica step in campaign H5.
+
 ### 2026-11-04 (time limits)
 
 - The time-limit signal (`--signal=B:USR1@900`) went to the templates' batch shell, which ran
@@ -183,6 +223,16 @@ concrete next steps. Update it at the end of every work session.
   on chain 4 for 3000 sweeps (ledger E27); the long runs as campaign H10 (`campaigns/H10/`,
   `scripts/mixing/opmix_hpc.jl`, smoke-tested locally through `hpc/run.sh` with a stop and a
   resume).
+- H10 made self-contained: the start states are built in the run from `configs/chains40.toml`
+  and its seed (heuristic capacities, or the reference LP solved once by a stage-1
+  `lp_reference.jl` job into the shared cache), then a common 500-sweep burn-in with the E21
+  kernel on its own stream (state hash in the summary), resumable like the main phase; no input
+  files, no pinned model hash; `campaigns/H10/chains40_e15.toml` removed; submit lines with
+  `--time` (LP 2 h, runs 12 h). Smoke-tested through `hpc/run.sh`: heuristic start with a stop
+  in the burn-in and a resume (start hash equal to an uninterrupted run), LP start (burn-in, run,
+  summaries). The LP start fails on main with `ESM_LP_THREADS` ≠ HiGHS's default ("global
+  scheduler has already been initialized"); the fix (scheduler reset, f2d09a3) is on the
+  LP-baseline branch and must be on main before H10's stage 1.
 
 ### 2026-11-04 (replica–Langevin sampler in src/)
 

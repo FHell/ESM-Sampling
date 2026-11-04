@@ -114,8 +114,6 @@ function pack_bias(P::ML.Problem, ix::DeviceIndex, ss::Vector{ML.State})
     return BD, BiasState(k, zc, u1x, u2x, u1s, u2s, gx, gs), gitem, sitem, ritem
 end
 
-"Investable renewable units (renewables as load) in device order: (group, index)."
-ren_units(P::ML.Problem) = [(gi, i) for (gi, g) in enumerate(P.E.gens) if g.vf == 0 && g.kf > 0 for i in eachindex(g.bus)]
 
 "Table value at u (any shape): F[j] + w (F[j+1] − F[j]) on the clamped segment j (the CPU's `tabval`)."
 function tab_dev(F, u0, h, u)
