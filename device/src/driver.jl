@@ -94,8 +94,8 @@ function sweep_program(st::FlatState, cp, sp, k, tabs, ns, rng, fv::Val, kparts.
     return capacity_pass(st, kparts..., dims; σ, βk, βv, physical)
 end
 
-"Block lengths of a device run (`device_families`); L = 32 is left out: in the dense form a move costs ≈ 40× one of L = 4."
-const BLOCK_SCHED = (2, 4, 8, 16)
+"Block lengths of a device run (`device_families`): all of `BLOCK_LENGTHS` (slope-jump form, `plan`)."
+const BLOCK_SCHED = BLOCK_LENGTHS
 
 """
 Operation families of a device run: the plain families, then the compensated families (`:spair0`,

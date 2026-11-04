@@ -10,7 +10,7 @@
 # the CPU (prep_node!, prorata!, prep_tpot!(…; n), compensate_learned! via `learn`), the same (u1,
 # u2, u3) per site (MockRNG for sample_line!, u3 for the Jacobian step); both sides commit the
 # device's t; then states, r and cost; then Reactant (CPU backend) against the Julia-array run.
-# Run: cd device && nice -n 19 julia --project=. -t 4 test/test_comp.jl
+# Run: cd device && nice -n 19 julia --project=. -t 4 test/test_comp.jl   (CASE=A|B|C|D|E, SKIP=fam1,fam2 leaves families out)
 include("setup40.jl")
 include("helpers.jl")
 using Test, Random
@@ -43,6 +43,7 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
     for c in 1:C; cls[c, :] .= vec(permutedims(Float64.(FFs[c].surplus))); end
     ci = cells ? D.cell_info(P, LM, ix) : nothing
     fams == :cells && (fams = D.cell_families(ci))
+    fams = Tuple(f for f in fams if !(string(f) in split(get(ENV, "SKIP", ""), ",")))   # SKIP=cellpairu1: leave out
     pl = D.plan(M, S, β; families=fams, cpumap=true, cls=cls, bmax=Dict(f => NSITE for f in fams), cells=ci)
     qof = Dict(ix.gidx[q] => q for q in eachindex(ix.gidx))
     for n in eachindex(AM.runits), (j, (f, i)) in enumerate(AM.runits[n])

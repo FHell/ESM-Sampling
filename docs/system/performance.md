@@ -182,6 +182,18 @@ With every family of the run set (`device_families`, 4fd3d2c) a sweep costs abou
 520 points × 87 columns, `sblk16` 1403 × 139), and the memory cap (`DENSE_BUDGET`, 256 MB)
 splits their rounds into many small ones (`tpot` 312 rounds of 183 sites).
 
+**Slope-jump form** (§3 of [device.md](device.md); Reactant's CPU backend, `configs/device40.toml`:
+40 nodes daily, $T$ = 365, 4 chains, 4 threads; one family alone, seconds per sweep, dense →
+slope-jump): `tpot` 53.6 → 13.8, `sblk8` 27.0 → 1.70, `sblk16` 43.5 → 1.39, `sblk32` 71.5 →
+1.16; `tsoc` 11.3 → 4.4, `sblk2` 10.7 → 3.4, `sblk4` 15.4 → 2.2, `cell1` 0.48 → 0.04,
+`cellpair1` 1.85 → 0.08, `cell2` 0.67 → 0.17, `cellpair2` 2.20 → 0.34 (the second group measured
+before the last round-off changes of the slope-jump values, which add two prefix sums); `spair0`
+0.79 → 1.41, so it stays dense. The dense rows are at the 256 MB cap (`tpot` 87 rounds of 182
+sites); the slope-jump rounds are not split.
+In `tpot` the commitment columns (48 per site, 19 local points each) and the eight balance slots
+(52 points each) take 0.15 s each of the 0.45 s of a round, the payload sort of the 1 476
+entries 0.07 s.
+
 The rows are for the dense sampler with the term axis (static zero slopes, per-quantity root
 counts). Before it, the `FAMILIES_FAST` sweep took 1.00 s (`soc` 0.58 s, `pair0` 0.070 s,
 `theta5` 0.155 s) and `spair` 2.55 s; the family rows of `FAMILIES` are from that version. The

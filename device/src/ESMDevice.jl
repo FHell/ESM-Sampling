@@ -334,6 +334,7 @@ rebuild_r(M::DeviceModel, S::DeviceState) = cost_parts(M, S)[1]
 
 # phase 2: term batch, exact dense line sampler, plain families, schedule and device loop
 include("terms.jl")
+include("jump.jl")          # slope-jump form of the line sampler
 include("rounds.jl")
 include("comp.jl")         # phase 3: compensated moves (spair, tsocL/tsoc, tpotL/tpot)
 include("cells.jl")        # phase 3: cell templates (cell, cellpair)

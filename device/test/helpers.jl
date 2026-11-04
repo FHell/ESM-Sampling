@@ -111,8 +111,7 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
         tb, _ = D.build(Val(f), st, pl.cp, pl.sp, tabs[f], r, pl.k)
         u = U[f][:, :, :, r]
         st2, tfin = D.do_round(Val(f), st, pl.cp, pl.sp, pl.k, tabs[f], r, u)
-        tpre = D.sample_dense(tb, pl.k, u[:, :, 1:1], u[:, :, 2:2]; K=D.nroots(Val(f)))
-        guard = D.dense_points(tb, pl.k, u[:, :, 1:1] .* 0.0; K=D.nroots(Val(f)))[2]
+        tpre, guard = D.line_draw(Val(f), tb, pl.k, u[:, :, 1:1], u[:, :, 2:2])     # the family's form (dense or slope-jump)
         sites = rounds[f][r]
         B = size(tabs[f].on, 1)
         tc = zeros(C, B); tcpre = zeros(C, B)
@@ -135,10 +134,10 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
         end
         # the CPU's points inside the CPU walk's range, the device's own kinks outside it (the CPU walk
         # stops 40 nats above the running minimum; the potential may fall again further out)
-        own = D.dense_points(tb, pl.k, u[:, :, 1:1] .* 0.0; K=D.nroots(Val(f)))[1]
+        own = D.line_points(Val(f), tb, pl.k)
         merged = [begin
             lo, hi = extrema(pts[c, b]); o = own[c, b, :]
-            vcat(pts[c, b], o[(o .< lo) .| (o .> hi)])
+            vcat(pts[c, b], unique(o[(o .< lo) .| (o .> hi)]))
         end for c in 1:C, b in 1:B]
         K = maximum(length.(merged))
         Pc = zeros(C, B, K)

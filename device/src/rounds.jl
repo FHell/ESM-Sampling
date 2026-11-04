@@ -614,12 +614,63 @@ pin(x) = x
 pin(x::Reactant.TracedRArray) = Reactant.Ops.optimization_barrier(x)[1]
 
 """
+Families drawn in the slope-jump form (`sample_jump`); the others use the dense form. A static
+choice per family, made by `plan` (`jump = :auto`): the slope-jump form where the dense form's
+points × columns per site are at least `JUMP_RATIO` × the slope-jump entries (the slope-jump form
+pays a payload sort of its entries; the plain families stay dense).
+"""
+const JUMP_FAMILIES = Set{Symbol}()
+const JUMP_RATIO = 4
+jumpform(::Val{f}) where {f} = f in JUMP_FAMILIES
+"Entries kept per site in the slope-jump form of family f (set by `plan`; 0: all)."
+const JUMP_CAP = Dict{Symbol,Int}()
+jumpcap(::Val{f}) where {f} = get(JUMP_CAP, f, 0)
+
+"Line draw of family f: (t, guard) from the slope-jump or the dense form (the same draw to round-off)."
+function line_draw(f::Val, tb::TermBatch, k::Consts, u1, u2)
+    jumpform(f) && return sample_jump(tb, k, u1, u2; K=nroots(f), cap=jumpcap(f))
+    pts, over = dense_points(tb, k, u1 .* 0.0; K=nroots(f))
+    return ifelse.(over, 0.0, sample_points(tb, k, pts, u1, u2)), over
+end
+
+"The sorted points of a line draw of family f (diagnostics: the dense points or the slope-jump entries)."
+function line_points(f::Val, tb::TermBatch, k::Consts)
+    jumpform(f) || return dense_points(tb, k, tb.st.z .* 0.0; K=nroots(f))[1]
+    pts, jmp, _, _, nz0 = jump_parts(tb, k; K=nroots(f))
+    return jump_points(pts, jmp, nz0, 0)[1]
+end
+
+"""
+Cap of the slope-jump entries of family f: 1.25 × the largest real-candidate count of the first,
+middle and last round's sites + 8 (0: no cap, when that is not below the entries). Sites above it
+stay at t = 0 (exact guard; the rate is reported by the tests).
+"""
+function jump_cap(f::Symbol, tab, st, cp, sp, k)
+    R = size(tab.on, 2)
+    cmax, N = 0.0, 0
+    for r in unique([1, cld(R, 2), R])
+        N, _, cnt = jump_size(build(Val(f), st, cp, sp, tab, r, k)[1], k; K=nroots(Val(f)))
+        on = tab.on[:, r] .> 0
+        any(on) && (cmax = max(cmax, maximum(cnt[:, on])))
+    end
+    cap = ceil(Int, 1.25 * cmax) + 8
+    return cap >= N ? 0 : cap
+end
+
+"Elements per site of the largest tensor of a round of family f (`dense_size`, `jump_size`)."
+function round_elements(f::Val, tb::TermBatch, k::Consts)
+    jumpform(f) && return jump_size(tb, k; K=nroots(f))[2]
+    np, nc = dense_size(tb, k; K=nroots(f))
+    return np * nc
+end
+
+"""
 One round: term batch, exact line draws, Jacobian step (T2 families), commit. u: (C, B, 3)
 uniforms (u1 segment, u2 offset, u3 Jacobian). Returns (state, t).
 """
 function do_round(f::Val, st::FlatState, cp, sp, k::Consts, tab, r, u)
     tb, aux = build(f, st, cp, sp, tab, r, k)
-    t = sample_dense(tb, k, u[:, :, 1:1], u[:, :, 2:2]; K=nroots(f))
+    t, _ = line_draw(f, tb, k, u[:, :, 1:1], u[:, :, 2:2])
     t = pin(jac_accept(tb, t, u[:, :, 3:3]))
     dr = slot_changes(tb, k, t)
     return commit_tb(f, st, tab, r, t, dr, aux, tb), t
@@ -682,16 +733,21 @@ moves_per_sweep(pl) = NamedTuple{pl.fams}(Tuple(Int(sum(pl.host[f].on)) for f in
 # ---------------------------------------------------------------------------
 
 """
-Memory budget of a round, bytes: the dense tensor C·B·points·columns·8 of `sample_dense` (see
-`dense_size`); the compiled round holds about six of them at once. `plan` splits the rounds of a
-compensated, cell or block family whose largest round exceeds it (`budget = Inf`: no split); the
-probe (one round built on host arrays) costs a few seconds of compilation per family.
+Memory budget of a round, bytes: the largest tensor C·B·e·8, e the elements per site
+(`round_elements`: points × columns in the dense form, entries or columns × local points in the
+slope-jump form); a compiled dense round holds about six of them at once. `plan` splits the
+rounds of a compensated, cell or block family whose largest round exceeds it (`budget = Inf`: no
+split); the probe (rounds built on host arrays) costs a few seconds of compilation per family.
 """
 const DENSE_BUDGET = Ref(2.0^28)
 
-"Everything the device loop needs for model M and device state S (host Arrays)."
+"""
+Everything the device loop needs for model M and device state S (host Arrays). `jump` selects the
+line-sampler form of the compensated, cell and block families: `:auto` (`JUMP_RATIO`), `:none`
+(dense), `:all` (slope-jump) or a collection of families drawn in the slope-jump form.
+"""
 function plan(M::DeviceModel, S::DeviceState, β; κmin=1.0, families=FAMILIES, bmax=Dict{Symbol,Int}(), bdefault=1 << 15,
-              cpumap::Bool=false, cls=nothing, rng=MersenneTwister(1), cells=nothing, budget=DENSE_BUDGET[])
+              cpumap::Bool=false, cls=nothing, rng=MersenneTwister(1), cells=nothing, budget=DENSE_BUDGET[], jump=:auto)
     tp = topo(M)
     cells === nothing || (CELLINFO[] = cells)            # cell structure of the partition levels (cells.jl)
     sch = schedule(tp, M; families=families, bmax=bmax, bdefault=bdefault, rng=rng)
@@ -701,13 +757,23 @@ function plan(M::DeviceModel, S::DeviceState, β; κmin=1.0, families=FAMILIES, 
     ht = Dict(f => host_table(f, tp, sch[f]; D=family_degree(f, tp, sch[f])) for f in fams)
     for f in fams                                         # memory cap: even chunks of at most b sites
         (f in FAMILIES || f in FAMILIES_FAST) && continue # plain: ≤ 40 points × 7 columns per site, far below
+        delete!(JUMP_CAP, f)
         tab = device_table(f, ht[f])
-        np, nc = dense_size(build(Val(f), st, cp, sp, tab, 1, k)[1], k; K=nroots(Val(f)))
-        bf = budget / (8.0 * C * np * nc)
-        size(tab.on, 1) <= bf && continue
-        b = max(1, floor(Int, bf))
-        sch[f] = [ch for r in sch[f] for ch in chunks(r, cld(length(r), cld(length(r), b)))]
-        ht[f] = host_table(f, tp, sch[f]; D=family_degree(f, tp, sch[f]))
+        tb = build(Val(f), st, cp, sp, tab, 1, k)[1]
+        usej = if jump === :auto
+            np, nc = dense_size(tb, k; K=nroots(Val(f)))
+            np * nc >= JUMP_RATIO * jump_size(tb, k; K=nroots(Val(f)))[1]
+        else
+            jump === :all || (jump !== :none && f in jump)
+        end
+        usej ? push!(JUMP_FAMILIES, f) : delete!(JUMP_FAMILIES, f)
+        bf = budget / (8.0 * C * round_elements(Val(f), tb, k))
+        if size(tab.on, 1) > bf
+            b = max(1, floor(Int, bf))
+            sch[f] = [ch for r in sch[f] for ch in chunks(r, cld(length(r), cld(length(r), b)))]
+            ht[f] = host_table(f, tp, sch[f]; D=family_degree(f, tp, sch[f]))
+        end
+        jumpform(Val(f)) && (JUMP_CAP[f] = jump_cap(f, device_table(f, ht[f]), st, cp, sp, k))
     end
     hts = NamedTuple{fams}(Tuple(ht[f] for f in fams))
     dts = NamedTuple{fams}(Tuple(device_table(f, hts[f]) for f in fams))

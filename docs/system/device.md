@@ -55,23 +55,64 @@ Static per-column metadata is recorded at trace time:
 The balance slots sum their columns with a static padded column table (an appended zero column,
 one gather and one sum; no 0/1 matmul, so a padded term cannot turn an infinity into NaN).
 
-`sample_dense` is exact without truncation:
-* it sorts the primary points of every site: the clamp points of moving arguments only, the
-  kinks, and the clamp points on both pieces of every kinked argument;
-* it finds the sign changes of every secondary quantity per segment, vectorized over the
-  quantity axis (`rootsK`). It keeps K of them per quantity:
+The line sampler has two forms, both exact without truncation, with the same points, the same
+uniforms and the same draw up to round-off. `plan` chooses one per family (`line_draw`).
+
+**Points.** Both forms use the same breakpoints of $\beta\Delta C(t)$:
+* the primary points: the clamp points of moving arguments only, the kinks, and the clamp points
+  on both pieces of every kinked argument;
+* the sign changes of every secondary quantity, vectorized over the quantity axis (`rootsK`).
+  K of them are kept per quantity:
   - 1 for a quantity of exactly one moving argument: it is monotone in $t$. This covers the
     SoC quantities with one moving end, and the commitment quantities with one moving
     argument;
   - none for a quantity of static arguments only;
   - the family's K otherwise (`nroots`): 2 for the plain families, where at most two are proven
-    per term type, and 4 for the compensated, cell and block families;
-* it evaluates the potential at all points and inverts the segment masses. The masses are
-  anchored at each segment's lower end, and offsets of decreasing segments at the right end.
+    per term type, and 4 for the compensated, cell and block families.
 
-**Guard.** A site whose line has more sign changes than kept in some secondary quantity stays at
-$t = 0$. The count is a property of the whole line, so this keeps the target invariant. The
-tests report how often it happens.
+A term's own secondary quantities are linear between its primary points. A balance-slot residual
+is not: it also bends where a SoC injection kinks ($d = 0$ and $-d\,\eta_{out} = 1$), which are
+roots of the SoC quantities. Its roots are therefore searched on the grid refined by those roots.
+Before this two-stage search the dense form (and the CPU walk, `walk!`) interpolated the residual
+across such a kink and missed it; the test of linearity between consecutive points
+(`test/test_jump.jl`) catches this.
+
+**Dense form** (`sample_dense`). Every term column is evaluated at every point, the segment
+masses are inverted: anchored at each segment's lower end, offsets of decreasing segments at the
+right end (`sample_core`). The cost per site is points × columns.
+
+**Slope-jump form** (`sample_jump`, `device/src/jump.jl`). Every column is evaluated only at its
+own points:
+1. per column: 0, its primary points and the roots of its secondary quantities (searched on its
+   own points), sorted;
+2. per column: the cost change at these points (and one beyond each end), the slope of every
+   local segment, the slope jump at every point and the slope just right of 0;
+3. per balance slot: the points of every column injecting into it and 0, the residual there, its
+   roots, then the balance cost and its jumps in the same way;
+4. the (point, jump) entries of a site: every entry at exactly 0 is folded into one, the rest
+   sorted with the jumps as payload (one stable sort), and only the first `cap` kept
+   (`JUMP_CAP`, set by `plan` from the sites of three rounds: 1.25 × the largest count + 8);
+5. the segment slopes from the slope right of 0 outwards, the potential integrated outwards from
+   $c(0) = 0$; every partial sum accumulates from 0 outwards, so no value near 0 carries the
+   round-off of far, large terms, and a slope within the round-off of its sum is 0 (a flat stretch
+   stays exactly flat). Then the dense form's inverse CDF (`sample_core`).
+
+The cost per site is the sum of the columns' local points plus a sort of the entries.
+
+**Form choice.** The plain families use the dense form. A compensated, cell or block family uses
+the slope-jump form if its dense points × columns are at least `JUMP_RATIO` (4) × its
+slope-jump entries (`plan(...; jump=:auto)`; `:none`, `:all` or a list of families override).
+At 40 nodes daily: slope-jump for `:tsoc`, `:tpot`, all `:sblk…`, `:cell1`, `:cell2`,
+`:cellpair1`, `:cellpair2`; dense for `:spair0`, `:cell3`, `:cellpair3`.
+
+**Guards.** A site stays at $t = 0$:
+* if some secondary quantity has more sign changes than kept;
+* in the slope-jump form, if its count of real candidates reaches the cap. Padded candidates
+  sit at exactly 0. The count includes every entry $\neq 0$ and every real candidate at 0
+  (denominator $\neq 0$).
+
+Both counts are properties of the whole line, so the guards keep the target invariant. The tests
+report how often they act.
 
 An improper ray gives $t = 0$, as on the CPU. The share-preserving families apply the Jacobian
 step (`jac_accept`, with the site's third uniform). The commit is a scatter-add into the state
@@ -114,12 +155,13 @@ terms the device uses the linear rule.
 default), with the proxy class `ChainParams.cls` from `proxy_class`.
 
 > **Status: deviation.** The cell pair at the coarsest level (`:cellpairu1`, two carriers over the
-> whole 40-node network: 80 generator and 160 commitment terms) compiles in about 230 s at a
-> 9.6 GB peak on the CPU backend, too heavy to schedule; it needs the slope-jump form.
+> whole 40-node network: 80 generator and 160 commitment terms) compiles in about 290 s at an
+> 8 GB peak on the CPU backend, also in the slope-jump form, and is left out of the run set. It is
+> verified on arrays (`test_jump.jl`) and compiled against arrays; the dense diagnostics of the CPU
+> comparison (`test_comp.jl`) exceed 10 GB for it.
 
 > **Status: deviation.** Cell–class aggregates of the block moves (one class in one cell) are not
-> ported; the large coarse cells and long blocks are costly in the dense form (about 1 700
-> points per site for a 40-node cell), so the slope-jump form is needed there.
+> ported.
 
 ## 4. Schedule
 
@@ -143,25 +185,30 @@ a site is roughly points × terms, so padding to the global maximum degree costs
 square of the ratio. `families = :all` (`device_families`) adds:
 * `:spair0`, `:spair`;
 * `:tsoc`, `:tpot` (`:tsocL`, `:tpotL` with requirement tracking);
-* the storage blocks of `BLOCK_SCHED` ($L$ = 2, 4, 8, 16; `:sblk…`, or `:sblkL…` with tracking);
+* the storage blocks of `BLOCK_SCHED` ($L$ = 2, 4, 8, 16, 32; `:sblk…`, or `:sblkL…` with tracking);
 * the cell families of the partition, except `:cellpairu1` (§3).
 
-**Memory cap.** A round evaluates every term at every point: tensors of
-$C \cdot B \cdot \text{points} \cdot \text{columns}$ elements (`dense_size`; points and columns
-are static per family). `plan` splits the rounds of a compensated, cell or block family into
-even chunks so that this tensor stays within `DENSE_BUDGET` (256 MB by default, keyword
-`budget` of `plan` and `device_setup`, `BUDGET_MB` in `profile_families.jl`). The compiled round
-holds about six such tensors (CPU backend: about 1.4 GB above the base at the default). At
-40 nodes daily with 4 chains, points × columns per site:
+**Memory cap.** The largest tensor of a round has $C \cdot B \cdot e$ elements. Here $e$ is
+points × columns in the dense form (`dense_size`). In the slope-jump form it is the larger of
+the entries and the columns × local points of a term type (`jump_size`). Both are static per
+family (`round_elements`).
 
-| family | points × columns | sites per round (capped) |
-|---|---|---|
-| `:tsoc` | 101 × 16 | 4 914 |
-| `:tpot` | 520 × 87 | 182 |
-| `:sblk2`, `:sblk4`, `:sblk8`, `:sblk16`, `:sblk32` | 227 × 27, 395 × 43, 731 × 75, 1 403 × 139, 2 747 × 267 | 1 229, 450, 149, 43, 11 |
-| `:cellpair1` | 403 × 80 | 182 (not capped) |
+`plan` splits the rounds of a compensated, cell or block family into even chunks, so that this
+tensor stays within `DENSE_BUDGET`. The budget is 256 MB by default; it is the keyword `budget` of
+`plan` and `device_setup`, and `BUDGET_MB` in `profile_families.jl`. A compiled dense round holds
+about six such tensors (CPU backend: about 1.4 GB above the base at the default).
 
-The plain families stay below 40 points × 7 columns.
+At 40 nodes daily with 4 chains, per site:
+
+| family | dense points × columns | slope-jump entries (cap) | sites per round |
+|---|---|---|---|
+| `:tsoc` | 101 × 16 | 218 (106) | 7 280 |
+| `:tpot` | 520 × 87 | 1 478 (360) | 1 274 |
+| `:sblk2`, `:sblk4`, `:sblk8`, `:sblk16`, `:sblk32` | 227 × 27, 395 × 43, 731 × 75, 1 403 × 139, 2 747 × 267 | 473, 743, 1 283, 2 363, 4 523 (123, 143, 183, 263, 423) | 3 640, 1 800, 920, 440, 200 |
+| `:cellpair1` | 403 × 80 | 842 (395) | 182 |
+
+The slope-jump families are not split at this size. The plain families stay below 40 points ×
+7 columns.
 
 > **Status: deviation.** Parallel lines are not supported by the angle family (none exist in
 > the 40- and 256-node networks).
@@ -225,8 +272,9 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | term batch, exact dense sampler, plain families, rounds, compiled multi-sweep program | done |
 | compensated families `:spair`, `:spair0`, `:tsoc(L)`, `:tpot(L)` | verified on arrays and compiled (CPU backend); scheduled with `families = :all` |
 | cell templates (all partition levels) | verified on arrays; compiled except `:cellpairu1` (see §3); scheduled with `families = :all` except `:cellpairu1` |
-| storage blocks, one unit (plateau, shapes) | verified on arrays ($L$ = 2–32) and compiled; $L$ = 2–16 scheduled with `families = :all` |
+| storage blocks, one unit (plateau, shapes) | verified on arrays ($L$ = 2–32) and compiled; scheduled with `families = :all` |
 | memory cap of a round (`DENSE_BUDGET`) | done |
+| slope-jump form of the line sampler, per-family choice (`JUMP_RATIO`) | done; verified on arrays against the CPU and the dense form, Reactant (CPU backend) against arrays |
 | term axis (program size independent of the term count) | done |
 | one program per checkpoint (operation sweeps + capacity pass) | done (`sweep_program`, `merged = true`); not the default (compile time) |
 | capacity pass (`kren`, `kscale`, `kpeak` absorb) with the bias, host loop | done |
@@ -234,7 +282,6 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | local re-routing templates in place of `xpair`, `xloc(c)`, `tline` | missing |
 | block aggregates (cell–class groups), learned shapes | missing |
 | dense transport modes (`tmode`, `amode`) | missing; low rate, may be dropped |
-| slope-jump sampler for large moves | missing |
 | adaptation on the host with table uploads (modes, shapes, response coefficients); learned `kpeak` | missing |
 | weather moves with compensation as a device family | missing |
 | fused kernels, FP32 intermediates, tiling, multi-GPU, full-Europe memory plan | missing |

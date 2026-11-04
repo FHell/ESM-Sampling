@@ -26,6 +26,8 @@
 #      quantity of the plain families has at most two sign changes along the line (balance slots
 #      of θ moves are convex in t because the losses are convex; all others are monotone), so the
 #      smallest and the largest root per quantity are all of them (checked by `root_count`);
+#      a balance-slot residual with SoC injections bends at their kinks (roots of the SoC
+#      quantities), so its roots are searched on the grid refined by the other roots;
 #   3. the merged sorted points, the potential βΔC at all of them (term differences in FP64),
 #      the segment log-masses (`logseg`), the two rays, inverse CDF and the truncated-exponential
 #      offset. An improper ray (outward slope ≤ 0) gives t = 0, as on the CPU.
@@ -519,11 +521,24 @@ function dense_points(tb::TermBatch, k::Consts, z0; K::Val{NR}=Val(2)) where {NR
     pe4 = rs(pe, C, B, n, 1)
     R = Any[]
     over = z0 .> 0.0
-    for (zq, nrq) in Z
+    # a balance-slot residual bends at the SoC injection kinks (d = 0, −d η_out = 1), which are
+    # roots of the SoC quantities, not primaries: with SoC terms its roots are searched on the grid
+    # refined by the other roots (the other quantities are linear between primaries)
+    twostage = tb.st.nr > 0 && tb.st.soc !== nothing
+    nz = twostage ? length(Z) - 1 : length(Z)
+    for (zq, nrq) in Z[1:nz]
         nr = nrq === :fam ? NR : min(nrq, NR)
         rts, cnt = rootsK(zq, pe4, nr)
         push!(R, flat3(rts))
         over = over .| (rs(maximum(cnt; dims=4), C, B, 1) .> nr)
+    end
+    if twostage
+        p1 = isempty(R) ? p0 : sort(cat(p0, R...; dims=3); dims=3)
+        pe1 = extend(p1)
+        _, Z1, _ = eval_terms(tb, k, pe1)
+        rts, cnt = rootsK(Z1[end][1], rs(pe1, C, B, size(pe1, 3), 1), NR)
+        over = over .| (rs(maximum(cnt; dims=4), C, B, 1) .> NR)
+        return sort(cat(p1, flat3(rts); dims=3); dims=3), over
     end
     return (isempty(R) ? p0 : sort(cat(p0, R...; dims=3); dims=3)), over
 end
@@ -560,8 +575,16 @@ end
 "Inverse-CDF draw over the sorted points `pts` (every kink of βΔC is one of them)."
 function sample_points(tb::TermBatch, k::Consts, pts, u1, u2)
     pe = extend(pts)
-    n = size(pe, 3)
     c, _, _ = eval_terms(tb, k, pe; sec=false)
+    return sample_core(k, pe, c, u1, u2)
+end
+
+"""
+Inverse-CDF draw from the potential βΔC given at the sorted extended points pe (C, B, n), values
+c (linear between the points and on the two end segments, which stand for the rays).
+"""
+function sample_core(k::Consts, pe, c, u1, u2)
+    n = size(pe, 3)
     ca, cb = c[:, :, 1:n-1], c[:, :, 2:n]
     pa, pb = pe[:, :, 1:n-1], pe[:, :, 2:n]
     L = pb .- pa
