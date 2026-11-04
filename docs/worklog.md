@@ -81,6 +81,10 @@ concrete next steps. Update it at the end of every work session.
 - Request `/p/projects` space; fill in the project and account names in hpc.md.
 
 **Tests and validation:**
+- Move-consistency suite `test/test_moves.jl` (agent, 2026-11-04): walk linearity, incremental =
+  global, curve reversibility, caches, for every family; it replaces `test_exact.jl` as the gate
+  (CLAUDE.md, testing.md, adding_a_move.md updated). No new statistical tests until the
+  performance work is much further (user, 2026-11-04).
 - Exactness tests do not detect small invariance violations (missed the `kpeak` width and the
   storage walk bug): longer reference runs (ledger P6).
 - Sweeps to equilibrium against network size and resolution; 256-node ERA5 run (ledger P7, P8).

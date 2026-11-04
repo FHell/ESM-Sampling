@@ -2,7 +2,11 @@
 
 This document states how results are validated: when a run counts as converged without a
 reference LP, and how the sampled ensembles are compared with PyPSA-Eur's own optimization,
-including the averaging over weather. The tests of the code itself are in
+including the averaging over weather. Since the decisions have no exact target density
+([ensemble.md](ensemble.md) §3.1), the reference is LP-based: the optimum (zero-temperature
+limits, §2) and the near-optimal alternatives that LP methods generate (MGA envelopes,
+§2.1). Statistical tests of the sampler against an exact density are not part of the
+validation. The tests of the code itself are in
 [testing.md](testing.md); the ensemble and its limits in [ensemble.md](ensemble.md) §9; the
 diagnostics' implementation in [sampler.md](sampler.md) §9.
 

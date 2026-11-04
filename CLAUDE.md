@@ -47,10 +47,18 @@ The other files in `docs/` are development notes, not a description of the syste
 
 ## Testing rules
 
-- CPU: exactness tests (`test/runtests.jl`, `test/test_exact.jl`): deterministic consistency
-  checks (incremental against global cost, caches, gradients, invariants) and line draws
-  against quadrature. A new move family needs at least the incremental-cost and cache checks
-  and, if it is not a plain fixed-direction move, an invariance check of its curve.
+- CPU: deterministic checks only (`test/runtests.jl`). The gate for every new or changed move
+  family is the move-consistency suite `test/test_moves.jl` (seconds; being built): the
+  potential linear between the walk's points, incremental = global cost, reversibility of the
+  curve (the same discrete choices at the new state, −t returns to the start, inverse
+  Jacobians, equal slice widths), caches after a threaded sweep. A new family adds its entry to
+  the suite's family table.
+- No new statistical tests (KS, z-tests, many-chain runs) until the performance work is much
+  further. `test/test_exact.jl` is an optional diagnostic, not a gate: its capacity part depends
+  on the seed. The sampler does not target one exact density (docs/system/ensemble.md §3.1); it
+  is validated against LP-based results, the optimum and LP-generated near-optimal
+  alternatives (docs/system/validation.md). Diagnosing mixing and running chains from far-apart
+  starts are the way to judge a change of the sampler.
 - Device work, in this order: (1) the device code on plain Julia arrays against the CPU
   reference, with the same prepared moves and the same mock random numbers on both sides
   (`MockRNG` on the CPU, input arrays on the device), compared exactly or to round-off;
