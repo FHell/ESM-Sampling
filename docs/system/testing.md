@@ -69,6 +69,7 @@ comparison uses given uniforms.
 | `test/test_kbox.jl` | `kscale` and `kpeak` at the capacity box, at $\alpha = 0$ and $\alpha = 1$, from a state with raw capacities above their box: per move (inside the box, above it and across its edge; dispatchable and storage units) the line density without its Jacobian against the change of the global log target, the reverse move returns to the start with the opposite density and Jacobian, the local and bias caches equal a rebuild; one `kscale` and one `kpeak` sweep bring the raw capacities above the box toward it |
 | `test/test_model.jl` | all model-completion terms on (40 nodes): incremental = global for random local and transport moves, caches, line draws with requirement-tracking kinks and with commitment against quadrature, long-range storage moves with requirement-tracking end steps (incremental = global, caches, a line draw against quadrature), level-0 gradients against finite differences, fine-level weather moves (incremental = global, caches, the non-centered representation and the regime step reproduce the anomalies, line draws with the Gaussian prior), the local $z_0$ quadratic against `logp_z0` |
 | `test/test_hpc.jl` | durable files of the CPU driver: an interrupted cache write leaves neither the entry nor a temporary file, a killed writer's temporary file is never read, a complete write appears under its name only, a mirror entry is copied in byte for byte (the mirror untouched), an unreadable entry is recomputed, the environment overrides the cache keys; a process with `ignore_sigterm` survives SIGTERM and exits with its own code (75); a short α = 1 run (2 chains, 40 nodes daily) stopped by the stop file in the level-0 warmup, the fine warmup and production (exit code 75 each time, the stop file consumed, the restart count in the snapshot), each resume starting from exactly the saved states, the last finishing with exit code 0 with the traces before the stops kept; the cache of a resumed run filled from the mirror, byte-identical, no temporary files left |
+| `test/test_replicas.jl` | the replica–Langevin sampler (§6) |
 | `test/test_convergence.jl` | multi-chain diagnostics on synthetic chains: iid passes, AR chains give the expected ESS, location and scale differences raise $\hat R$, random walks fail, warmup detection |
 | `test/test_exact.jl` | end-to-end comparison of chains (§1), an optional diagnostic, not a gate (seed-dependent); about 2–3 minutes; skipped with `EXACT_SKIP=1` |
 
@@ -207,3 +208,43 @@ family: about 2.5 min in all (setups 13 s and 56 s, checks 77 s, mostly compilat
 > $10^{-5}$ nats off its linear interpolation between walk points (seen on weather moves in
 > setup B; the compensated operation moves stay below $10^{-10}$). The suite reports these as
 > broken while they exceed $10^{-6}$ nats ([sampler.md](sampler.md) §3.3).
+
+## 6. The replica sampler (`test/test_replicas.jl`)
+
+Deterministic checks of the building blocks of `src/replicas.jl`, on the 40-node model daily
+(heuristic start, physical measure, no bias), about 2 minutes, most of it the three runs of the
+snapshot test:
+
+- **Weather process.** The innovation-form generator reproduces `sample_weather` bitwise from the
+  same stream; the round trip $z_0\to e\to z_0$ to $10^{-12}$; $\log p(z_0\mid m) + |e|^2/2$ is
+  constant over $e$ (constant Jacobian); the implemented pCN step with given noise rotates the
+  innovations, its reverse noise undoes it, and $|u|^2+|\xi|^2 = |u'|^2+|\xi'|^2$ (the balance
+  identity); the rng form with a `MockRNG` equals the explicit form; the regime window's
+  conditionals multiply to the enumerated prior conditional of a 3-step window (inside, at
+  $\tau = 1$ and at $T_0$) and the draw with given uniforms is their categorical inversion; the
+  weather step from states with other $k$ and $v$ gives the same weather; FFBS keeps $x$.
+- **Score.** `capacity_scores` against central differences of the global log target in node
+  capacities ($\hat s_k$ against $-\beta_vC+\log J$, $\beta_k\partial K$ against capex; nodes with a
+  kink within the step are skipped, at least 10 checked); the two parts add up to `logtarget`.
+- **Langevin update** in $w$ with given noise: the drift $\eta((k+\kappa_s)g+1)$, the clip, the
+  reflection at $\kappa_{\min}$, at the box when crossing it from below and none from above; the rng
+  form (`langevin_capacities` with a `MockRNG`) equals `langevin_update` field by field.
+- **Dispatch-following maps.** Dispatchable generators alone: their output $c(k)\omega$ unchanged
+  at every step and the residuals unchanged; all units: the new capacities exact, the local caches
+  equal a rebuild, storage keeps its SoC fractions, the cost of the caches equals the state's;
+  a replica with other weather gets bitwise the same $k$.
+- **Schedule, gate, weights, adaptation** (no data): the staggered bursts, the composed angle,
+  `categorical`, the relaxation indicator and the gate (indicator, `gate_min`, `gate_max`), the
+  weights ($\lambda = 0$ equals the uniform weights bitwise, inactive replicas 0), the step
+  adaptation from the mean of `probe_avg` probes.
+- **One step**: with $\Phi$ declared at $\lambda = 0$ the step is bitwise the step without $\Phi$;
+  at $\lambda = 2$ the weights and $k$ change, the weather paths do not; the bursting replica's
+  gate closes.
+- **Snapshots** of `run_replicas` (1 chain, 2 replicas): stopped by the stop file in the warmup
+  and in production (exit code 75, the stop file consumed, the restart count), each resume from
+  exactly the saved states with the saved Langevin steps, the last run finishing with the records
+  before the stops kept; the chains driver refuses a replica snapshot.
+
+`test/test_moves.jl` has the self-contained entry `:wproc` for the weather process on both of its
+setups (pCN reversal and balance identity, the window conditional unchanged at the moved state,
+independence of $k$ and $v$, the state evaluated globally).

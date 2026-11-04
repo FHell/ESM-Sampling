@@ -17,7 +17,7 @@ family name and whether the device port has it.
 | [storage.md](storage.md) | `tsoc`, `tsocL`, storage plateau and shape moves, `slong`, `slevel`, `sxpair`, `sxlong` | transport in time: states of charge over one instant, a dyadic block, any cyclic interval, or the whole trajectory; and between two storage units across nodes with the flows re-routed |
 | [learned.md](learned.md) | `amode`, `amode0`, `amodeL`, `acut`, `acutL`, learned storage and dispatch shapes | directions learned from the chain's own fluctuations |
 | [capacity.md](capacity.md) | `kscale`, `kpeak`, `kop`; level-0 carrier scaling and capacity slice updates | capacities |
-| [weather.md](weather.md) | regime FFBS, weather coordinate moves, joint $z_0$ blocks, weather shear | weather |
+| [weather.md](weather.md) | regime FFBS, weather coordinate moves, joint $z_0$ blocks, weather shear; the prior-reversible weather process of the replica sampler (pCN, regime windows) | weather |
 
 How to add a family, with its tests and its device port: [adding_a_move.md](adding_a_move.md).
 
@@ -42,6 +42,7 @@ How to add a family, with its tests and its device port: [adding_a_move.md](addi
 | `kscale`, `kpeak` | all, at the complete level | Metropolis forms, renewables included (`kren`); the learned `kpeak` variant missing |
 | `kop` | all, at the complete level, with `kop = true` | missing |
 | fine-level weather moves | all, with `fine_weather > 0` | missing |
+| replica weather process (pCN, regime windows; not a line move) | replica sampler (`sampler = "replicas"`) | missing |
 | joint $z_0$ blocks | all, with `fine_weather > 0` and `fine_weather_blocks > 0` | missing |
 | level-0 moves (weather slice and shear, FFBS, capacity slice, carrier scaling) | level-0 warmup chain | not ported (host side) |
 

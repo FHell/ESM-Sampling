@@ -39,7 +39,7 @@ In include order (`src/ESMSampling.jl`):
 | `bias_online.jl` | `OnlineBias`, `bias_scores` (scores at the level of the bias), `online_bias_step!` with the refit floor (`refit_due`) and the trust region (`trust_step!`) |
 | `bias_post.jl` | `PostBias` (per-sample bias features and score statistics), `post_record!`, `post_correct` |
 | `level0.jl` | level-0 slice updates of the bias warmup (`GibbsState`, `SweepCtx`, `StepWS`, `step_term`, `update_colour!`, `update_k!`, `slice_coord!`) |
-| `local.jl` | the local exact kernel: `GridSolver`, `LocalModel`, `LocalCost`, `MoveWS`, `eval_move!`, line sampler, move preparation, `local_sweep!`, `kscale_sweep!`, `LocalKernel`, `fine_local_step`, `local_base_step`, block-move workspaces and `commit_block!` |
+| `local.jl` | the local exact kernel: `GridSolver`, `LocalModel`, `LocalCost`, `MoveWS`, `eval_move!`, line sampler, move preparation, `local_sweep!`, `kscale_sweep!`, `LocalKernel`, `fine_local_step` and its operation sweep `operation_sweep!` (also the replicas'), `local_base_step`, block-move workspaces and `commit_block!` |
 | `weather_moves.jl` | level-0 weather move with pro-rata shear |
 | `weather_fine.jl` | fine-level weather moves, with their bias change `bias_delta_weather` |
 | `weather_blocks.jl` | joint low-frequency block moves of $z_0$: `z0_block_directions`, `z0_block_quad`, `z0_block_prepare!`, `z0_block_move!`, `z0_block_sweep!` |
@@ -54,6 +54,7 @@ In include order (`src/ESMSampling.jl`):
 | `run.jl` | `Config`, `load_config`, `setup`, `heuristic_start`, the level-0 chain `run_level0!`, `predescend`, `new_sampler`, `run` |
 | `checkpoint.jl` | durable files: `atomic_write`/`atomic_open` (temporary name, rename), the cache location and mirror (`cache_dir`, `cache_mirror`, `cache_lookup`, `cache_read`), the state snapshots of the CPU driver (`Checkpointer`, `boundary!`, `write_snapshot`, `read_snapshot`, `restart_seed`, exit code `EXIT_CHECKPOINTED` = 75), `ignore_sigterm` |
 | `chains.jl` | the CPU driver `run_chains`, `chain_start`, `monitor_quantities`, `chains_report`, `write_run_outputs` |
+| `replicas.jl` | the replica–Langevin sampler: the weather process (`VarFactors`, `z0_innovations`, `z0_from_innovations`, `pcn_rotate`, `pcn_reverse_noise`, `draw_pcn_noise`, `pcn_weather`, `categorical`, `regime_window_messages`, `regime_window_probs`, `regime_window`, `window_bounds`, `weather_process_step`, `compensate_weather!`), the features and the tilt (`weather_features`, `replica_features`, `TiltFunctional`, `tilt_weights`, `uniform_weights`), the capacity step (`capacity_scores`, `capacity_units`, `langevin_drift_w`, `langevin_update`, `langevin_capacities`, `set_dispatchable_capacity!`, `follow_capacities!`), the replica set and one step (`ReplicaCtl`, `ReplicaSet`, `weather_schedule`, `replica_weather!`, `replica_operation`, `relaxation_indicator`, `update_gate!`, `drift_weights`, `replica_step!`), the probe (`probe_candidate`, `lag_probe`, `adapt_step!`), the driver `run_replicas` with `init_replicas`, `replica_kernels`, its records, outputs, summary and snapshots (`write_replica_snapshot`, `read_replica_snapshot`) |
 
 `device/src/`: `ESMDevice.jl` (device model, state, exact cost), `terms.jl` (term batch,
 dense sampler), `rounds.jl` (plain families, schedule, device loop), `comp.jl` (compensated
@@ -104,6 +105,10 @@ families), `cells.jl` (cell templates), `kmove.jl` (`kscale`/`kpeak` Metropolis)
   storage blocks, weather windows), behind the same line-sampler interface.
 - `FlowFrames`: per-step predicted binding lines, face-projected modes and proxy classes, keyed
   by a hash of $(k,x)$. `AdaptiveModes`: learned directions, shapes and response coefficients.
+- `ReplicaCtl`, `ReplicaSet`: the controls of the replica sampler (from `Config`) and the
+  replicas of one chain (states sharing $k$, weather streams, gates, in-flight windows, the
+  Langevin step per k field, the probe buffer); `VarFactors` (Cholesky factors of the VAR);
+  `TiltFunctional` (the declared $\Phi$).
 - `OnlineBias`, `PostBias`: observation counts and refit schedule; recorded bias features and
   score statistics of the production samples for the post-correction. `PriceAcc`, `RegionPriceAcc`: sampled price accumulators.
 
@@ -115,7 +120,8 @@ families), `cells.jl` (cell templates), `kmove.jl` (`kscale`/`kpeak` Metropolis)
 ## 4. Call graph of a run
 
 **Entry.** `scripts/run.jl <config.toml>` → (`ignore_sigterm` with `ESM_IGNORE_SIGTERM=1`) →
-`load_config` (with `check_config`) → `run(cfg)`, which is `run_chains(cfg)`; the script exits
+`load_config` (with `check_config`) → `run(cfg)`, which is `run_chains(cfg)`, or
+`run_replicas(cfg)` with `sampler = "replicas"`; the script exits
 with `results.exitcode` (0 finished, 75 stopped after a snapshot). Device runs start from `device/scripts/run_device.jl` →
 `ESMDevice.run_device(cfg)`.
 
@@ -148,6 +154,19 @@ callback of `run_level0!`, and after each fine sweep) `boundary!` writes a snaps
 `checkpoint_minutes` have passed, once before the first fine sweep, and when the stop file
 exists; then it throws `CheckpointStop`, which `run_chains` turns into the result with
 `exitcode = 75` ([hpc.md](hpc.md) §7).
+
+**Replica driver** (`run_replicas`): `setup` → `with_bias(P, false)` → `read_replica_snapshot`
+(resume) → `TiltFunctional` → per chain `chain_start` → `replica_kernels` (one `LocalKernel`
+shared by the replicas with the local kernel, one per replica with the flow and adaptive kernels;
+all share one `LocalModel`) → `init_replicas` (`sample_weather`, `compensate_weather!`,
+`operation_sweep!`) → per step and chain `replica_step!`: per replica `replica_weather!`
+(`weather_schedule`, `weather_process_step` → `pcn_weather`, `regime_window`,
+`fine_regime_step!`; `compensate_weather!`), `replica_operation` (`operation_sweep!`,
+`capacity_scores`), `update_gate!`; `drift_weights` → `langevin_capacities` (`langevin_update`) →
+`follow_capacities!` per replica (`set_dispatchable_capacity!`, `kop_prepare`, `kop_commit!`);
+then `replica_monitor`, `replica_record`, and every `replica_probe_every` steps
+`probe_candidate`, `lag_probe`, `adapt_step!` → `boundary!` with `write_replica_snapshot` →
+`chains_report` → `write_replica_outputs` → `write_replica_summary`.
 
 **Fine step** (`fine_local_step`): `local_model` → for the flow and adaptive kernels
 `FlowFrames` (refreshed) and `AdaptiveModes` → in random order the operation sweep
@@ -207,6 +226,7 @@ Costs per move and per sweep, scaling and device throughput are in
 
 See [testing.md](testing.md) for the strategy. CPU: `test/runtests.jl` (level transfers,
 FFBS, cost gradients, the Haar basis, and the included files `test_local.jl`, `test_flow.jl`,
-`test_bias.jl`, `test_model.jl`, `test_convergence.jl`, `test_hpc.jl`), plus `test/test_exact.jl` (end-to-end
+`test_bias.jl`, `test_model.jl`, `test_moves.jl`, `test_replicas.jl`, `test_convergence.jl`,
+`test_hpc.jl`), plus `test/test_exact.jl` (end-to-end
 exactness, run separately). Device: the files in `device/test/`, each run on its own. A new move family
 follows the checklist in [moves/adding_a_move.md](moves/adding_a_move.md).

@@ -1,0 +1,18 @@
+# Campaign H4 (docs/campaigns.md, campaigns/H4/campaign.toml): the replica–Langevin sampler
+# (sampler = "replicas", src/replicas.jl), 40 nodes 6-hourly, low start (heuristic capacities
+# ×0.5), 8 weather replicas sharing the capacities. No learned bias. All other replica keys
+# at their defaults (docs/system/config.md).
+data = "data/processed/model.h5"
+out = "results/h4_40x6h_low.h5"
+sampler = "replicas"
+basis = "haar"
+measure = "physical"
+levels = [[10, 24], [40, 24], [40, 6]]
+init = "heuristic"
+use_bias = false
+nchains = 1
+chain_starts = ["low"]
+replicas = 8
+mlda_warmup = 800
+nsamples = 1600
+checkpoint_minutes = 20
