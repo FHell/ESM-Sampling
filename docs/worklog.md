@@ -88,8 +88,9 @@ concrete next steps. Update it at the end of every work session.
 **Housekeeping:**
 - `CLAUDE.md` still says many `Config` defaults are legacy values; check and update.
 - `docs/reactant_design.md` mentions archived notes by bare file name in its text.
-- Worktrees to remove when done: `.claude/worktrees/gpu-timing`,
-  `.claude/worktrees/agent-af45abb1d0d9c1d90` (review scripts, branch 72e12c2, to merge or drop).
+- Worktrees to remove when done: `.claude/worktrees/gpu-timing` (GPU timing copy), and the
+  locked worktrees of finished agents whose branches are merged (review 72e12c2, storage
+  09790f6; their outputs are copied to `results/review/` and `results/smix/`).
 - Julia MCP sessions of agents restart at nice 0 with 16 threads unless every call passes the
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 
