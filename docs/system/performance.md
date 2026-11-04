@@ -169,6 +169,18 @@ move:
 | compensated | `spair` | 1.00 | 1.47 |
 | cells | `cell1` | 0.119 | 20.4 |
 | | `cellpair1` | 0.274 | 47.0 |
+| | `cell2`, `cell3` | 0.162, 0.028 | 2.78, 0.12 |
+| | `cellpair2`, `cellpair3` | 0.260, 0.027 | 5.57, 0.16 |
+| compensated, capped at 256 MB per round | `spair0` | 0.425 | 0.62 |
+| | `tsoc` | 2.46 | 3.60 |
+| | `tpot` | 17.7 | 77.5 |
+| storage blocks, capped | `sblk2`, `sblk4` | 4.10, 5.07 | 12.0, 29.9 |
+| | `sblk8`, `sblk16` | 8.12, 15.2 | 95.8, 360 |
+
+With every family of the run set (`device_families`, 4fd3d2c) a sweep costs about 54 s, of which
+`tpot` and the storage blocks take 50 s: their cost per site grows with points × terms (`tpot`
+520 points × 87 columns, `sblk16` 1403 × 139), and the memory cap (`DENSE_BUDGET`, 256 MB)
+splits their rounds into many small ones (`tpot` 312 rounds of 183 sites).
 
 The rows are for the dense sampler with the term axis (static zero slopes, per-quantity root
 counts). Before it, the `FAMILIES_FAST` sweep took 1.00 s (`soc` 0.58 s, `pair0` 0.070 s,
