@@ -178,8 +178,9 @@ first family profiled in a process runs up to 1.4× slower kernels (GPU clock wa
 over a 2–4-element axis per site (about 5 ms per sweep in `gen0` and `pair0`) and the
 categorical draw over the points (`triton_softmax`, 17 % occupancy, 5–10 ms).
 
-The whole device loop with `FAMILIES_FAST` (`run_device`, same configuration): 9.8 s per call
-of 10 operation sweeps (22.6 s with `FAMILIES`), capacity pass 0.11 s, host checkpoint 0.21 s.
+The whole device loop with `FAMILIES_FAST` (`run_device`, same configuration): 6.2 s per call
+of 10 operation sweeps, of which the operation sweeps 5.77 s, capacity pass 0.15 s, download
+0.05 s, host checkpoint 0.24 s (before the term axis 9.8 s per call; with `FAMILIES` 22.6 s).
 
 In every family the most expensive kernels are the potential at all points of the dense form
 and the secondary quantities at the extended primaries. Both are FP64-arithmetic bound on this
