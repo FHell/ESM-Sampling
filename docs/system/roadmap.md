@@ -14,13 +14,20 @@ when done, and the affected document is updated in the same change.
   instead of a linear or quadratic one, so that it stops ratcheting a capacity outward with the
   data range (gas with `kop`); dropping the cold-start observations from the sums; long warmups
   that measure how fast the bias converges; a level-0 warmup that learns in the configurations
-  (`complete40.toml` has `warmup0` below `bias_start`).
+  (`complete40.toml` has `warmup0` below `bias_start`). On `chains40` with four chains started
+  apart (docs/mixing_diagnosis.md §10) the frozen bias still differs from $\log Z$ by millions
+  of nats between the chains' regions: its slope along firm capacity is about 8 times that of
+  the operating cost in the low-gas chain, which it pays to shed; the trust region, bounded by
+  the spread of $\hat b$ over the recent states, admits such changes because that spread is
+  itself millions of nats.
 - **$\alpha = 1$ end to end.** The weather marginal against exact draws, before and after the
-  post-correction.
+  post-correction. On `chains40` load and wind are within about 1.5 prior sd of the prior
+  (offwind up to 4.4), but solar is 6–9 sd high in two or three of four chains: $\hat g$ does
+  not cancel the cost's preference for sunny years.
 - **Exactness test sensitivity.** The capacity part of `test/test_exact.jl` passes ($|z|\le 2.1$)
-  but did not detect the `kpeak` slice-width violation (fixed 2026-11-04); longer runs and
-  reference states equilibrated in the storage and dump directions would make it sensitive to
-  such errors ([testing.md](testing.md)).
+  but detected neither the `kpeak` slice-width violation nor the misplaced balance roots of
+  storage lines (both fixed 2026-11-04); longer runs and reference states equilibrated in the
+  storage and dump directions would make it sensitive to such errors ([testing.md](testing.md)).
 
 ## 2. Validation
 
