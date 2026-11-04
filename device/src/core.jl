@@ -327,6 +327,7 @@ include("cells.jl")        # phase 3: cell templates (cell, cellpair)
 include("blocks.jl")       # phase 3: storage block moves (plateau, shapes)
 include("tdir.jl")         # dense angle directions: tmode, tline, amode (and …0, …L)
 include("sparse.jl")       # sparse angle directions: tcut, acut, xloc, xlocc, xpair
+include("dshape.jl")       # learned dispatch shapes (adshape)
 export TermBatch, sample_dense, eval_terms, FlatState, plan, run_rounds, check_conflicts, unflat!
 
 include("kmove.jl")

@@ -25,6 +25,10 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
     for L in D.BLOCK_LENGTHS                     # block profiles: the plateau and two shapes with zero ends
         D.set_profiles!(L, hcat([vcat(0.0, rand(MersenneTwister(L + j), L - 1) .- 0.3, 0.0) for j in 1:2]...))
     end
+    for L in D.DSHAPE_LENGTHS                    # dispatch shapes: three random shapes, mean removed
+        Φ = randn(MersenneTwister(100 + L), L, 3); Φ .-= sum(Φ; dims=1) ./ L
+        D.set_dshapes!(L, Φ)
+    end
     P, M, ix, S, ss = setup40(; C=C, losses=tracking_model, link_losses=tracking_model)
     E = P.E
     β = P.βv
@@ -149,6 +153,9 @@ if get(ENV, "CASE", "ABC") in ("F",)
 end
 if get(ENV, "CASE", "ABC") in ("G",)
     comp_case("G (all terms; dense angle directions, LINEAR and none)"; tracking_model=true, fams=(:tdirL, :tdir0))
+end
+if get(ENV, "CASE", "ABC") in ("J",)
+    comp_case("J (all terms; dispatch shapes)"; tracking_model=true, fams=(:dshp2, :dshp8))
 end
 if get(ENV, "CASE", "ABC") in ("H",)
     comp_case("H (no losses; sparse angle directions, T2 and none)"; tracking_model=false, fams=(:tcut, :tcutw, :xloc, :xlocc, :xpair))

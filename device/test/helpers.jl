@@ -10,6 +10,14 @@ function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], 
     τ = fam == :spair ? site[2] : (fam in D.TDIR_FAMILIES || haskey(D.SPARSE_FAMILIES, fam)) ? site[1] : site[end]; τm = mod1(τ - 1, T)   # spair: (s, τ, q1, q2); tdir: (τ, d, g)
     gi(q) = ix.gidx[q]
     sf = string(fam)
+    if startswith(sf, "dshp")                                  # dispatch shape of a unit pair (`prep_adshape!`)
+        L = parse(Int, replace(sf, "dshp" => ""))
+        q1, q2, b0, p = site
+        bm = ML.BlockMove([ML.MoveWS(P) for _ in 1:L+2], 0, Int[], P, LM, LC, Float64[], Float64[])
+        (g1, i1), (g2, i2) = gi(q1), gi(q2)
+        ML.prep_adshape!(bm, P, LM, LC, (E.gens[g1].vf, i1), (E.gens[g2].vf, i2), D.dshapes(L)[:, p], b0, L; κmin=κmin) || return nothing
+        return bm
+    end
     if startswith(sf, "sblk")                                  # storage block (plateau or shape profile)
         L = parse(Int, replace(sf, "sblkL" => "", "sblk" => ""))
         s, b0, p = site
