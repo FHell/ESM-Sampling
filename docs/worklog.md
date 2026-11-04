@@ -37,7 +37,8 @@ concrete next steps. Update it at the end of every work session.
 **Decisions taken:**
 - PyPSA is upstream (user, 2026-11-04): the PyPSA reference is PyPSA's own `optimize`/`optimize_mga`
   on the network we import from (H2b); PyPSA's time series are imported into a model file so
-  that H2 and H2b share the weather; our Julia MGA is held as a secondary check. LP agent on it.
+  that H2 and H2b share the weather; our Julia MGA is held as a secondary check. Built: H2b on
+  `optimize_mga`, `model256_pypsa.h5` (D4), the H2 lines on it; to run on the cluster.
 - LP against the sampler (user, 2026-11-04): the LP prices curtailment as the sampler does
   (renewables at A·k, excess dumped; storage balance an equality, no free spill; cycling
   disposal reported as the remaining gap, ~0.02 %); comparison runs with losses, soft limits and
@@ -140,6 +141,26 @@ concrete next steps. Update it at the end of every work session.
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 
 ## Log
+
+### 2026-11-04 (evening: PyPSA upstream for the LP references)
+
+- H2b: PyPSA's own `optimize_mga` for every extreme, each from a copy of the solved optimum
+  (its budget comes from the current solution's statistics), our HiGHS options and the IPX
+  fallback as solver arguments, stop-file exit 75 and resume tested; smoke (14 days): 4
+  extremes optimal, 13-18 s each.
+- Time-series import: `prepare_data.py --network … --pypsa-series` writes `model256_pypsa.h5`
+  (the network's p_max_pu per generator row and its loads, 2013, one weather year; same rows as
+  `model256.h5`), checked against the network (3e-8); `hpc/prepare_data.sh pypsa256ts` (D4).
+  Local check at 730 h: our LP (brownfield, 150 €/t) against PyPSA (price 150 €/t): onwind,
+  offwind and gas within 0.4 %, solar 322 against 369 GW, opex 2 %, new capex + opex 4.6 %
+  (validation.md §2.7 lists the causes).
+- Our Julia MGA held (PyPSA's is the reference envelope); H2 gets `lp256_pypsa_24h`/`_6h`; H2b
+  gets the CO₂-price configuration, a 6 h array on QOS medium, and a held list (6 h MGA, 3 h,
+  1 h: beyond a week by estimate).
+- Found and fixed: `test/test_moves.jl` setup B `wz0` failed `nacc > 0` since b9b611e (setup A's
+  LP start changed with the matched LP, so the bias θ handed to setup B changed): its sweep now
+  moves 2 % of the z0 coordinates, and the line families' inverse-Jacobian check is relative to
+  |log J| (`wblock` at setup B missed an absolute 1e-9 by round-off); the full suite passes.
 
 ### 2026-11-04 (LP baselines: campaigns H2, H2b)
 

@@ -7,6 +7,8 @@
 #   bash hpc/prepare_data.sh small      model.h5 (40 nodes) and model76.h5 (76 nodes)      [internet: io]
 #   bash hpc/prepare_data.sh pypsa256   the PyPSA-Eur build esm256, then model256.h5     [internet: io]
 #   bash hpc/prepare_data.sh all        small, then pypsa256                             [internet: io]
+#   bash hpc/prepare_data.sh pypsa256ts model256_pypsa.h5: the esm256 network with its own time series
+#                                       (2013) as the weather; no internet, needs pypsa256 first
 #   bash hpc/prepare_data.sh era5 [years, default 2003,2010,2013,2017]
 #        model256_era5.h5 from the cluster's ERA5 folder: no internet, needs pypsa256 first;
 #        run it on a compute node (hpc/jobs/era5.sbatch, standby). The window year 2013 must be
@@ -18,7 +20,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$here/env.sh"
 esm_dirs
-what="${1:?usage: prepare_data.sh small|pypsa256|all}"
+what="${1:?usage: prepare_data.sh small|pypsa256|pypsa256ts|all|era5}"
 cd "$ESM_CODE"
 [ -e data ] || ln -s "$ESM_PROJ/data" data
 cores="${SLURM_CPUS_PER_TASK:-4}"
@@ -79,6 +81,17 @@ build_pypsa256() {
     record data/processed/model256.h5 "PyPSA-Eur $rev, snakemake composed_2050.nc (config.esm.yaml); prepare_data.py --network composed_2050.nc --out data/processed/model256.h5"
 }
 
+build_pypsa256ts() {
+    local pe="$ESM_PROJ/external/pypsa-eur"
+    local net="$pe/resources/esm256/networks/composed_2050.nc"
+    local rev; rev=$(cut -d' ' -f1 configs/pypsa-eur/REVISION)
+    [ -f "$net" ] || { echo "prepare_data.sh pypsa256ts: run pypsa256 first ($net)" >&2; exit 2; }
+    # the same nodes and generator rows as model256.h5; the weather is the network's p_max_pu and
+    # loads (one year, 2013); prepare_data.py checks the written series against the network
+    py scripts/prepare_data.py --raw data/raw --out data/processed/model256_pypsa.h5 --network "$net" --pypsa-series
+    record data/processed/model256_pypsa.h5 "PyPSA-Eur $rev composed_2050.nc; prepare_data.py --network composed_2050.nc --pypsa-series --out data/processed/model256_pypsa.h5"
+}
+
 build_era5() {
     local years="${1:-2003,2010,2013,2017}"
     local pe="$ESM_PROJ/external/pypsa-eur"
@@ -111,8 +124,9 @@ build_era5() {
 case "$what" in
     small)    build_small ;;
     pypsa256) build_pypsa256 ;;
+    pypsa256ts) build_pypsa256ts ;;
     all)      build_small; build_pypsa256 ;;
     era5)     build_era5 "${2:-}" ;;
-    *)        echo "prepare_data.sh: small, pypsa256, all or era5 [years]" >&2; exit 2 ;;
+    *)        echo "prepare_data.sh: small, pypsa256, pypsa256ts, all or era5 [years]" >&2; exit 2 ;;
 esac
 echo "prepare_data.sh: done ($what); provenance in $ESM_PROJ/data/processed/PROVENANCE.toml"

@@ -13,6 +13,7 @@ builds the inputs is in [model.md](model.md) §5, the provenance of the sources 
 | `model76.h5` | 76 nodes, 130 lines, 27 DC links: 27 countries of the same example network | `prepare_data.py --countries …` |
 | `model256.h5` | 256 nodes, 480 lines, 4 DC links: the PyPSA-Eur workflow (`external/pypsa-eur`, OSM base network clustered to 256 nodes, electricity only) for the 10-country region; brownfield fleets; NASA POWER weather | `prepare_data.py --network …` |
 | `model256_era5.h5` | the 256-node network with ERA5 weather for selected years | `prepare_era5.py` |
+| `model256_pypsa.h5` | the 256-node network with the network's own time series as the weather: one year (2013), the renewable `p_max_pu` per generator row and the nodal loads of `composed_2050.nc`; the same nodes, lines, links, generator and storage rows as `model256.h5` (the dispatchable boxes `kbar` follow its own peak load) | `prepare_data.py --network … --pypsa-series` |
 | `backup/` | backups of the input files without the model-completion datasets | — |
 
 ## 2. Input layout
@@ -22,7 +23,7 @@ Written by h5py in row-major order; Julia reads the axes reversed. Node and unit
 
 | path | content |
 |---|---|
-| attributes | `source_network`, `countries`, `years` (weather years), `co2_price` (€/t contained in the marginal costs) |
+| attributes | `source_network`, `countries`, `years` (weather years), `co2_price` (€/t contained in the marginal costs), `weather_source` (`NASA POWER and the OPSD load model` or `network time series`) |
 | `network/nodes`, `country`, `x`, `y`, `mean_load` | buses |
 | `network/line_bus0`, `line_bus1`, `line_b`, `line_s` | merged AC lines: ends, susceptance (normalized to mean 1), rating (MW) |
 | `network/line_alpha`, `line_length` | quadratic loss coefficient (1/MW) and length |

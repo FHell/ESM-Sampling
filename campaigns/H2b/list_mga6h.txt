@@ -1,6 +1,0 @@
-campaigns/H2b/configs/pypsa256.toml python scripts/pypsa_baseline.py resolution=6h eps=0.05 carriers=onwind
-campaigns/H2b/configs/pypsa256.toml python scripts/pypsa_baseline.py resolution=6h eps=0.05 carriers=solar
-campaigns/H2b/configs/pypsa256.toml python scripts/pypsa_baseline.py resolution=6h eps=0.05 carriers=offwind
-campaigns/H2b/configs/pypsa256.toml python scripts/pypsa_baseline.py resolution=6h eps=0.05 carriers=gas
-campaigns/H2b/configs/pypsa256.toml python scripts/pypsa_baseline.py resolution=6h eps=0.05 carriers=battery
-campaigns/H2b/configs/pypsa256.toml python scripts/pypsa_baseline.py resolution=6h eps=0.05 carriers=H2

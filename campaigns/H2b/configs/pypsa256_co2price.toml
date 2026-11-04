@@ -1,0 +1,8 @@
+# Campaign H2b: as pypsa256.toml with the CO2 cap replaced by the price of our model files (150 EUR/t
+# in the marginal costs), for the comparison with our LP on model256_pypsa.h5 (H2, lp256_pypsa_*).
+network = "${ESM_PYPSA_EUR}/resources/esm256/networks/composed_2050.nc"
+out = "results/h2b/pypsa256_co2price/out.h5"
+resolution = "24h"
+co2 = 150.0
+load_shedding = 3000.0
+line_expansion = false

@@ -2,8 +2,8 @@
 §2.2, §2.7): the composed network of the PyPSA-Eur build (resources/esm256/networks/composed_2050.nc,
 weather year 2013), configured to our scope, solved by PyPSA with HiGHS; then, for each cost slack
 eps, the minimum and the maximum of the total capacity of each carrier group subject to
-cost <= (1 + eps) * C* (PyPSA's MGA budget: capex + opex including the fixed costs of the existing
-fleet, as in `optimize_mga`).
+cost <= (1 + eps) * C*, by PyPSA's own `n.optimize.optimize_mga` (its budget: capex + opex
+including the fixed costs of the existing fleet), each extreme from a copy of the solved optimum.
 
     python scripts/pypsa_baseline.py <config.toml> [key=value ...]
 
@@ -28,7 +28,8 @@ count, no line expansion, load shedding at our c_shed, the CO2 cap of the build 
 Outputs next to `out`: summary_pypsa.toml (objective, capex/opex, CO2 price, capacities per group
 and country, LP size, times, memory), capacity_pypsa.csv, and with eps: mga_pypsa.csv (one row per
 solve, appended as they finish; a restarted job skips finished rows), mga_capacity_pypsa.csv,
-summary_mga_pypsa.toml. HiGHS threads: ESM_LP_THREADS. Runs under hpc/run.sh in `python` mode.
+summary_mga_pypsa.toml. HiGHS threads: ESM_LP_THREADS. Runs under hpc/run.sh in `python` mode; exit
+code 75 if the stop file (`stop_file`, set by the wrapper) appears between MGA solves.
 """
 
 import os
@@ -41,7 +42,6 @@ import tomllib
 import numpy as np
 import pandas as pd
 import pypsa
-from linopy import LinearExpression, QuadraticExpression
 
 # carrier groups of PyPSA-Eur mapped to our k fields (power capacities, MW)
 GROUPS = {
@@ -249,7 +249,7 @@ def main():
     if not eps:
         return 0
 
-    # ---- MGA (PyPSA's budget constraint on one model; resumable through mga_pypsa.csv)
+    # ---- MGA (PyPSA's optimize_mga; resumable through mga_pypsa.csv)
     mpath, cpath = os.path.join(out, "mga_pypsa.csv"), os.path.join(out, "mga_capacity_pypsa.csv")
     head = "eps,target,sense,status,cost_eur,cost_rel_excess,total_MW,seconds\n"
     done, rows = set(), {}
@@ -268,43 +268,44 @@ def main():
     else:
         open(mpath, "w").write(head)
         open(cpath, "w").write("eps,target,sense,carrier,country,MW\n")
-    m = n.optimize.create_model()
-    cost = m.objective
-    if not isinstance(cost, (LinearExpression, QuadraticExpression)):
-        cost = cost.expression
-    # the budget in units of S, so that its right-hand side is 1e4-1e5 like the other rows'
-    # (unscaled, HiGHS's interior-point solvers stall on the maximisations; src/lp_baseline.jl)
-    S = 10.0 ** (np.floor(np.log10(abs(total))) - 4)
-    m.add_constraints(cost * (1 / S) <= ((1 + eps[0]) * total - fixed) / S, name="budget")
+    # PyPSA's own optimize_mga for every extreme, each on a copy of the solved optimum (its budget
+    # is taken from the statistics of the network's current solution, so every call must start from
+    # the optimum; a reused network would drift to the previous extreme's cost)
+    stop = cfg.get("stop_file", "")
+    n_opt = n
+    n_opt.model.solver_model = None            # PyPSA refuses to copy a network with an attached solver model
     for e in eps:
-        m.constraints["budget"].rhs = ((1 + e) * total - fixed) / S
         for g in groups:
-            expr = None
-            for comp, idx in group_index(n, g, True):
-                if len(idx) == 0:
-                    continue
-                var = m.variables[f"{comp}-{NOM[comp]}"]          # one dimension: the extendable units
-                v = var.sel({var.dims[0]: list(idx)}).sum()
-                expr = v if expr is None else expr + v
+            weights = {}
+            for comp, idx in group_index(n_opt, g, True):
+                if len(idx):
+                    weights.setdefault(comp, {})[NOM[comp]] = pd.Series(1.0, index=idx)
             for sense in ("min", "max"):
                 if (e, g, sense) in done:
                     continue
                 tb = time.time()
-                if expr is None:
+                nm = None
+                if not weights:
                     stt, cc = "ok", "no extendable units"
                 else:
-                    m.objective = expr if sense == "min" else -1 * expr
-                    stt, cc = n.optimize.solve_model(solver_name="highs", solver_options=solver_options)
-                    if cc != "optimal":
-                        stt, cc = n.optimize.solve_model(solver_name="highs", solver_options={**solver_options, **FALLBACK})
-                ok = cc == "optimal" or expr is None
+                    for so in (solver_options, {**solver_options, **FALLBACK}):
+                        nm = n_opt.copy()
+                        nm._objective, nm._objective_constant = n_opt._objective, n_opt._objective_constant
+                        stt, cc = nm.optimize.optimize_mga(weights=weights, sense=sense, slack=e,
+                                                           solver_name="highs", solver_options=so)
+                        if cc == "optimal":
+                            break
+                        log(f"  eps {e:.3f} {g} {sense}: {stt}:{cc}; repeating with IPX without presolve"
+                            if so is solver_options else f"  eps {e:.3f} {g} {sense}: {stt}:{cc} with IPX too")
+                ok = cc == "optimal" or not weights
                 # the cost of the solution in PyPSA's convention (capex + opex, fixed costs included)
-                c_ = float(n.statistics.capex().sum() + n.statistics.opex().sum()) if ok and expr is not None \
-                    else (total if ok else np.nan)
-                if ok:
-                    tt, bc = capacities(n)
+                if ok and nm is not None:
+                    c_ = float(nm.statistics.capex().sum() + nm.statistics.opex().sum())
+                    tt, bc = capacities(nm)
+                elif ok:
+                    c_, tt, bc = total, tot, byc
                 else:
-                    tt, bc = {k: np.nan for k in GROUPS}, {k: {} for k in GROUPS}
+                    c_, tt, bc = np.nan, {k: np.nan for k in GROUPS}, {k: {} for k in GROUPS}
                 with open(cpath, "a") as f:
                     for gg in GROUPS:
                         for c, v in bc[gg].items():
@@ -313,8 +314,13 @@ def main():
                 with open(mpath, "a") as f:
                     f.write(",".join(row) + "\n")
                 rows[(e, g, sense)] = row
+                del nm
                 log(f"  eps {e:.3f} {g:8s} {sense}  {stt}:{cc}  total {tt[g]:.4e} MW (optimum {tot[g]:.4e})  "
                     f"cost +{100 * (c_ / total - 1):.4f} %  [{time.time() - tb:.0f} s]")
+                if stop and os.path.exists(stop):          # the wrapper's stop file (SIGTERM, time limit)
+                    os.remove(stop)
+                    log(f"stop file: exiting with 75 after {len(rows)} MGA solves (the sweep resumes on restart)")
+                    return 75
     env = {}
     for e in eps:
         env[f"eps_{e:g}"] = {g: {"min_MW": float(rows[(e, g, "min")][6]), "max_MW": float(rows[(e, g, "max")][6]),

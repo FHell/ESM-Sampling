@@ -323,12 +323,13 @@ requeued or resubmitted job continues from its kept downloads and outputs.
 | D1 | `sbatch hpc/jobs/data.sbatch small` | internet (QOS io) | `model.h5` (40 nodes), `model76.h5` (76 nodes), NASA POWER weather 2001–2022 | hours (limit 3 days) |
 | D2 | `sbatch hpc/jobs/data.sbatch pypsa256` | internet (QOS io); independent of D1 | the PyPSA-Eur build `esm256`, then `model256.h5` (256 nodes, NASA POWER weather) | the longest (limit 3 days) |
 | D3 | `sbatch --dependency=afterok:<job id of D2> hpc/jobs/era5.sbatch [years]` | D2 (`model256.h5` and the `esm256` resources) | `model256_era5.h5` (256 nodes, ERA5 weather) | not measured yet (limit 24 h, continues when requeued) |
+| D4 | `sbatch --dependency=afterok:<job id of D2> hpc/jobs/data.sbatch pypsa256ts` | D2 (the `esm256` network `composed_2050.nc`); no internet | `model256_pypsa.h5` (256 nodes, the network's own series for 2013 as one weather year: renewable `p_max_pu` per generator row and nodal loads; checked against the network) | about 10 s and 0.7 GB locally |
 
 D1 and D2 can be submitted together. Files built without the corrected wind calibration
 ([data_sources.md](data_sources.md) §2; their `PROVENANCE.toml` commit has no `smallest_root`
 in `scripts/prepare_data.py`) need D1 and D2 again; a rerun of
-D2 reuses the PyPSA-Eur build and only redoes `model256.h5`. D3 does not depend on the POWER
-weather and need not be rerun. Check a build's log for the line per carrier
+D2 reuses the PyPSA-Eur build and only redoes `model256.h5`. D3 and D4 do not depend on the POWER
+weather and need not be rerun (D4 reads only the network of the `esm256` build). Check a build's log for the line per carrier
 `… miss their window target by more than 0.005` (zero in the local builds of all three POWER
 files). D3 reads the cluster's ERA5 folder in place on a compute
 node (§4); its years are a choice: the default 2003, 2010, 2013, 2017 is enough for a first
@@ -355,7 +356,7 @@ current ones, with what each needs:
 | H0b (SIGTERM and snapshot tests) | D1: the snapshot test is skipped without `model.h5` | `bash hpc/new_campaign.sh H0b`; `sbatch hpc/jobs/h0_cpu.sbatch H0b` |
 | H4 (replica sampler, far-apart starts) | D1 rebuilt with the corrected wind calibration | `bash hpc/new_campaign.sh H4`; `sbatch --time=2-00:00:00 --array=1-6%6 hpc/jobs/cpu_array.sbatch H4 campaigns/H4/list.txt` (6-hourly lines estimated 12–20 h); `bash hpc/collect.sh H4` |
 | H10 (storage pairs) | D1 (rebuilt); the HiGHS scheduler reset for `ESM_LP_THREADS` (f2d09a3, LP-baseline branch) on main, else stage 1 fails; its start states and the reference LP are made by the campaign | `bash hpc/new_campaign.sh H10`; `sbatch --time=02:00:00 hpc/jobs/build.sbatch H10 configs/chains40.toml script scripts/lp_reference.jl` (stage 1, the LP into the cache); `sbatch --time=12:00:00 --dependency=afterok:<stage 1 job id> --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt`; `bash hpc/collect.sh H10 'summary*'` |
-| H2 (our LP baselines) | D1 (40 nodes) and D2 (256 nodes), rebuilt with the corrected wind calibration | as in its row |
+| H2 (our LP baselines) | D1 (40 nodes) and D2 (256 nodes), rebuilt with the corrected wind calibration; D4 for its lines on `model256_pypsa.h5` | as in its row |
 | H2b (PyPSA's optimum and MGA) | the esm256 PyPSA-Eur build (`composed_2050.nc`) | as in its row; independent of H2 |
 | the full-resolution run | D3 | not yet a campaign ([roadmap.md](roadmap.md) §6) |
 

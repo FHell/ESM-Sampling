@@ -10,34 +10,32 @@ PyPSA solves its own problem. One weather year (2013, the year of the build), th
 design = """
 scripts/pypsa_baseline.py (run.sh python mode, the root project's uv environment: pypsa 1.4,
 HiGHS through highspy) on ${ESM_PYPSA_EUR}/resources/esm256/networks/composed_2050.nc of the
-cluster's PyPSA-Eur build (prepare_data.sh pypsa256; rebuilt with the wind-calibration fix if
-the build is redone). Scope: AC lines and DC links at their ratings, load shedding at 3000 EUR/MWh,
-the build's CO2 cap (5e7 t; its dual is the CO2 price), time series averaged over blocks of the
-resolution. MGA as optimize_mga (budget on PyPSA's capex + opex), carrier groups onwind, solar,
-offwind, gas, battery, H2 (power capacities). Independent of H2: no shared outputs; the comparison
-of H2 and H2b is a separate step.
-  list.txt        (6)   optimum at 24 h and 6 h; MGA at 24 h, one line per eps (1, 2, 5, 10 %; 12 solves each)
-  list_mga6h.txt  (6)   MGA at 6 h, eps 5 %, one line per carrier group (2 solves each)
-  list_large.txt  (1)   optimum at 3 h (HiGHS time limit 400000 s)
-  list_hold.txt   (1)   optimum at 1 h: estimated beyond a week; not submitted without the user's OK
+cluster's PyPSA-Eur build. Scope: AC lines and DC links at their ratings, load shedding at
+3000 EUR/MWh, the build's CO2 cap (5e7 t; its dual is the CO2 price) or, for the comparison with
+our LP on model256_pypsa.h5 (H2 lp256_pypsa_*), the price of our files (150 EUR/t,
+pypsa256_co2price.toml); time series averaged over blocks of the resolution. MGA is PyPSA's own
+n.optimize.optimize_mga for every extreme, each from a copy of the solved optimum (budget on
+PyPSA's capex + opex incl. the existing fleet), carrier groups onwind, solar, offwind, gas,
+battery, H2 (power capacities). This is the first full-size test of PyPSA's MGA (256 x 24 h).
+Independent of H2: no shared outputs; the comparison is a separate step.
+  list.txt        (6)   optimum at 24 h (cap; price); MGA at 24 h, one line per eps (1, 2, 5, 10 %; 12 solves each)
+  list_6h.txt     (2)   optimum at 6 h (cap; price)
+  list_hold.txt   (8)   held, estimated beyond a week or not yet needed: MGA at 6 h (eps 5 %, one line
+                        per group), optimum at 3 h and 1 h; to be settled with the user after the 24 h timings
   list_smoke.txt  (1)   the local smoke case (14 daily snapshots, no CO2 cap, eps 5 %, onwind and gas)
-The MGA budget is PyPSA's (cost incl. the fixed costs of the existing fleet, total_cost_eur_per_a),
-not our objective: for a comparison with H2 the slack converts as eps_ours ~ eps * total / objective
-(both are in summary_pypsa.toml).
 Outputs per run: summary_pypsa.toml, capacity_pypsa.csv; with eps: mga_pypsa.csv,
 mga_capacity_pypsa.csv, summary_mga_pypsa.toml (docs/system/data.md §6).
 """
 resources = """
-Smoke (local, 14 daily snapshots): 73008 variables, 150669 constraints, optimum 25 s including the
-build, MGA solves 18-26 s each, all optimal with the scaled budget; max RSS 0.84 GB. About 5200
-variables per snapshot. Extrapolated (memory 0.5 GB + 4.7 kB per variable, time ~ size^1.7):
-  24 h  1.9e6 variables   ~9 GB   ~1.5 h per solve   MGA line (12 solves) ~18 h
-  6 h   7.6e6             ~36 GB  ~14 h per solve    MGA line (2 solves + optimum) ~42 h
-  3 h   1.5e7             ~72 GB  ~2 days
-  1 h   4.6e7             ~220 GB ~2 weeks (hold)
-Requests: list.txt standby -c 4 --mem-per-cpu=12G --time=3-00:00:00; list_mga6h.txt standby
--c 4 --mem-per-cpu=12G --time=5-00:00:00 (a preempted MGA line keeps its finished solves);
-list_large.txt QOS medium (guaranteed: a single LP restarts from zero when preempted)
--c 8 --mem-per-cpu=16G --time=6-00:00:00. The extrapolation from 14 snapshots is rough (a factor
-of a few); the 3 h case may need most of its week.
+Local (laptop, loaded, 4 HiGHS threads): 12 snapshots (730 h) 6.3e4 variables 18 s; 14 daily
+snapshots 7.3e4 variables 21 s, MGA solves 13-18 s, max RSS 0.95 GB; 73 snapshots (120 h)
+3.7e5 variables: HiPO at ~40 s per iteration, not finished in 10 min. So time grows about as
+size^1.8-2; memory about 0.5 GB + 3-5 kB per variable. Estimated (uncertain by a factor of a few):
+  24 h  1.9e6 variables   ~10 GB   ~6 h per solve      MGA line (optimum + 12 solves) ~3 days
+  6 h   7.6e6             ~36 GB   ~3 days per solve   MGA line per group (3 solves) ~9 days: held
+  3 h   1.5e7             ~72 GB   ~10 days: held
+  1 h   4.6e7             ~220 GB  weeks: held
+Requests: list.txt standby -c 4 --mem-per-cpu=8G --time=5-00:00:00 (a preempted MGA line keeps
+its finished solves); list_6h.txt QOS medium (guaranteed, 7 days: a single LP restarts from zero
+when preempted) -c 8 --mem-per-cpu=8G --time=7-00:00:00.
 """

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build the model files on the cluster (needs internet: QOS io on a login node, 4 cores, 3 days;
 # requeued if interrupted, resumes from the kept downloads and snakemake outputs):
-#   sbatch hpc/jobs/data.sbatch small|pypsa256|all
+#   sbatch hpc/jobs/data.sbatch small|pypsa256|pypsa256ts|all  (pypsa256ts needs no internet, only the pypsa256 build)
 #SBATCH --account=icone
 #SBATCH --partition=io
 #SBATCH --qos=io
