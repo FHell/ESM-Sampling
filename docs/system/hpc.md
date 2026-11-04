@@ -335,6 +335,7 @@ current ones, with what each needs:
 | campaign | needs | then |
 |---|---|---|
 | H0b (SIGTERM and snapshot tests) | D1: the snapshot test is skipped without `model.h5` | `bash hpc/new_campaign.sh H0b`; `sbatch hpc/jobs/h0_cpu.sbatch H0b` |
+| H4 (replica sampler, far-apart starts) | D1 rebuilt with the corrected wind calibration | `bash hpc/new_campaign.sh H4`; `sbatch --array=1-6%6 hpc/jobs/cpu_array.sbatch H4 campaigns/H4/list.txt`; `bash hpc/collect.sh H4` |
 | H10 (storage pairs) | D1 (rebuilt); being redesigned to make its start states on the cluster | as in its row, once prepared again |
 | H2 and the other LP campaigns | D1 for 40 and 76 nodes, D2 for 256, D3 for ERA5 | as in their rows |
 | the full-resolution run | D3 | not yet a campaign ([roadmap.md](roadmap.md) §6) |
