@@ -1,5 +1,5 @@
 #!/bin/bash
-# Job array, preemptible: one run per line of a list file, each line "<config> [cpu|script <path> args...]".
+# Job array, preemptible: one run per line of a list file, each line "[NAME=value ...] <config> [cpu|script <path> args...]".
 #   sbatch --array=1-<n>%<concurrent> [-c <cores>] hpc/jobs/cpu_array.sbatch <campaign> <list file>
 # The list path is relative to the campaign code (e.g. campaigns/H3/list.txt of the clone).
 #SBATCH --account=icone
@@ -19,4 +19,8 @@ code="$ESM_PROJ/campaigns/$1/code"
 line=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$code/$2")
 [ -n "$line" ] || { echo "no line $SLURM_ARRAY_TASK_ID in $2" >&2; exit 2; }
 read -r -a args <<< "$line"
+# leading NAME=value tokens of a line are environment settings of that run (e.g. FLOAT=32), recorded in run.toml
+envs=()
+while [ ${#args[@]} -gt 0 ] && [[ "${args[0]}" =~ ^[A-Z_][A-Z0-9_]*= ]]; do envs+=("${args[0]}"); args=("${args[@]:1}"); done
+[ ${#envs[@]} -gt 0 ] && export "${envs[@]}" ESM_LINE_ENV="${envs[*]}"
 exec bash "$code/hpc/run.sh" "$1" "${args[@]}"

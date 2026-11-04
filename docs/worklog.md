@@ -142,6 +142,19 @@ concrete next steps. Update it at the end of every work session.
 
 ## Log
 
+### 2026-11-04 (night: device; H5 prepared)
+
+- Campaign H5 prepared (`campaigns/H5/`: family profiles at 40 × 6 h and 256 × 24 h in FP64 and
+  Float32, the replica driver at 1/4/16 chains × 4/8 replicas and one 256-node run; 12 tasks on
+  the new `gpu_array.sbatch`). Array list lines may carry `NAME=value` settings (recorded as
+  `line_env`); `run.sh` logs GPU memory for device runs (`gpu_mem.csv`); `run_device.jl` writes
+  `summary_device.toml`; `profile_families.jl` writes into the run directory under `run.sh`.
+  Smoke: every config parses; one replica config ran on arrays (exit 0).
+- Reactant compile debugging (docs and forum): `Reactant.Profiler.@timed_compile`, `@code_hlo`
+  (no `stablehlo.while` = unrolled), constants as arguments, `optimize=:none` and the private
+  `disable_*` passes, MLIR/XLA dumps, KernelAbstractions kernels raised with `raise=true`; sent to
+  the port agent, who adds them to device.md. Fable review of the device code started.
+
 ### 2026-11-04 (evening: PyPSA upstream for the LP references)
 
 - H2b: PyPSA's own `optimize_mga` for every extreme, each from a copy of the solved optimum

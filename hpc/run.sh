@@ -113,6 +113,7 @@ restarts="${SLURM_RESTART_COUNT:-0}"
     echo "nodes = \"${SLURM_JOB_NODELIST:-$(hostname)}\""
     echo "cpus = ${SLURM_CPUS_PER_TASK:-$threads}"
     echo "threads = \"julia $threads, blas $OPENBLAS_NUM_THREADS, omp $OMP_NUM_THREADS, lp $ESM_LP_THREADS\""
+    echo "line_env = \"${ESM_LINE_ENV:-}\""
     echo "gpus = \"${SLURM_GPUS_ON_NODE:-${CUDA_VISIBLE_DEVICES:-}}\""
     echo "mem_mb = \"${SLURM_MEM_PER_NODE:-}\""
     echo "restart_count = $restarts"
@@ -129,12 +130,23 @@ else
     "${cmd[@]}" >> "$rundir/run.log" 2>&1 &
 fi
 pid=$!
+# device runs: GPU memory and utilization every 10 s (gpu_mem.csv; with XLA_REACTANT_GPU_PREALLOCATE=false
+# the memory is the program's, not XLA's preallocated pool)
+gpulog=""
+if [ "$mode" = device ] || [ -n "${SLURM_GPUS_ON_NODE:-}" ]; then
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        nvidia-smi --query-gpu=timestamp,index,memory.used,memory.total,utilization.gpu --format=csv,noheader -l 10 \
+            >> "$rundir/gpu_mem.csv" 2>/dev/null &
+        gpulog=$!
+    fi
+fi
 # a trapped signal interrupts `wait` (status > 128) while the driver keeps running: wait again
 while true; do
     wait "$pid"; code_exit=$?
     kill -0 "$pid" 2>/dev/null || break
 done
 trap - TERM USR1
+[ -n "$gpulog" ] && kill "$gpulog" 2>/dev/null
 
 # finished; checkpointed (snapshot written, exit 75); preempted (signalled, no snapshot: Slurm
 # requeues it, or it resumes from an earlier snapshot); failed

@@ -1,0 +1,16 @@
+data = "data/processed/model256.h5"
+# Campaign H5 (device throughput on the H100; docs/campaigns.md, campaigns/H5/campaign.toml).
+# Device profiling run (mechanics test: α = 0, physical measure, capacity scaling): 256 nodes daily, GPU.
+out = "results/h5_fams256_24h.h5"
+basis = "haar"
+storage = "soc"
+renewables = "load"
+measure = "physical"
+levels = [[10, 24], [256, 24]]
+init = "heuristic"
+use_bias = false
+nchains = 4
+mlda_warmup = 2
+nsamples = 6
+device_backend = "gpu"
+device_sweeps = 10
