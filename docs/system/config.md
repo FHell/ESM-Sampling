@@ -115,7 +115,7 @@ the 256-node network.
 | `bias_online` | `true` | online refits from the pooled scores of the finest chains during the finest-level warmup; frozen afterwards (all drivers) |
 | `bias_online_every` | 1 | observe every n-th finest step |
 | `bias_online_min` | 16 | no online refit before this many observations (refits at $2^j\ge$ it); the lifted fit stays until then |
-| `bias_trust` | 0 | trust region of the online refits: the change of $\hat b$ minus its mean over the last 32 observed states is at most this times the spread of $\hat b$ over them (at least the number of capacity coordinates); 0: off |
+| `bias_trust` | 1.0 | trust region of the online refits: the change of $\hat b$ minus its mean over the last 32 observed states is at most this times the spread of $\hat b$ over them (at least the number of capacity coordinates); 0: off |
 | `bias_post` | `true` | post-correction by reweighting at $\alpha = 1$ |
 
 **Run lengths.**

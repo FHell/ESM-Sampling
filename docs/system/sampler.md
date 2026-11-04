@@ -280,7 +280,7 @@ cache itself. The global `evaluate!` equals the incremental sums to round-off.
   them, so the lifted fit stays until enough fine data exist. Both drivers pool the scores of
   all chains and freeze the bias at the end of the warmup, so production samples one fixed
   target. After a refit every chain's state is re-evaluated.
-- **Trust region** (`bias_trust` $=\tau > 0$, off by default). A refit replaces the
+- **Trust region** (`bias_trust` $=\tau$, default 1; 0 turns it off). A refit replaces the
   coefficients $(\theta, a, c)$ by the convex combination $(1-\lambda)$ old $+\ \lambda$ new with
   the largest $\lambda\le1$ for which the change of $\hat b$ minus its mean over the
   last 32 observed states stays below $\tau\max(S, n_k)$, $S$ the spread (max − min) of the old
@@ -289,7 +289,10 @@ cache itself. The global `evaluate!` equals the incremental sums to round-off.
   $\hat h$ nearly so, so $\lambda$ is the bound over the deviation of the full step, halved until
   it holds (`trust_step!`). A convex combination of two fits satisfies the linear constraints of
   the monotone fit. The bias stays a fixed function between refits and is frozen after the
-  warmup.
+  warmup. With $\tau = 1$ a refit can at most double the spread of $\hat b$ over the recent
+  states; a full refit from a few states far from equilibrium would change it by 10 to 50 times
+  that, and with the wide capacity move `kop` such a step lets a capacity run away (gas to tens
+  of TW in a test run).
 - **Post-correction** (`bias_post`, default on). Every production sample records what is
   needed to evaluate $\hat b$ and to refit it at the finest level, not the raw weather: the
   features $u_{1,t}$ per step, the clamped node capacities and clamped capacity coefficients,
@@ -301,15 +304,15 @@ cache itself. The global `evaluate!` equals the incremental sums to round-off.
   are written next to the unweighted ones. Weights cannot repair regions the chain did not
   visit.
 
-> **Status: missing.** Stabilization of the bias early in an $\alpha = 1$ run (a long enough
-> level-0 warmup before fine-level refits, damping or a trust region for the refits,
-> regularization of $\hat h$). Without it a refit can move $\hat b$ by many nats at states far
-> from the fitted ones. Two mechanisms are known. The separable quadratic $\hat h$, fitted from
-> scores of chains that start far apart, takes negative curvature with its maximum inside the
-> capacity box; beyond the maximum $e^{-\hat h}$ grows with the capacity, and storage runs to its
-> bound. And the weather scores do not separate the linear coefficients of $u_1$ and $u_2$ (their
-> design columns are equal), so the ridge splits them equally and the firm-capacity dependence
-> of $\hat g$ in surplus is not identified by the weather data.
+> **Status: open.** With the confined $\hat h$, the exact measure term, $\theta_{u_2}\le0$, the
+> refit floor and the trust region, short $\alpha = 1$ runs of `complete40` (2 chains, 400
+> level-0 iterations, 16 + 10 fine sweeps) stay bounded: the level-0 chain no longer blows up
+> after its refits, capacities, costs and storage settle, and the frozen $\hat b$ does not drift
+> in production. With `kop` one chain's gas still drifts outward slowly (1.2 to 1.4 TW over 18
+> sweeps): inside its data range a linear $\hat h$ cannot follow the convex
+> $\log Z^u\sim -n_{\rm conf}\log k$, so it pushes toward the upper edge of the range, which the
+> next refit extends. The bias is far from converged in such runs: refits still change it by
+> $10^6$ nats over the visited states, and the post-correction weight ESS is 1.
 
 ### 7.2 Weather moves at the fine level
 

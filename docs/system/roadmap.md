@@ -7,16 +7,14 @@ when done, and the affected document is updated in the same change.
 
 ## 1. Correctness of the ensemble
 
-- **Bias stabilization at $\alpha = 1$.** A long enough level-0 warmup before fine-level
-  refits (`complete40.toml` learns nothing at level 0: `warmup0` < `bias_start`), dropping the
-  cold-start observations from the sums, damping or a trust region for refits ($\hat b$ is
-  linear in $(\theta, a, c)$, so a step toward the new fit can be scaled in closed form to
-  bound its change at recent states, keeping the monotone constraints), and a form of $\hat h$
-  that does not turn over inside the capacity box (no interior maximum of the quadratic, or a
-  saturating form); the linear coefficients of $u_1$ and $u_2$ need a constraint (for instance
-  that firm capacity has no negative value in surplus, $\theta_{u_2}\le0$) because the weather
-  scores do not separate them. A refit currently moves $\hat b$ by $10^7$–$10^8$ nats at the visited states of
-  a cold start, and storage runs to its bound after it ([sampler.md](sampler.md) §7.1).
+- **Bias convergence at $\alpha = 1$.** Short runs stay bounded with the safeguards
+  ([sampler.md](sampler.md) §7.1), but the bias is far from converged: refits change it by
+  $10^6$ nats over the visited states and the post-correction weight ESS is 1. Open: an $\hat h$
+  form that follows $\log Z^u\sim-n_{\rm conf}\log k$ (a log term per unit, like the measure)
+  instead of a linear or quadratic one, so that it stops ratcheting a capacity outward with the
+  data range (gas with `kop`); dropping the cold-start observations from the sums; long warmups
+  that measure how fast the bias converges; a level-0 warmup that learns in the configurations
+  (`complete40.toml` has `warmup0` below `bias_start`).
 - **$\alpha = 1$ end to end.** The weather marginal against exact draws, before and after the
   post-correction.
 - **Exactness test sensitivity.** The capacity part of `test/test_exact.jl` passes ($|z|\le 2.1$)
