@@ -7,16 +7,14 @@
 # - code: the campaign's pinned worktree $ESM_PROJ/campaigns/<campaign>/code (must be clean);
 # - run directory $ESM_SCRATCH/runs/<campaign>/<run id> on /p/tmp: the config (as given and as
 #   run, with out, cache, checkpoint and stop file set), logs, outputs, checkpoint;
-# - run id: $RUN_ID if set (continuations), else <campaign>-<config name>-<job id>[_<task>],
+# - run id: $RUN_ID if set, else <campaign>-<config name>-<job id>[_<task>],
 #   which a Slurm requeue keeps, so a requeued job resumes from its checkpoint;
 # - SIGTERM (preemption, scancel) and SIGUSR1 (#SBATCH --signal=B:USR1@<lead>, before the time
 #   limit) create the stop file; the driver then checkpoints at a sweep boundary and exits with
-#   75. After SIGTERM nothing more is done (a preempted standby job is requeued by Slurm and
-#   resumes; a cancelled one stays stopped). After SIGUSR1 the wrapper submits a continuation:
-#   the same job template with the same arguments, array index, cores and memory, the same run
-#   id, an afterany dependency on this job; at most RESUBMIT (default ESM_MAX_CONTINUATIONS = 10)
-#   in a row. The templates `exec` this script, so that the batch-shell signal reaches it, and
-#   export ESM_JOB_SCRIPT, ESM_JOB_ARGS (whitespace-separated) and, for arrays, ESM_JOB_ARRAY;
+#   75. A preempted standby job is requeued by Slurm and resumes from its snapshot. A job is
+#   never resubmitted past its time limit: the QOS and --time are chosen from the run's estimate
+#   (docs/system/hpc.md §5); the snapshot at the time limit only keeps the work. The templates
+#   `exec` this script, so that the batch-shell signal (B:) reaches it;
 # - at the end: the run record (run.toml), sacct figures, archive copy without checkpoints,
 #   and one line in the runs index ($ESM_PROJ/ledger/runs.jsonl and the campaign's runs.jsonl).
 set -uo pipefail
@@ -173,21 +171,10 @@ if [ "$status" = finished ] || [ "$status" = failed ]; then
     rsync -a --exclude 'snapshot*' --exclude '.snapshot*' --exclude STOP "$rundir/" "$ESM_PROJ/archive/$campaign/$run_id/"
 fi
 
-# --- continuation past the time limit (SIGUSR1); a preempted job (SIGTERM) is requeued by Slurm -
-left="${RESUBMIT:-${ESM_MAX_CONTINUATIONS:-10}}"
-if [ "$status" = checkpointed ] && [ "$signalled" = USR1 ] && [ -n "${SLURM_JOB_ID:-}" ]; then
-    if [ "$left" -le 0 ]; then
-        echo "run.sh: $run_id stopped at the time limit; no continuations left (RESUBMIT=0)" >&2
-    elif [ -z "${ESM_JOB_SCRIPT:-}" ]; then
-        echo "run.sh: ESM_JOB_SCRIPT not set by the job template; no continuation submitted" >&2
-    else
-        read -r -a jargs <<< "${ESM_JOB_ARGS:-}"
-        sbatch --dependency=afterany:"$SLURM_JOB_ID" ${ESM_JOB_ARRAY:+--array="$ESM_JOB_ARRAY"} \
-               ${SLURM_CPUS_PER_TASK:+--cpus-per-task="$SLURM_CPUS_PER_TASK"} \
-               ${SLURM_MEM_PER_NODE:+--mem="$SLURM_MEM_PER_NODE"} ${SLURM_MEM_PER_CPU:+--mem-per-cpu="$SLURM_MEM_PER_CPU"} \
-               --export=ALL,RUN_ID="$run_id",RESUBMIT=$(( left - 1 )) "$ESM_JOB_SCRIPT" "${jargs[@]}" \
-            && echo "run.sh: continuation of $run_id submitted ($(( left - 1 )) left)"
-    fi
+# --- the time limit: snapshot kept, no resubmission (choose the QOS and --time from the estimate) -
+if [ "$status" = checkpointed ] && [ "$signalled" = USR1 ]; then
+    echo "run.sh: $run_id reached the job's time limit; snapshot kept in $rundir. The --time was too short" \
+         "for this run: set it from the run's estimate (standby up to 7 days; hpc.md §5)." >&2
 fi
 [ "${ESM_TMPDIR_CLEANUP:-}" = 1 ] && [ -n "${TMPDIR:-}" ] && rm -rf "$TMPDIR"
 echo "run.sh: $run_id $status (exit $code_exit); record $rundir/run.toml"

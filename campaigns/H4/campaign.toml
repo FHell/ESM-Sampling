@@ -12,6 +12,7 @@ Lines (list.txt): daily M = 8 low/high (1500 + 3000 steps), daily M = 4 low/high
 against M = 8: more replicas than active ones), 6-hourly M = 8 low/high (800 + 1600 steps).
 8 cores each, preemptible array (resume from the snapshot). Estimated 6–10 h per daily line,
 12–20 h per 6-hourly line (local: 0.85 s and 3.1 s per replica step on 4 threads).
+The array asks for 2 days on standby (--time=2-00:00:00), above the longest estimate.
 Results: summary_replicas.txt per run (collected), out.h5 in the archive. Compare low and high
 per line: carrier totals over production, penalty-free cost, the probes' equilibrated scores
 r ŝ_eq/β_k∂K, active replicas, the replica weather features against the prior.
@@ -22,4 +23,4 @@ Then (not in this submission): 256 nodes daily after the daily lines, and the co
 the H2 LP optima.
 """
 list = "campaigns/H4/list.txt"
-submit = "sbatch --array=1-6%6 hpc/jobs/cpu_array.sbatch H4 campaigns/H4/list.txt"
+submit = "sbatch --time=2-00:00:00 --array=1-6%6 hpc/jobs/cpu_array.sbatch H4 campaigns/H4/list.txt"

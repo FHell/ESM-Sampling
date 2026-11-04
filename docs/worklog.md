@@ -118,14 +118,14 @@ concrete next steps. Update it at the end of every work session.
 
 ## Log
 
-### 2026-11-04 (job continuations past the time limit)
+### 2026-11-04 (time limits)
 
 - The time-limit signal (`--signal=B:USR1@900`) went to the templates' batch shell, which ran
-  `run.sh` as a child: no stop file, the batch shell killed by the unhandled signal, no
-  snapshot; and the continuation lost the mode and script arguments and did not work for
-  arrays. The templates now `exec` `run.sh` and export `ESM_JOB_SCRIPT`/`ESM_JOB_ARGS`/
-  `ESM_JOB_ARRAY`; `run.sh` tells SIGTERM (requeue by Slurm) from SIGUSR1 (continuation,
-  automatic, at most 10 in a row) and records the signal; simulated locally with Slurm stubs.
+  `run.sh` as a child: no stop file, no snapshot. The templates now `exec` `run.sh`, which
+  records the signal (`TERM` or `USR1`). A short-lived automatic resubmission past the time
+  limit was removed again: jobs are never chained past a QOS limit (user); every job asks for a
+  `--time` covering its estimate (standby up to 7 days), H4 for 2 days (CLAUDE.md, hpc.md §5).
+  Simulated locally with Slurm stubs.
   CLAUDE.md: the sampler described as weather replicas with a Langevin capacity step.
 
 ### 2026-11-04 (ERA5 built; wind calibration fixed)
