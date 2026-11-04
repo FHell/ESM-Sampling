@@ -153,7 +153,16 @@ concrete next steps. Update it at the end of every work session.
 - Reactant compile debugging (docs and forum): `Reactant.Profiler.@timed_compile`, `@code_hlo`
   (no `stablehlo.while` = unrolled), constants as arguments, `optimize=:none` and the private
   `disable_*` passes, MLIR/XLA dumps, KernelAbstractions kernels raised with `raise=true`; sent to
-  the port agent, who adds them to device.md. Fable review of the device code started.
+  the port agent, who adds them to device.md.
+- Fable review of the device code ([device_review.md](device_review.md)): the `:slong` compile is
+  trace-time inference of Reactant's varargs `cat` over O(T) operands (quadratic; not XLA); every
+  host-drawn schedule choice (spair partners, cells, block offsets, slong intervals, …) is drawn
+  once per run and never redrawn (a mixing defect, invariance intact); the residual cache is never
+  rebuilt (F32 drift); F32 one-hot contractions in TF32 and the replica driver's F32 upload
+  without conversion; replica-driver costs (host probe, full weather uploads, family mismatch with
+  the probe); slope-jump cap from the initial state; trace-time module globals; snapshot seeding
+  gaps. Port agent: the cat fix, schedule redraw, cap counter, globals, slong level columns;
+  a second agent: residual rebuild, Float32, replica driver, snapshot gaps.
 
 ### 2026-11-04 (evening: PyPSA upstream for the LP references)
 
