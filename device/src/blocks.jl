@@ -91,10 +91,11 @@ function block_weights(tab, r, L)
     pid = tab.p[:, r]
     W = tab.W                                                 # (L+1, P) static table (a device array)
     w = Any[]
-    for j in 0:L
+    push!(w, 0.0)                                             # w_0 = 0 for every profile (static)
+    for j in 1:L
         push!(w, s3(W[j+1, :], pid))                          # gather the row's profile values
     end
-    push!(w, w[1] .* 0.0)
+    push!(w, 0.0)                                             # w_{L+1} = 0 (static)
     return w
 end
 
@@ -103,7 +104,7 @@ function build_block(st, cp, sp, tab, r, k, ::Val{L}, ::Val{lin}) where {L,lin}
     s = tab.s[:, r]
     κs = g3(cp.ks, s) .* s3(sp.sh, s) ./ k.Δt
     okm = (on .> 0.0) .& (κs .>= k.κmin)
-    w = [x .* ifelse.(on .> 0.0, 1.0, 0.0) for x in block_weights(tab, r, L)]
+    w = [x isa Number ? x : x .* ifelse.(on .> 0.0, 1.0, 0.0) for x in block_weights(tab, r, L)]
     G = size(tab.gq, 2)
     # SoC terms of steps b0+j (args e(b0+j), e(b0+j+1)) and balance slots
     kk, ww, h, ηi, ηo, qt, mc = g3(cp.ks, s), g3(cp.ws, s), s3(sp.sh, s), s3(sp.sηin, s), s3(sp.sηout, s), s3(sp.sqt, s), s3(sp.smc, s)

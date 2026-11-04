@@ -6,6 +6,7 @@ function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], 
     E = P.E
     T = LM.T
     ws, wa = ML.MoveWS(P), ML.MoveWS(P); wa.follow = false
+    fam == :spair0 && (fam = :spair)                          # the same CPU move (spair)
     τ = fam == :spair ? site[2] : site[end]; τm = mod1(τ - 1, T)      # spair sites are (s, τ, q1, q2)
     gi(q) = ix.gidx[q]
     sf = string(fam)

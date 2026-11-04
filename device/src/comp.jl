@@ -31,12 +31,20 @@ function family_rounds(::Val{fam}, tp::Topo, M::DeviceModel, cls, rng) where {fa
     T = tp.T
     rounds = Vector{Vector{Tuple}}()
     Sm = maximum(length.(tp.nodestor); init=0)
-    if fam == :spair
+    if fam == :spair || fam == :spair0
+        # with :spair0 in the list: :spair0 takes the pairs of units without fleet commitment (no
+        # commitment terms), :spair the pairs with at least one committable unit
+        split = fam == :spair0 || :spair0 in SCHED_FAMILIES[]
+        ucq(q) = M.guc[q] > 0
         for j in 1:Sm, c in cls
             sites = Tuple[]
             for τ in c, n in 1:tp.N
                 (length(tp.nodestor[n]) >= j && !isempty(tp.nodegens[n])) || continue
-                push!(sites, (tp.nodestor[n][j], τ, rand(rng, tp.nodegens[n]), rand(rng, tp.nodegens[n])))
+                gs = tp.nodegens[n]
+                prs = [(a, b) for a in gs for b in gs]
+                split && (prs = filter(p -> (ucq(p[1]) | ucq(p[2])) == (fam == :spair), prs))
+                isempty(prs) && continue
+                push!(sites, (tp.nodestor[n][j], τ, rand(rng, prs)...))
             end
             push!(rounds, sites)
         end
@@ -71,7 +79,7 @@ end
 function site_cols(::Val{fam}, tp::Topo, site, D::Int) where {fam}
     T = tp.T
     G = gmax(tp)
-    if fam == :spair
+    if fam == :spair || fam == :spair0
         s, τ, q1, q2 = site
         n = tp.snode[s]
         return (s=s, ce=colτ(T, τ, s), cem=colτ(T, τ - 1, s), ce1=colτ(T, τ + 1, s), crm=colτ(T, τ - 1, n), cr=colτ(T, τ, n),
@@ -102,6 +110,7 @@ device_extra(::Val{:tsocL}, ht) = (gon=Float64.(ht.gq .> 0),)
 device_extra(::Val{:tpot}, ht) = (gon=Float64.(ht.gq .> 0), lon=Float64.(ht.ln .> 0))
 device_extra(::Val{:tpotL}, ht) = (gon=Float64.(ht.gq .> 0), lon=Float64.(ht.ln .> 0))
 device_extra(::Val{:spair}, ht) = (samef=Float64.(ht.same),)
+device_extra(::Val{:spair0}, ht) = (samef=Float64.(ht.same),)
 
 let socf = [(:ce, :e, true), (:cem, :e, false), (:ce1, :e, false), (:crm, :r, true), (:cr, :r, true)],
     genf = [(:gcm, :ω, true), (:gcm, :uc, false), (:gc, :ω, true), (:gc, :uc, true), (:gc1, :uc, false)],
@@ -109,6 +118,7 @@ let socf = [(:ce, :e, true), (:cem, :e, false), (:ce1, :e, false), (:crm, :r, tr
     potg = [(:gc, :ω, true), (:gc, :uc, true), (:gcm, :ω, false), (:gcm, :uc, false), (:gc1, :uc, false)]
     FOOT[:spair] = vcat(socf, [(:cwa, :ω, true), (:cwa, :uc, false), (:cwa1, :uc, false), (:cwb, :ω, true), (:cwb, :uc, true),
                                (:cwbm, :ω, false), (:cwbm, :uc, false), (:cwb1, :uc, false)])
+    FOOT[:spair0] = vcat(socf, [(:cwa, :ω, true), (:cwb, :ω, true)])
     FOOT[:tsoc] = vcat(socf, genf)
     FOOT[:tsocL] = vcat(socf, genf)
     FOOT[:tpot] = vcat(thf, potg)
@@ -145,7 +155,7 @@ function socterms(st, cp, sp, tab, r, ae)
     e0, em, e1 = g3(st.e, tab.ce[:, r]), g3(st.e, tab.cem[:, r]), g3(st.e, tab.ce1[:, r])
     k, w = g3(cp.ks, s), g3(cp.ws, s)
     h, ηi, ηo, qt, mc = s3(sp.sh, s), s3(sp.sηin, s), s3(sp.sηout, s), s3(sp.sqt, s), s3(sp.smc, s)
-    z = ae .* 0.0
+    z = 0.0                     # static zero slope
     return SocTerms([em, e0], [z, ae], [e0, e1], [ae, z], [k, k], [w, w], [h, h], [ηi, ηi], [ηo, ηo], [qt, qt], [mc, mc], [1, 2])
 end
 
@@ -172,7 +182,10 @@ end
 # :spair
 # ---------------------------------------------------------------------------
 
-function build(::Val{:spair}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r, k::Consts)
+build(::Val{:spair}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r, k::Consts) = build_spair(st, cp, sp, tab, r, k, Val(true))
+build(::Val{:spair0}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r, k::Consts) = build_spair(st, cp, sp, tab, r, k, Val(false))
+
+function build_spair(st, cp, sp, tab, r, k, ::Val{withuc}) where {withuc}
     on = m3(tab.on[:, r])
     s, q1, q2 = tab.s[:, r], tab.q1[:, r], tab.q2[:, r]
     κs = g3(cp.ks, s) .* s3(sp.sh, s) ./ k.Δt
@@ -186,18 +199,21 @@ function build(::Val{:spair}, st::FlatState, cp::ChainParams, sp::StaticParams, 
     au2 = a2 .* ucq2                                         # the commitment of q2 follows at τ
     cwa, cwa1, cwb, cwbm, cwb1 = tab.cwa[:, r], tab.cwa1[:, r], tab.cwb[:, r], tab.cwbm[:, r], tab.cwb1[:, r]
     gens = [gent(st, cp, sp, q1, cwa, 1; a=a1), gent(st, cp, sp, q2, cwb, 2; a=a2)]
-    ucs = [uct(cp, sp, q1; y0=g3(st.ω, cwa), ay=a1, u0=g3(st.uc, cwa), u10=g3(st.uc, cwa1), au1=same .* au2, on=ucq1),
+    ucs = !withuc ? Any[] :
+          [uct(cp, sp, q1; y0=g3(st.ω, cwa), ay=a1, u0=g3(st.uc, cwa), u10=g3(st.uc, cwa1), au1=same .* au2, on=ucq1),
            uct(cp, sp, q2; y0=g3(st.ω, cwb), ay=a2, u0=g3(st.uc, cwb), au=au2, u10=g3(st.uc, cwb1), on=ucq2),
            uct(cp, sp, q2; y0=g3(st.ω, cwbm), u0=g3(st.uc, cwbm), u10=g3(st.uc, cwb), au1=au2, on=ucq2 .* (1.0 .- same))]
+    withuc || (au2 = 0.0)
     tb = TermBatch(mkgen(gens), mkuc(ucs), nothing, nothing, socterms(st, cp, sp, tab, r, ae),
                    Any[g3(st.r, tab.crm[:, r]), g3(st.r, tab.cr[:, r])])
     return tb, (ae, a1, a2, au2)
 end
 
+commit(::Val{:spair0}, st::FlatState, tab, r, t, dr, aux) = commit(Val(:spair), st, tab, r, t, dr, aux)
 function commit(::Val{:spair}, st::FlatState, tab, r, t, dr, aux)
     ae, a1, a2, au2 = aux
     ω = scadd(scadd(st.ω, tab.cwa[:, r], flat(t .* a1)), tab.cwb[:, r], flat(t .* a2))
-    uc = scadd(st.uc, tab.cwb[:, r], flat(t .* au2))
+    uc = au2 isa Number ? st.uc : scadd(st.uc, tab.cwb[:, r], flat(t .* au2))
     e = scadd(st.e, tab.ce[:, r], flat(t .* ae))
     rr = scadd(scadd(st.r, tab.crm[:, r], flat(msk(dr[1], ae))), tab.cr[:, r], flat(msk(dr[2], ae)))
     return FlatState(st.θ, ω, uc, e, st.u, rr)

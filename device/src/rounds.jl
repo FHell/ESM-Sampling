@@ -184,6 +184,9 @@ end
 
 chunks(v, b) = [v[i:min(i + b - 1, end)] for i in 1:b:length(v)]
 
+"The family list of the schedule being built (split families such as `:spair`/`:spair0` read it)."
+const SCHED_FAMILIES = Ref{Tuple}(())
+
 """
     schedule(tp; families, bmax) -> Dict(family => rounds)
 
@@ -197,6 +200,7 @@ function schedule(tp::Topo, M::DeviceModel; families=FAMILIES, bmax=Dict{Symbol,
     S = Dict{Symbol,Vector{Vector{Tuple}}}()
     G = maximum(length.(tp.nodegens); init=0)
     Sm = maximum(length.(tp.nodestor); init=0)
+    SCHED_FAMILIES[] = Tuple(families)                         # family_rounds of split families read it (:spair0)
     for fam in families
         rounds = Vector{Vector{Tuple}}()
         hasuc(q) = M.guc[q] > 0
@@ -431,7 +435,7 @@ function build(::Val{:gen}, st::FlatState, cp::ChainParams, sp::StaticParams, ta
     au = a .* ucq
     y0, u0, u10, um, ym = g3(st.ω, cw), g3(st.uc, cw), g3(st.uc, cw1), g3(st.uc, cwm), g3(st.ω, cwm)
     κ, w = g3(cp.κg, q), g3(cp.wg, q)
-    z = a .* 0.0
+    z = 0.0                    # static zero slope (no primaries, no root search)
     gmin, su, nl = s3(sp.gmin, q), s3(sp.su, q), s3(sp.nl, q)
     gen = GenTerms([y0], [a], [κ], [w], [s3(sp.gmc, q)], [s3(sp.clo, q)], [s3(sp.chi, q)], [g3(cp.plo, q)],
                    [s3(sp.hv, q)], [g3(cp.yk, q)], [1])
@@ -486,7 +490,7 @@ function build(::Val{:uc}, st::FlatState, cp::ChainParams, sp::StaticParams, tab
     a = m3(tab.on[:, r])
     ucq = s3(sp.ucq, q)
     au = a .* ucq
-    z = a .* 0.0
+    z = 0.0                    # static zero slope (no primaries, no root search)
     y0, u0, u10, um, ym = g3(st.ω, cw), g3(st.uc, cw), g3(st.uc, cw1), g3(st.uc, cwm), g3(st.ω, cwm)
     κ, w = g3(cp.κg, q), g3(cp.wg, q)
     gmin, su, nl = s3(sp.gmin, q), s3(sp.su, q), s3(sp.nl, q)
@@ -512,7 +516,7 @@ function build(::Val{:pair}, st::FlatState, cp::ChainParams, sp::StaticParams, t
                                     (q2, tab.cwb[:, r], tab.cwmb[:, r], tab.cw1b[:, r], κ2, a2))
         ucq = s3(sp.ucq, q)
         au = a .* ucq
-        z = a .* 0.0
+        z = 0.0                    # static zero slope (no primaries, no root search)
         y0, u0, u10, um, ym = g3(st.ω, cw), g3(st.uc, cw), g3(st.uc, cw1), g3(st.uc, cwm), g3(st.ω, cwm)
         w = g3(cp.wg, q)
         push!(G, (y0, a, κ, w, s3(sp.gmc, q), s3(sp.clo, q), s3(sp.chi, q), g3(cp.plo, q), s3(sp.hv, q), g3(cp.yk, q)))
@@ -537,7 +541,7 @@ end
 function build(::Val{:soc}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r)
     s, ce, cem, ce1, crm, cr = tab.s[:, r], tab.ce[:, r], tab.cem[:, r], tab.ce1[:, r], tab.crm[:, r], tab.cr[:, r]
     a = m3(tab.on[:, r])
-    z = a .* 0.0
+    z = 0.0                    # static zero slope (no primaries, no root search)
     e0, em, e1 = g3(st.e, ce), g3(st.e, cem), g3(st.e, ce1)
     k, w = g3(cp.ks, s), g3(cp.ws, s)
     h, ηi, ηo, qt, mc = s3(sp.sh, s), s3(sp.sηin, s), s3(sp.sηout, s), s3(sp.sqt, s), s3(sp.smc, s)

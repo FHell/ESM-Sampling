@@ -42,16 +42,34 @@ terms, line terms with hinge knots, SoC terms, balance slots). A compensation si
 requirement change by one rule: none, unit, linear (learned coefficients) or share-preserving
 (kinked arguments $x_0 + at + a_k\varphi_k(t)$ plus the Jacobian step).
 
+**Term axis.** The builders list a site's terms; the `TermBatch` constructor stacks every field
+of a term type into one $(C, B, 1, n)$ array (`stack_terms`). Evaluation then works on
+$(C, B, K, n)$ for $K$ points and reduces over $n$, so the compiled program does not grow with
+the term count.
+
+Static per-column metadata is recorded at trace time:
+* the balance slot of every injection;
+* the kink id of every kinked argument;
+* whether an argument moves: a slope that is the literal `0.0` of the builder is static.
+
+The balance slots sum their columns with a static padded column table (an appended zero column,
+one gather and one sum; no 0/1 matmul, so a padded term cannot turn an infinity into NaN).
+
 `sample_dense` is exact without truncation:
-* it sorts the primary points of every site, including the kinks and the clamp points on both
-  pieces of every kinked argument;
-* it keeps the K smallest sign changes of every secondary quantity per segment (`nroots`). K = 2
-  for the plain families, where at most two are proven per term type; K = 4 for the compensated,
-  cell and block families;
+* it sorts the primary points of every site: the clamp points of moving arguments only, the
+  kinks, and the clamp points on both pieces of every kinked argument;
+* it finds the sign changes of every secondary quantity per segment, vectorized over the
+  quantity axis (`rootsK`). It keeps K of them per quantity:
+  - 1 for a quantity of exactly one moving argument: it is monotone in $t$. This covers the
+    SoC quantities with one moving end, and the commitment quantities with one moving
+    argument;
+  - none for a quantity of static arguments only;
+  - the family's K otherwise (`nroots`): 2 for the plain families, where at most two are proven
+    per term type, and 4 for the compensated, cell and block families;
 * it evaluates the potential at all points and inverts the segment masses. The masses are
   anchored at each segment's lower end, and offsets of decreasing segments at the right end.
 
-**Guard.** A site whose line has more sign changes than K in some secondary quantity stays at
+**Guard.** A site whose line has more sign changes than kept in some secondary quantity stays at
 $t = 0$. The count is a property of the whole line, so this keeps the target invariant. The
 tests report how often it happens.
 
@@ -70,7 +88,8 @@ and $r$.
 | `:link` | link atoms | none |
 | `:theta` | `potential` | none |
 | `:theta3`, `:theta5` | `potential` at nodes of degree ≤ 3 and 4–5, padded to their own degree (`:theta` then keeps degree ≥ 6) | none |
-| `:spair` | `spair` | unit |
+| `:spair` | `spair` (with `:spair0` in the list: pairs with a committable unit) | unit |
+| `:spair0` | `spair` of two units without fleet commitment (no UC terms) | unit |
 | `:tsoc`, `:tsocL` | `tsoc`, `tsocL` | share-preserving, linear |
 | `:tpot`, `:tpotL` | `tpot`, `tpotL` | share-preserving, linear |
 | `:cell{q}`, `:cellu{q}` | `cell` at partition level q (`u`: committable carriers) | additive |
@@ -94,10 +113,9 @@ terms the device uses the linear rule.
 **Linear rule.** Its coefficients are host tables (`StaticParams.β1`, `β2`, equal split by
 default), with the proxy class `ChainParams.cls` from `proxy_class`.
 
-> **Status: deviation.** The term loops are unrolled at trace time, so the compiled program grows
-> with a family's term count: `:sblkL4` takes 464 s and 11 GB to compile on the CPU backend, and
-> `:tpotL` does not compile in 20 minutes at 12.7 GB. Large families therefore need term-stacked
-> evaluation (a term axis in the arrays) or the slope-jump form before they can run compiled.
+> **Status: deviation.** The cell pair at the coarsest level (`:cellpairu1`, two carriers over the
+> whole 40-node network: 80 generator and 160 commitment terms) compiles in about 230 s at a
+> 9.6 GB peak on the CPU backend, too heavy to schedule; it needs the slope-jump form.
 
 > **Status: deviation.** Cell–class aggregates of the block moves (one class in one cell) are not
 > ported; the large coarse cells and long blocks are costly in the dense form (about 1 700
@@ -175,10 +193,10 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 |---|---|
 | device model, exact cost, round trip | done |
 | term batch, exact dense sampler, plain families, rounds, compiled multi-sweep program | done |
-| compensated families `:spair`, `:tsoc(L)`, `:tpot(L)` | verified on arrays; `:spair`, `:tsoc(L)` also compiled (CPU backend); scheduled with `families = :all` |
-| cell templates (all partition levels) | verified on arrays; scheduled with `families = :all` |
-| storage blocks, one unit (plateau, shapes) | verified on arrays; `:sblkL4` compiled; not yet scheduled |
-| stacked term evaluation (program size independent of the term count) | missing; needed to compile `:tpot(L)`, coarse cells, long blocks |
+| compensated families `:spair`, `:spair0`, `:tsoc(L)`, `:tpot(L)` | verified on arrays and compiled (CPU backend); scheduled with `families = :all` |
+| cell templates (all partition levels) | verified on arrays; compiled except `:cellpairu1` (see §3); scheduled with `families = :all` |
+| storage blocks, one unit (plateau, shapes) | verified on arrays and compiled (`:sblkL4`, `:sblkL16`, `:sblk*`); not yet scheduled |
+| term axis (program size independent of the term count) | done |
 | one program per checkpoint (operation sweeps + capacity pass) | done (`sweep_program`, `merged = true`); not the default (compile time) |
 | capacity pass (`kren`, `kscale`, `kpeak` absorb) with the bias, host loop | done |
 | templates for Haar angle atoms and localized proxy and learned modes (`tcut`, `acut`) | missing |
