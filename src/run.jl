@@ -185,8 +185,13 @@ function setup(cfg::Config; rng=MersenneTwister(cfg.seed))
     n_k = (lp.n_k_total - lp.n_k_free) + 0.5 * lp.n_k_free
     βv = cfg.calibrate_beta ? n_v / (cfg.eps_v * lp.objective) : cfg.beta_v
     βk = cfg.calibrate_beta ? n_k / (cfg.eps_k * lp.objective) : cfg.beta_k
-    logmsg(cfg, @sprintf("LP: total %.3e €/a (capex %.3e), confined n_v*≈%.0f (finest), n_k=%.1f → β_v=%.3e, β_k=%.3e  [%.0fs]",
-                         lp.objective, lp.capex, n_v, n_k, βv, βk, time() - t0))
+    if cfg.init == "heuristic"      # no LP solved: objective and capex are NaN by construction, β fixed
+        logmsg(cfg, @sprintf("heuristic start (no LP): confined n_v*≈%.0f (finest), n_k=%.1f, fixed β_v=%.3e, β_k=%.3e  [%.0fs]",
+                             n_v, n_k, βv, βk, time() - t0))
+    else
+        logmsg(cfg, @sprintf("LP: total %.3e €/a (capex %.3e), confined n_v*≈%.0f (finest), n_k=%.1f → β_v=%.3e, β_k=%.3e  [%.0fs]",
+                             lp.objective, lp.capex, n_v, n_k, βv, βk, time() - t0))
+    end
 
     bias = init_bias(E, W, Layout(E.kspecs, cfg.levels[1]...), βk / βv; rng=rng, nsamples=cfg.bias_samples,
                      nsteps=cfg.bias_sample_steps, res=cfg.bias_table_res)
