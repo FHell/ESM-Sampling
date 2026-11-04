@@ -1,0 +1,9 @@
+# Campaign H0 (docs/experiments.md, row H0; docs/system/hpc.md)
+id = "H0"
+commit = "efdb12ca29eccede61432c3d418b7cc4052d4071"
+created = "2026-11-04T15:11:34+01:00"
+code = "/p/projects/coen/esm/campaigns/H0/code"
+runs = "/p/tmp/hellmann/esm/runs/H0"
+archive = "/p/projects/coen/esm/archive/H0"
+question = ""        # fill in: the ledger row's question
+design = ""          # fill in: configurations, sizes, seeds, resources

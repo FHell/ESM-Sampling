@@ -1,0 +1,37 @@
+[[attempt]]
+run_id = "H0-h0_smoke-2902913"
+campaign = "H0"
+config = "hpc/configs/h0_smoke.toml"
+config_sha = "ba2527af1c81e3ea"
+commit = "efdb12ca29eccede61432c3d418b7cc4052d4071"
+julia = "1.12.2"
+data = "data/processed/model.h5"
+data_sha = "be56a52db413e27e"
+mode = "cpu"
+command = "julia --project=. -t 8 scripts/run.jl /p/tmp/hellmann/esm/runs/H0/H0-h0_smoke-2902913/config.toml"
+job_id = "2902913"
+array_task = ""
+partition = "priority"
+qos = "priority"
+nodes = "csp14c04"
+cpus = 8
+threads = "julia 8, blas 1, omp 1, lp 8"
+gpus = ""
+mem_mb = ""
+restart_count = 0
+start = "2026-11-04T15:21:58+01:00"
+end = "2026-11-04T15:23:55+01:00"
+exit = 0
+status = "finished"
+elapsed = "00:01:57"
+max_rss = "2212052K"
+total_cpu = "02:59.367"
+energy_j = "71540"
+outputs = [
+    "config.toml 456",
+    "run.toml 763",
+    "config.orig.toml 454",
+    "out.h5 183417",
+    "run.log 1357",
+]
+
