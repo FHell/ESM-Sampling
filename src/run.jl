@@ -27,6 +27,10 @@ Base.@kwdef mutable struct Config
     storage_long::Float64 = 1.0     # probability per operation sweep of the long-range storage sweep (slong, slevel; storage_long.jl)
     storage_long_moves::Int = 32    # ... long-range plateaus per storage unit and sweep
     storage_long_hours::Float64 = 24.0  # ... for the storage units with at least this many hours of storage
+    storage_xpair::Float64 = 0.1    # rate of the single-instant storage pair sxpair in the local sweep (plain-family scale; storage_cross.jl)
+    storage_xlong::Int = 8          # interval storage pairs sxlong per storage unit in the long-range storage sweep
+    storage_xpair_hops::Int = 1     # storage pairs: partner nodes within this many hops (and the unit's own node)
+    storage_xpair_ball::Int = 1     # ... flow re-routed on the nodes within this many hops of the pair
     measure::String = "utilization" # reference measure of dispatchable units: "utilization" or "physical" (MW); open choice
     storage::String = "soc"         # storage form: "soc" (state-of-charge trajectory; the only form)
     renewables::String = "load"     # renewables: "load" (output A·k; curtailment = nodal dump; the only form)
@@ -75,6 +79,43 @@ Base.@kwdef mutable struct Config
     ess_min::Float64 = 400.0        # ... bulk and tail ESS (all chains) at least this
     mcse_max::Float64 = 0.05        # ... MCSE of the mean / posterior sd at most this
     rhat_screen::Float64 = 1.05     # threshold of the sliding-window warmup detection
+    # replica–Langevin sampler (sampler = "replicas", replicas.jl; docs/system/sampler.md §11)
+    sampler::String = "chains"      # CPU driver: "chains" (run_chains, finest-level chains) or "replicas" (run_replicas)
+    replicas::Int = 8               # weather replicas per chain, sharing the capacities
+    replica_init_sweeps::Int = 40   # operation sweeps per replica at fixed k after its first weather draw
+    replica_inner::Int = 1          # operation sweeps per replica and step
+    replica_theta::Float64 = 0.0    # continuous pCN angle per step (0: off)
+    replica_burst_every::Int = 40   # a pCN burst per replica every that many steps, staggered over the replicas (0: off)
+    replica_burst_angle::Float64 = 0.3   # ... its angle φ
+    replica_window::Int = 60        # regime window length B (level-0 steps) of the window moves (0: none)
+    replica_window_prob::Float64 = 0.5   # ... probability of a window move with a burst (continuous mode: per step)
+    replica_ffbs::Bool = false      # centred FFBS of the regimes with every burst
+    replica_compensate::Bool = true # compensated initialisation of the operation after a weather step
+    replica_gate_min::Int = 10      # gate: steps after a pCN burst before the replica's scores can enter the drift
+    replica_gate_max::Int = 30      # ... after which they enter whatever the relaxation indicator says
+    replica_gate_min_window::Int = 20   # ... the same after a burst with a regime window
+    replica_gate_max_window::Int = 60
+    replica_gate_win::Int = 8       # relaxation indicator: compare the halves of the last this many steps
+    replica_gate_tol::Float64 = 0.3 # ... active when they differ by less (carrier scores in units of β_k∂K)
+    replica_probe_every::Int = 20   # lag probe every that many steps (0: off)
+    replica_probe_len::Int = 30     # ... operation sweeps at frozen (k, x)
+    replica_probe_tail::Int = 15    # ... equilibrated score: mean of the last this many
+    replica_probe_win::Int = 10     # ... in-flight score: mean over this many active steps of the replica
+    replica_probe_avg::Int = 3      # probes averaged per step adaptation
+    langevin_eta::Float64 = 5e-4    # initial Langevin step in w = log(k + κ_s), every k field
+    langevin_eta_min::Float64 = 2e-5
+    langevin_eta_max::Float64 = 2e-3
+    langevin_adapt::Bool = true     # adapt the step per k field from the probes (warmup only)
+    langevin_gap_hi::Float64 = 0.10 # ... shrink when the mean |gap| / β_k∂K exceeds this
+    langevin_gap_lo::Float64 = 0.05 # ... grow when it is below this
+    langevin_kappa::Dict{String,Float64} = Dict{String,Float64}()   # κ_s per carrier (MW); missing carriers: built-in table, else the default
+    langevin_kappa_default::Float64 = 100.0
+    langevin_kmin::Float64 = 1.0    # reflection at k = κmin (MW)
+    langevin_clip::Float64 = 0.02   # drift clip per step in w
+    langevin_box::Bool = true       # reflection at the upper capacity bound
+    tilt_functional::String = "resload_mean"   # declared weather functional Φ of the stress tilt ("none": no Φ)
+    tilt_lambda::Float64 = 0.0      # tilt strength λ (0: the untilted drift, bitwise)
+    tilt_samples::Int = 200         # exact weather draws for the standardisation of Φ
     # device runs (device/, ESMDevice.run_device): nchains chains, mlda_warmup + nsamples checkpoints
     device_backend::String = "gpu"  # Reactant backend: "gpu" or "cpu"
     device_sweeps::Int = 10         # operation sweeps per device call (one capacity pass and one checkpoint after each)
@@ -120,6 +161,9 @@ function check_config(cfg::Config)
     cfg.init in ("lp", "heuristic") || error("init = \"$(cfg.init)\": \"lp\" or \"heuristic\"")
     cfg.measure in ("utilization", "physical") || error("measure = \"$(cfg.measure)\": \"utilization\" or \"physical\"")
     cfg.fine_kernel in ("auto", "local", "flow", "adaptive") || error("fine_kernel = \"$(cfg.fine_kernel)\"")
+    cfg.sampler in ("chains", "replicas") || error("sampler = \"$(cfg.sampler)\": \"chains\" or \"replicas\"")
+    cfg.tilt_functional in ("none", "resload_mean") || error("tilt_functional = \"$(cfg.tilt_functional)\": \"none\" or \"resload_mean\"")
+    cfg.tilt_lambda != 0 && cfg.tilt_functional == "none" && error("tilt_lambda ≠ 0 needs a tilt_functional")
     return cfg
 end
 
@@ -387,18 +431,21 @@ function new_sampler(P::Problem, s::State, cfg::Config)
     return ChainSampler(fill(1e-3, nkf), zeros(Int, nkf), zeros(Int, nkf), false, GibbsState(P),
                         LocalKernel(P; extra=cfg.local_extra, mode=Symbol(cfg.fine_kernel), weather=cfg.fine_weather,
                                     lmkw=(cell_power=cfg.cell_level_power, xr_partner=cfg.xloc_partner_hops,
-                                          xr_ball=cfg.xloc_ball_hops), kop=cfg.kop, wblocks=cfg.fine_weather_blocks,
-                                    wblockspan=cfg.fine_weather_block_steps,
-                                    slong=(p=cfg.storage_long, nmoves=cfg.storage_long_moves, hmin=cfg.storage_long_hours)))
+                                          xr_ball=cfg.xloc_ball_hops, sx_partner=cfg.storage_xpair_hops,
+                                          sx_ball=cfg.storage_xpair_ball, sx_hmin=cfg.storage_long_hours),
+                                    kop=cfg.kop, wblocks=cfg.fine_weather_blocks, wblockspan=cfg.fine_weather_block_steps,
+                                    slong=(p=cfg.storage_long, nmoves=cfg.storage_long_moves, hmin=cfg.storage_long_hours,
+                                           nx=cfg.storage_xlong, sx=cfg.storage_xpair)))
 end
 
 """
     run(cfg) -> results
 
-The CPU driver: the multi-chain run of `run_chains` (chains.jl). `results.exitcode` is 0
+The CPU driver: the multi-chain run of `run_chains` (chains.jl), or with `sampler = "replicas"`
+the replica–Langevin run of `run_replicas` (replicas.jl). `results.exitcode` is 0
 for a finished run and 75 for a run stopped by the stop file after a snapshot.
 """
-run(cfg::Config; kw...) = run_chains(cfg; kw...)
+run(cfg::Config; kw...) = cfg.sampler == "replicas" ? run_replicas(cfg; kw...) : run_chains(cfg; kw...)
 
 "Content fingerprint of the model data used by the LP (network, units, weather)."
 data_fingerprint(sys::System, path::String) =

@@ -7,20 +7,17 @@ when done, and the affected document is updated in the same change.
 
 ## 1. Correctness of the ensemble
 
-- **Capacities without a learned bias.** Under [ensemble.md](ensemble.md) §3.1 the capacity
-  density need not be exact, only near-optimal and cost-monotone. Planned: a Langevin step on
-  $k$ driven by the sampled capacity scores ($-\beta_k\partial K + r\,s_k$), with the weather
-  drawn from its prior by refresh rather than corrected by a bias; a prototype and a review of
-  the learned bias's scale problem exist (2026-11-04). A replica prototype exists
-  (`scripts/replicas/`, [../replica_sampler.md](../replica_sampler.md)): M weather replicas share
-  k, every replica's weather follows a prior-reversible process (pCN in the non-centred
-  innovations, regime window draws; exact for ρ^x by construction and tested), the capacity step
-  uses the replica-averaged score. Open there: the dispatch lags a moving weather (continuous pCN
-  needs θ ≲ 0.02 per sweep, so the weather moves in gated bursts instead); the lag probe cannot
-  tell the capacity lag from the weather lag and drives the gas and battery steps to their floor;
-  gas stays overbuilt (equilibrated marginal value ≈ 0 against its capex); seasonal storage and
-  the regime windows keep the transient shed of the replicas high. The two items below then
-  concern only what is kept of the bias.
+- **The replica–Langevin sampler** ([ensemble.md](ensemble.md) §4, [sampler.md](sampler.md) §11;
+  `src/replicas.jl`, `sampler = "replicas"`). Built on the CPU with deterministic tests; not yet
+  measured beyond the prototype (ledger E22–E25; its carrier results, offwind in particular,
+  came from the `model.h5` with the wind-calibration defect and are to be rechecked on the
+  rebuilt data). Open: whether low and high starts meet in all carriers (campaign H4, on the
+  rebuilt data), whether gas stays overbuilt (its equilibrated marginal value was ≈ 0
+  against its capex in the prototype), the size of the gate's weather dependence (§4.4 of
+  ensemble.md), a Rao–Blackwellised score, the relaxation of seasonal storage after a burst, the
+  device form, the choice of $\Phi$ and $M$ for the stress tilt (campaign H9); then the retirement
+  of the bias code and of `kscale`/`kpeak`/`kop` as joint-density moves, after which the two
+  items below go.
 - **Bias convergence at $\alpha = 1$.** Short runs stay bounded with the safeguards
   ([sampler.md](sampler.md) §7.1), but the bias is far from converged: refits change it by
   $10^6$ nats over the visited states and the post-correction weight ESS is 1. Open: an $\hat h$

@@ -6,17 +6,18 @@ results come back. The scripts are in `hpc/`; the campaigns are the rows of the 
 list ([../campaigns.md](../campaigns.md)). User `hellmann`, project directory `coen`
 (`/p/projects/coen`), Slurm account `icone`.
 
-> **Status: partial.** The scripts exist, and the CPU driver's shared cache (§4) and state
-> snapshots with resume (§7) are built; the device driver has no snapshots yet (§7). Nothing
-> has run on the cluster yet; campaign H0 is the first check.
+> **Status: partial.** The scripts exist and have run: the environment (H0: offline CPU and
+> GPU jobs), the model files and the ERA5 file. Open: the SIGTERM and snapshot-resume tests on
+> a compute node (H0b), the rebuild of the POWER model files with the corrected calibration
+> (§8.3), and snapshots of the device driver (§7).
 
 ## 1. The cluster in brief
 
 | resource | what | limits that matter here |
 |---|---|---|
 | login nodes `login[01-03]` | 64 cores (EPYC 9354, Zen 4), 768 GB, **internet** | interactive work, compiling, short tests; QOS `io` (partition `io`) runs batch jobs there: 4 cores, 3 days, 5 concurrent jobs |
-| CPU nodes (`standard`, 180; `priority`, 60) | 128 cores (2 × EPYC 9554, Zen 4), 768 GB, no internet | QOS `short` 24 h (default), `medium` 7 days, `long` 30 days but at most 32 cores per job; `priority` 24 h, starts within minutes, at most 64 cores and 5 jobs; `standby` preemptible |
-| GPU nodes (`gpu`, 12) | 4 × H100 80 GB, 128 cores, 1.5 TB, `/localscratch` NVMe ~3 TB | QOS `gpushort` 24 h, `gpumedium` 7 days, `gpulong` 30 days, `gpupreempt` preemptible; `--gres=gpu:N` |
+| CPU nodes (`standard`, 180; `priority`, 60) | 128 cores (2 × EPYC 9554, Zen 4), 768 GB, no internet | QOS `short` 24 h (default), `medium` 7 days, `long` 30 days but at most 32 cores per job; `priority` 24 h, starts within minutes, at most 64 cores and 5 jobs; `standby` 7 days, preemptible (requeued with `--requeue`) |
+| GPU nodes (`gpu`, 12) | 4 × H100 80 GB, 128 cores, 1.5 TB, `/localscratch` NVMe ~3 TB | QOS `gpushort` 24 h, `gpumedium` 7 days, `gpulong` 30 days, `gpupreempt` 30 days, preemptible; `--gres=gpu:N` |
 | `$HOME` | backed up, small quota | no job I/O |
 | `/p/projects/coen` | backed up | the permanent home of this project on the cluster |
 | `/p/tmp/hellmann` | fast parallel FS, not backed up, **inactive files are deleted** | job working directories |
@@ -186,23 +187,40 @@ Python script ignores the stop file, so a preempted Python job restarts from its
    restart count, start;
 5. sets the threads from the allocation (§5) and runs the driver under `srun`; SIGTERM
    (preemption, `scancel`) and SIGUSR1 (the templates' `--signal=B:USR1@⟨lead⟩` before the time
-   limit) create the stop file;
+   limit) create the stop file. `B:` sends the signal to the batch shell only, so the templates
+   `exec` the wrapper: it is the batch shell;
 6. at the end completes the attempt: exit code, status (`finished`, `checkpointed` = exit 75 after a
-   snapshot, `preempted` = signalled without a snapshot, `failed`), the `sacct` figures (elapsed, MaxRSS, CPU time, energy) and the output files;
+   snapshot, `preempted` = signalled without a snapshot, `failed`), the signal (`TERM`, `USR1`
+   or none), the `sacct` figures (elapsed, MaxRSS, CPU time, energy) and the output files;
    appends one line to the runs indexes (global and the campaign's, under a lock); archives
    finished and failed runs without checkpoints;
-7. a run stopped by the time limit (exit 75) with `RESUBMIT=n > 0` submits its own
-   continuation (afterany dependency, same run id, `n−1` left); a preempted run is requeued by
-   Slurm instead. Runs longer than 24 hours are such chains, not `medium`/`long` jobs (`long`
-   allows only 32 cores per job).
+7. a preempted run (SIGTERM) is requeued by Slurm (`--requeue`, same job id and run id) and
+   resumes from its snapshot. Jobs are never resubmitted to get past a QOS time limit: every job
+   asks for a `--time` that covers the run's estimate, in the QOS that allows it, preferably
+   preemptible (`standby` up to 7 days, `gpupreempt` up to 30 days; for guaranteed runtime
+   `medium`/`gpumedium` 7 days, `long` 30 days at most 32 cores). The templates' 24 h is a
+   default for short runs; a campaign row gives `sbatch --time=…` where its runs are longer.
+   Runs longer than a week are a design question, settled with the user before submitting. A
+   run that reaches its time limit (SIGUSR1) stops with a snapshot (status `checkpointed`,
+   signal `USR1`), so the work is kept; nothing is resubmitted.
 
 The wrapper was tested locally on 2026-11-04 with the CPU driver on `hpc/configs/h0_smoke.toml`:
 a SIGTERM to the wrapper during the fine warmup gave a snapshot, exit 75 and the status
 `checkpointed`; the same run id started again resumed from the snapshot (fine warmup, sweep 1
-of 4) and finished with exit 0.
+of 4) and finished with exit 0. The signal path through the templates was simulated locally
+with Slurm stubs (`cpu_array.sbatch`, a script-mode line): SIGUSR1 to the batch shell gave the
+snapshot exit, status `checkpointed`, signal `USR1`, and no `sbatch`; a second attempt with
+the same run id, sent SIGTERM, reused the run directory (a second attempt in `run.toml`).
 
 ## 6. Records, the ledger, and results through git
 
+- **Self-contained campaigns.** A campaign needs nothing but its pinned commit and the cluster's
+  own model files: every input (model files, start states, reference solutions) is made on the
+  cluster by versioned, documented scripts, either by the data preparation (§8.3) or by a step
+  of the campaign itself, submitted with a dependency on it. No files are copied between the
+  local machine and the cluster; code goes up and results come back through git. A campaign
+  does not pin a model file's hash; its run records carry the hash (`data_sha`), and the
+  provenance file says how that file was built.
 - **Run record** `run.toml` (one `[[attempt]]` per job attempt) and **runs index** lines in
   `ledger/runs.jsonl` and `campaigns/⟨id⟩/runs.jsonl`, failed runs included.
 - **Campaign:** `hpc/new_campaign.sh ⟨id⟩ [⟨commit⟩]` makes the pinned worktree, prepares it, and
@@ -256,22 +274,88 @@ a full-fidelity checkpoint: plain HDF5 data that survives code and Julia version
   creates the stop file, and the driver writes the snapshot at the next sweep boundary and
   exits with 75. The grace time must cover one sweep plus the write.
 
+The replica driver (`sampler = "replicas"`) follows the same contract with its own layout
+(every replica's state, the Langevin steps and the gates; [data.md](data.md) §5,
+[sampler.md](sampler.md) §11.5).
+
 > **Status: missing (device).** `run_device` writes no snapshot yet. On the device the state is
 > downloaded at each host checkpoint already; the snapshot adds the file write.
 
 Snapshots are also outputs: a later experiment can start from them. They stay in the run
 directory and are not archived (their size grows with the model).
 
-## 8. First steps on the cluster
+## 8. What runs in which order
 
-1. After the next push: `git -C /p/projects/coen/esm/ESM-Sampling pull` on a login node.
-2. `bash hpc/prepare_env.sh` on a login node (or `sbatch hpc/jobs/prepare.sbatch`).
-3. Build the model files: `sbatch hpc/jobs/data.sbatch small` (hours), and later
-   `sbatch hpc/jobs/data.sbatch pypsa256` (the PyPSA-Eur build, longer), then
-   `sbatch hpc/jobs/era5.sbatch` for the ERA5 variant.
-4. `bash hpc/new_campaign.sh H0`, then `sbatch hpc/jobs/h0_cpu.sbatch H0` and
-   `sbatch hpc/jobs/h0_gpu.sbatch H0`; read the logs in `/p/tmp/hellmann/esm/logs/`.
-5. LP baselines: campaigns H2 (our LP on the historical years, stacked optima, MGA) and H2b
-   (PyPSA's optimum and MGA on its network); the commands are in the rows of
-   [../campaigns.md](../campaigns.md). A single reference LP of a configuration is still
-   `sbatch hpc/jobs/build.sbatch <campaign> <config> script scripts/lp_reference.jl`.
+All commands on a login node in the clone, `cd /p/projects/coen/esm/ESM-Sampling`; logs in
+`/p/tmp/hellmann/esm/logs/`. Each step names what it needs; steps without a dependency
+between them can be submitted together.
+
+### 8.1 Once: the clone and its environment
+
+1. `git clone https://github.com/FHell/ESM-Sampling /p/projects/coen/esm/ESM-Sampling` (or let
+   `prepare_env.sh` do it).
+2. `bash hpc/prepare_env.sh` (or `sbatch hpc/jobs/prepare.sbatch`): Julia packages of both
+   projects into the shared depot, precompiled; the Python environment (`uv sync`); Reactant's
+   CUDA preferences.
+
+### 8.2 After every pull
+
+1. `git pull` (after a local push; results from the cluster go the other way, §8.5).
+2. `bash hpc/prepare_env.sh` again if `Manifest.toml`, `device/Manifest.toml` or `uv.lock`
+   changed (`git diff --stat HEAD@{1} -- Manifest.toml device/Manifest.toml uv.lock`). The
+   data jobs and `run.sh` use the clone; campaigns use their own worktree (§6), prepared when
+   they are created, so a pull never changes a running campaign.
+
+### 8.3 Once: the model files
+
+Each build appends a record to `/p/projects/coen/esm/data/processed/PROVENANCE.toml`; a
+requeued or resubmitted job continues from its kept downloads and outputs.
+
+| step | command | needs | makes | time |
+|---|---|---|---|---|
+| D1 | `sbatch hpc/jobs/data.sbatch small` | internet (QOS io) | `model.h5` (40 nodes), `model76.h5` (76 nodes), NASA POWER weather 2001–2022 | hours (limit 3 days) |
+| D2 | `sbatch hpc/jobs/data.sbatch pypsa256` | internet (QOS io); independent of D1 | the PyPSA-Eur build `esm256`, then `model256.h5` (256 nodes, NASA POWER weather) | the longest (limit 3 days) |
+| D3 | `sbatch --dependency=afterok:<job id of D2> hpc/jobs/era5.sbatch [years]` | D2 (`model256.h5` and the `esm256` resources) | `model256_era5.h5` (256 nodes, ERA5 weather) | not measured yet (limit 24 h, continues when requeued) |
+
+D1 and D2 can be submitted together. Files built without the corrected wind calibration
+([data_sources.md](data_sources.md) §2; their `PROVENANCE.toml` commit has no `smallest_root`
+in `scripts/prepare_data.py`) need D1 and D2 again; a rerun of
+D2 reuses the PyPSA-Eur build and only redoes `model256.h5`. D3 does not depend on the POWER
+weather and need not be rerun. Check a build's log for the line per carrier
+`… miss their window target by more than 0.005` (zero in the local builds of all three POWER
+files). D3 reads the cluster's ERA5 folder in place on a compute
+node (§4); its years are a choice: the default 2003, 2010, 2013, 2017 is enough for a first
+full-resolution test, while the weather model is fitted on all years of the file
+(`src/weather.jl`), so a production run wants more years (2013 must always be among
+them). Each year reads about 57 GB from the shared folder, one file at a time.
+
+ERA5 is mapped onto the 256-node network only: the cut-out box (lon −10.5…25.5,
+lat 40.5…59.5) covers the 10-country region, and `model.h5` and `model76.h5` keep their NASA
+POWER weather ([data_sources.md](data_sources.md) §4–5). `model256_era5.h5` is the input of
+the full-resolution run, 256 nodes × hourly (`configs/full256_era5.toml`). Larger networks
+(512, 1024 nodes, full Europe) need a new PyPSA-Eur build and a wider box
+([roadmap.md](roadmap.md) §6).
+
+### 8.4 Campaigns
+
+The rows of [../campaigns.md](../campaigns.md) give each campaign's commands; the pattern is
+`bash hpc/new_campaign.sh <id>` (worktree at the clone's current commit), the row's `sbatch`
+lines, and `bash hpc/collect.sh <id> [<glob>]` when the runs are done. The order of the
+current ones, with what each needs:
+
+| campaign | needs | then |
+|---|---|---|
+| H0b (SIGTERM and snapshot tests) | D1: the snapshot test is skipped without `model.h5` | `bash hpc/new_campaign.sh H0b`; `sbatch hpc/jobs/h0_cpu.sbatch H0b` |
+| H4 (replica sampler, far-apart starts) | D1 rebuilt with the corrected wind calibration | `bash hpc/new_campaign.sh H4`; `sbatch --time=2-00:00:00 --array=1-6%6 hpc/jobs/cpu_array.sbatch H4 campaigns/H4/list.txt` (6-hourly lines estimated 12–20 h); `bash hpc/collect.sh H4` |
+| H10 (storage pairs) | D1 (rebuilt); being redesigned to make its start states on the cluster | as in its row, once prepared again |
+| H2 (our LP baselines) | D1 (40 nodes) and D2 (256 nodes), rebuilt with the corrected wind calibration | as in its row |
+| H2b (PyPSA's optimum and MGA) | the esm256 PyPSA-Eur build (`composed_2050.nc`) | as in its row; independent of H2 |
+| the full-resolution run | D3 | not yet a campaign ([roadmap.md](roadmap.md) §6) |
+
+### 8.5 Results back
+
+1. `bash hpc/collect.sh <id> [<glob>]` on the cluster commits the run records and small results
+   to `campaigns/<id>/` in the clone (§6); it never pushes.
+2. The user pushes from the cluster; locally `git pull` (or fetch and merge) brings them in, and
+   the campaign's row in `campaigns.md` gets its result.
+

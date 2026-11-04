@@ -42,7 +42,9 @@ const MH = ESMSampling
     @test (@test_logs (:warn,) match_mode=:any MH.cache_read(f -> h5open(read, f), joinpath(cache, "lp_bad.h5"))) === nothing
     # the environment overrides the keys
     cfg = Config(); cfg.out = joinpath(d, "run", "out.h5")
-    @test MH.cache_dir(cfg) == joinpath(d, "run", "cache")
+    withenv("ESM_CACHE_DIR" => nothing, "ESM_CACHE_MIRROR" => nothing) do   # jobs set them (hpc/env.sh)
+        @test MH.cache_dir(cfg) == joinpath(d, "run", "cache")
+    end
     cfg.cache_dir = cache
     withenv("ESM_CACHE_DIR" => nothing, "ESM_CACHE_MIRROR" => nothing) do
         @test MH.cache_dir(cfg) == cache && MH.cache_mirror(cfg) == ""

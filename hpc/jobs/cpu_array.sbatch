@@ -19,4 +19,4 @@ code="$ESM_PROJ/campaigns/$1/code"
 line=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$code/$2")
 [ -n "$line" ] || { echo "no line $SLURM_ARRAY_TASK_ID in $2" >&2; exit 2; }
 read -r -a args <<< "$line"
-bash "$code/hpc/run.sh" "$1" "${args[@]}"
+exec bash "$code/hpc/run.sh" "$1" "${args[@]}"
