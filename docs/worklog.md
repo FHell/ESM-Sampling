@@ -100,6 +100,15 @@ concrete next steps. Update it at the end of every work session.
 
 ## Log
 
+### 2026-11-04 (HPC: shared cache and state snapshots)
+
+- CPU driver for the cluster (`src/checkpoint.jl`, [system/hpc.md](system/hpc.md) §4, §7):
+  shared cache (`cache_dir`/`ESM_CACHE_DIR`, read-only mirror `cache_mirror`/`ESM_CACHE_MIRROR`,
+  atomic writes of every entry); HDF5 state snapshots in `run_chains` (`checkpoint`,
+  `checkpoint_minutes`, `stop_file`; resume from the saved states with re-seeded streams;
+  exit code 75 after a stop; `ESM_IGNORE_SIGTERM` in `scripts/run.jl`); `ESM_LP_THREADS` for
+  HiGHS; tests in `test/test_hpc.jl`. The device driver's snapshot is still missing.
+
 ### 2026-11-04 (seasonal storage)
 
 - Long-range storage moves `slong` (plateau over any cyclic interval, energy between two

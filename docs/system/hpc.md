@@ -6,8 +6,8 @@ campaigns themselves are rows H0–H9 of the experiment ledger
 ([../experiments.md](../experiments.md)). Facts about the cluster are from the HPC2024 user
 guide; values marked ⟨…⟩ are to be filled in.
 
-> **Status: missing.** Nothing of this exists yet; this document is the intended shape. The
-> code changes it needs are listed in §8.
+> **Status: partial.** The CPU driver's shared cache (§4) and state snapshots (§7) are built;
+> the rest is the intended shape. The code changes still needed are listed in §8.
 
 ## 1. The cluster in brief
 
@@ -89,7 +89,9 @@ julia --project=device -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
   Reactant brings its own CUDA runtime; the NVIDIA driver on the GPU nodes must be new enough.
 - **In jobs:** the same `JULIA_DEPOT_PATH`, plus `JULIA_PKG_OFFLINE=true` (a missing package
   fails loudly instead of trying the network), `julia -t $SLURM_CPUS_PER_TASK`, and the run
-  wrapper of §5.
+  wrapper of §5. `ESM_LP_THREADS=$SLURM_CPUS_PER_TASK` caps HiGHS's threads (its `threads`
+  option in `solve_lp`; unset, HiGHS takes its default, which on a shared node can be every
+  core).
 - **Precompile once per code version:** a changed `src/` triggers precompilation of
   ESMSampling in the first job, which is fine (a minute) but concurrent array tasks would all
   do it. The preparation script therefore precompiles after every checkout of a campaign
@@ -113,11 +115,18 @@ the uv lock hash, the date and who prepared it; every run record refers to it (�
   `data/processed/` (e.g. `model256_era5.h5`). It never scans the folder recursively (no
   `find` or `grep` over it) and runs one such job at a time, to keep the load on the shared
   storage low.
-- **Weather-model and LP caches.** The code now writes them to `dirname(cfg.out)/cache`, i.e.
-  per run directory. **Status: missing:** a `cache_dir` configuration key (or `ESM_CACHE_DIR`
-  environment variable) so that all runs share `/p/tmp/$USER/esm/cache`, with a read-only
-  fallback to the durable mirror, and writes to a temporary name followed by an atomic rename
-  so that concurrent array tasks cannot read half-written entries.
+- **Weather-model and LP caches** (`weather_<hash>.jls`, `lp_<hash>.h5`, content-hashed
+  keys; [architecture.md](architecture.md) §5). Their directory is the environment variable
+  `ESM_CACHE_DIR` if set and non-empty, else the key `cache_dir`, else `dirname(out)/cache`;
+  jobs set `ESM_CACHE_DIR=/p/tmp/$USER/esm/cache`, so all runs share it. The read-only
+  mirror is `ESM_CACHE_MIRROR` (or the key `cache_mirror`), set to
+  `/p/projects/⟨project⟩/esm/cache`: an entry missing in the cache but present in the mirror
+  is copied into the cache and used, instead of being recomputed. Every entry is written
+  under a temporary name in the cache directory (`.<name>.tmp-<pid>-<random>`) and renamed
+  into place, so concurrent array tasks see a complete entry or none; a task that is killed
+  while writing leaves only its temporary file, which is never read (and can be deleted). Two
+  tasks that miss the same entry at once both compute it and the later rename wins (the
+  entries are identical). An unreadable entry is recomputed and replaced, with a warning.
 - **Reference LPs** (the zero-temperature optimum per network, resolution and weather year,
   for validation and for the starts) are computed once per campaign in a preparation job
   (HiGHS, one job per case, threads = cores requested) and cached.
@@ -167,20 +176,54 @@ the uv lock hash, the date and who prepared it; every run record refers to it (�
   `results/hpc/⟨campaign⟩/` with `rsync`; the work log ([../worklog.md](../worklog.md)) notes
   what was submitted and when.
 
-## 7. Checkpoints
+## 7. Checkpoints: state snapshots
 
-**Status: missing.** Neither driver writes a restartable checkpoint. Needed: every ~15–30
-minutes and on SIGTERM, an atomic write (temporary file, then rename) to the run directory of
-everything a resumed run needs — chain states, sampler adaptation (step sizes, learned modes),
-RNG states, the Langevin step sizes and lag-probe state, replica weather and weights, the
-sweep counter and the monitored traces so far — and at start-up a resume when a checkpoint
-exists. On the device, the state is downloaded at each host checkpoint already; the checkpoint
-adds the file write and the RNG keys.
+The jobs run preemptible (`standby`, requeued automatically), and losing the work since the
+last snapshot is acceptable, so the CPU driver writes **snapshots of the chain states**, not
+a full-fidelity checkpoint: plain HDF5 data that survives code and Julia versions (layout in
+[data.md](data.md) §5).
+
+- **Keys** ([config.md](config.md)): `checkpoint` (the snapshot file; empty: off),
+  `checkpoint_minutes` (30), `stop_file`. The wrapper points `checkpoint` at
+  `runs/⟨run_id⟩/snapshot.h5` and `stop_file` at a file in the run directory.
+- **When** (`run_chains`, at sweep boundaries: after a level-0 warmup iteration or a fine
+  sweep over all chains): every `checkpoint_minutes` of wall time; once after the level-0
+  warmup, before the first fine sweep; and when the stop file exists, after which the driver
+  removes the stop file and exits with **code 75** (`scripts/run.jl` exits with the driver's
+  code: 0 finished, 75 stopped after a snapshot, anything else a failure). The snapshot is
+  written to a temporary name, flushed (`fsync`) and renamed over the previous one.
+- **Contents:** the phase (`level0` or `fine`; a fine sweep counter above `mlda_warmup` is
+  production) and the sweep counter; per chain the state (level, regimes `m`, `z0`, the
+  innovations `w` per level, `k`, `v`) and its start kind; the monitored traces so far; the
+  CO₂ price and its tuning trace; in the level-0 warmup the step sizes of the carrier scaling
+  and the slice widths. Not the learned modes, the bias, the online-bias observations, the
+  post-correction records or the price accumulators.
+- **Resume:** if the snapshot file exists at start, the driver sets up as usual (the caches
+  make that quick), loads the states, logs the restart count and the position, and continues
+  the phase and the sweep counter: the chains restart from exactly the saved states, with
+  random streams re-seeded from `seed` and the restart count (never a replay of the old
+  stream), kernels rebuilt (adaptation starts afresh in the rest of the warmup and is frozen
+  in production) and the caches recomputed from the states. A resume after the level-0
+  warmup lifts the set-up bias, not the one learned in the warmup (the bias is being
+  retired); the sampled prices and the post-correction cover the production sweeps since the
+  last start; the output records `run/restarts` and `run/resumed_at_sweep`. A snapshot is
+  refused if its levels or seed differ from the configuration.
+- **SIGTERM.** Slurm sends SIGTERM to every process of a preempted job and SIGKILL after the
+  grace time. With `ESM_IGNORE_SIGTERM=1`, `scripts/run.jl` ignores SIGTERM
+  (`ESMSampling.ignore_sigterm`: `SIG_IGN` and SIGTERM unblocked on the main thread; Julia's
+  own signal listener would otherwise receive it with `sigwait` and exit); the wrapper's trap
+  creates the stop file, and the driver writes the snapshot at the next sweep boundary and
+  exits with 75. The grace time must cover one sweep plus the write.
+
+> **Status: missing (device).** `run_device` writes no snapshot yet. On the device the state is
+> downloaded at each host checkpoint already; the snapshot adds the file write.
 
 ## 8. Code changes needed before the first campaign
 
-1. `cache_dir` key or `ESM_CACHE_DIR`, shared cache with atomic writes (§4).
-2. Checkpoint and resume in `run_chains` and `run_device`, with SIGTERM handling (§7).
+1. Done: the shared cache (`cache_dir`, `ESM_CACHE_DIR`, mirror, atomic writes; §4), and
+   `ESM_LP_THREADS` (§3).
+2. Snapshots and resume: done in `run_chains`, with the stop file, exit code 75 and
+   `ESM_IGNORE_SIGTERM` (§7); missing in `run_device`.
 3. `hpc/` scripts: `prepare_env.sh` (login node), `run.sh` (wrapper), job templates per type
    (§5), `record.jl` or a small Python helper for the run record and ledger line (§6).
 4. A Julia 1.12 module or binary on the cluster, and the Reactant CUDA artifact on a login
