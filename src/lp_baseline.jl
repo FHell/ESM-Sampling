@@ -166,9 +166,9 @@ function mga_sweep!(lpm, E::EnergyModel, C::Float64, eps, fields; done=Set{Tuple
                     on_result=(a...) -> nothing, fallback=LP_FALLBACK)
     model = lpm.model
     c0 = constant(lpm.obj)
-    # the bound in units of S = 10^(⌊log₁₀ C⌋ − 5) €/a, so that its right-hand side is about 1e5
+    # the bound in units of S = 10^(⌊log₁₀ C⌋ − 4) €/a, so that its right-hand side is 1e4–1e5
     # like the other rows': unscaled (1e11) HiPO and IPX stall on the maximisations
-    S = 10.0^(floor(log10(abs(C))) - 5)
+    S = 10.0^(floor(log10(abs(C))) - 4)
     cb = @constraint(model, (1 / S) * lpm.obj <= (1 + first(eps)) * C / S)
     defaults = [k => get_attribute(model, k) for (k, _) in fallback]
     optimal(m) = termination_status(m) in (MOI.OPTIMAL, MOI.ALMOST_OPTIMAL)

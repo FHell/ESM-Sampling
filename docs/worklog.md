@@ -151,7 +151,7 @@ concrete next steps. Update it at the end of every work session.
   feasible point: retried with IPX without presolve, feasible points within the bound kept.
 - Open: MGA maximisation at 40 nodes daily. With the budget unscaled (right-hand side 1e11)
   HiPO and IPX stall ("no progress", infeasible point); with the budget in units of
-  10^(⌊log₁₀C⌋−5) onwind min ends optimal, onwind and gas max at feasible points on the bound
+  10^(⌊log₁₀C⌋−4) onwind min ends optimal, onwind and gas max at feasible points on the bound
   (5–8 min each); the other maxima untested (validation.md §2.7, with a short literature note).
   Next if they fail on the cluster: IPX with crossover, dual simplex warm-started from a
   crossed-over optimum, tighter boxes.

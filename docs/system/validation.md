@@ -173,7 +173,7 @@ LP of `solve_lp` (`src/lp.jl`), built by `lp_build` from one operation block per
   added and, for each ε and carrier (k field), the total capacity Σ_i k_f[i] is minimised and
   maximised; the model is reused (only the bound and the objective change). The capacity per
   country is recorded at every extreme. The bound is written in units of
-  $S = 10^{\lfloor\log_{10}C^\ast\rfloor-5}$ €/a, so that its right-hand side is about 1e5 like the
+  $S = 10^{\lfloor\log_{10}C^\ast\rfloor-4}$ €/a, so that its right-hand side is 1e4–1e5 like the
   other rows': unscaled (right-hand side 1e11), HiGHS's interior-point solvers HiPO and IPX
   stall on the maximisations at 40 nodes daily ("no progress", an infeasible point). A solve
   that does not end `OPTIMAL` is repeated with IPX without presolve; a primal-feasible point

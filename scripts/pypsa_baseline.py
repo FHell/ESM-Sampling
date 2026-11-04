@@ -272,9 +272,9 @@ def main():
     cost = m.objective
     if not isinstance(cost, (LinearExpression, QuadraticExpression)):
         cost = cost.expression
-    # the budget in units of S, so that its right-hand side is about 1e5 like the other rows'
+    # the budget in units of S, so that its right-hand side is 1e4-1e5 like the other rows'
     # (unscaled, HiGHS's interior-point solvers stall on the maximisations; src/lp_baseline.jl)
-    S = 10.0 ** (np.floor(np.log10(abs(total))) - 5)
+    S = 10.0 ** (np.floor(np.log10(abs(total))) - 4)
     m.add_constraints(cost * (1 / S) <= ((1 + eps[0]) * total - fixed) / S, name="budget")
     for e in eps:
         m.constraints["budget"].rhs = ((1 + e) * total - fixed) / S

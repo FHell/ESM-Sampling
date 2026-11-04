@@ -35,6 +35,12 @@ function solve_lp(E::EnergyModel, lk::Layout, lv::Layout, W; silent=true, time_l
     lpm = lp_build(E, lv, [W]; silent=silent, time_limit=time_limit, kfixed=kfixed, crossover=crossover, solver=solver)
     model = lpm.model
     optimize!(model)
+    if !(termination_status(model) in (MOI.OPTIMAL, MOI.ALMOST_OPTIMAL))
+        # HiPO's tolerance check after postsolve (OTHER_ERROR at a near-optimal point): retry with
+        # the options of LP_FALLBACK (IPX without presolve; lp_baseline.jl)
+        foreach(((k, v),) -> set_attribute(model, k, v), LP_FALLBACK)
+        optimize!(model)
+    end
     @assert termination_status(model) in (MOI.OPTIMAL, MOI.ALMOST_OPTIMAL) "LP: $(termination_status(model))"
     kval = [value.(lpm.kv[f]) for f in eachindex(E.kspecs)]
     sol = lp_extract(E, lv, kval, lpm.blocks[1], W, objective_value(model), value(lpm.capex))
