@@ -40,7 +40,16 @@ cfgname="$(basename "$config" .toml)"
 run_id="${RUN_ID:-$campaign-$cfgname-${SLURM_ARRAY_JOB_ID:-$jobid}$task}"
 rundir="$ESM_SCRATCH/runs/$campaign/$run_id"
 mkdir -p "$rundir"
-threads="${SLURM_CPUS_PER_TASK:-4}"
+# Threads follow the allocation: nodes are shared, and libraries that size themselves from the
+# node's 128 cores would oversubscribe the cores this job was given. Julia threads = allocated
+# cores; BLAS and OpenMP single-threaded (their parallel regions would multiply with Julia's
+# threads) unless a job sets ESM_BLAS_THREADS / ESM_OMP_THREADS; HiGHS gets the allocated cores
+# (ESM_LP_THREADS; it runs inside one Julia task).
+threads="${ESM_JULIA_THREADS:-${SLURM_CPUS_PER_TASK:-4}}"
+export JULIA_NUM_THREADS="$threads"
+export OPENBLAS_NUM_THREADS="${ESM_BLAS_THREADS:-1}" MKL_NUM_THREADS="${ESM_BLAS_THREADS:-1}"
+export OMP_NUM_THREADS="${ESM_OMP_THREADS:-1}"
+export ESM_LP_THREADS="${ESM_LP_THREADS:-${SLURM_CPUS_PER_TASK:-4}}"
 
 # the config as given and as run (absolute paths into the run directory and the caches)
 [ -f "$rundir/config.orig.toml" ] || cp "$config" "$rundir/config.orig.toml"
@@ -82,7 +91,8 @@ restarts="${SLURM_RESTART_COUNT:-0}"
     echo "partition = \"${SLURM_JOB_PARTITION:-}\""
     echo "qos = \"${SLURM_JOB_QOS:-}\""
     echo "nodes = \"${SLURM_JOB_NODELIST:-$(hostname)}\""
-    echo "cpus = $threads"
+    echo "cpus = ${SLURM_CPUS_PER_TASK:-$threads}"
+    echo "threads = \"julia $threads, blas $OPENBLAS_NUM_THREADS, omp $OMP_NUM_THREADS, lp $ESM_LP_THREADS\""
     echo "gpus = \"${SLURM_GPUS_ON_NODE:-${CUDA_VISIBLE_DEVICES:-}}\""
     echo "mem_mb = \"${SLURM_MEM_PER_NODE:-}\""
     echo "restart_count = $restarts"
@@ -92,7 +102,7 @@ restarts="${SLURM_RESTART_COUNT:-0}"
 # --- run, with the stop-file trap ------------------------------------------------------------
 trap 'touch "$rundir/STOP"' TERM USR1
 if [ -n "${SLURM_JOB_ID:-}" ]; then
-    srun --ntasks=1 --cpus-per-task="$threads" --export=ALL "${cmd[@]}" >> "$rundir/run.log" 2>&1 &
+    srun --ntasks=1 --cpus-per-task="${SLURM_CPUS_PER_TASK:-$threads}" --export=ALL "${cmd[@]}" >> "$rundir/run.log" 2>&1 &
 else
     "${cmd[@]}" >> "$rundir/run.log" 2>&1 &
 fi

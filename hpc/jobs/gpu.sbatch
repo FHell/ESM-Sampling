@@ -1,9 +1,11 @@
 #!/bin/bash
-# Device (Reactant, H100) run:  sbatch hpc/jobs/gpu.sbatch <campaign> <config> [device|script <path> args...]
+# Device (Reactant, H100) run, preemptible (gpupreempt, requeued on preemption):
+#   sbatch hpc/jobs/gpu.sbatch <campaign> <config> [device|script <path> args...]
 # One long-lived process batching chains and replicas (Reactant compiles 2–4 min per process).
 #SBATCH --account=coen
 #SBATCH --partition=gpu
-#SBATCH --qos=gpushort
+#SBATCH --qos=gpupreempt
+#SBATCH --requeue
 #SBATCH --gres=gpu:1
 #SBATCH --job-name=esm-gpu
 #SBATCH --nodes=1

@@ -1,12 +1,16 @@
 #!/bin/bash
-# Build job (LP solves with HiGHS, weather-model fits, data preparation, PyPSA-Eur solves):
-#   sbatch hpc/jobs/build.sbatch <campaign> <config> script <path> [args...]
+# Build job, preemptible (LP solves with HiGHS, weather-model fits, data preparation, PyPSA-Eur
+# solves); a preempted job is requeued and starts over (finished cache entries are kept):
+#   sbatch [-c <cores>] hpc/jobs/build.sbatch <campaign> <config> script <path> [args...]
+# HiGHS uses ESM_LP_THREADS = the allocated cores.
 #SBATCH --account=coen
-#SBATCH --qos=short
+#SBATCH --partition=priority
+#SBATCH --qos=standby
+#SBATCH --requeue
 #SBATCH --job-name=esm-build
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=16
 #SBATCH --time=12:00:00
 #SBATCH --chdir=/p/tmp/hellmann/esm
 #SBATCH --output=/p/tmp/hellmann/esm/logs/%x-%j.out

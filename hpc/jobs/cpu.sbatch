@@ -1,9 +1,13 @@
 #!/bin/bash
-# CPU sampler run (docs/system/hpc.md §5):  sbatch hpc/jobs/cpu.sbatch <campaign> <config> [cpu|script <path> args...]
-# Threads = --cpus-per-task (override on the command line: sbatch -c 16 ...). Longer than 24 h:
-# RESUBMIT=<n> sbatch ... chains continuation jobs that resume from the checkpoint.
+# CPU sampler run, preemptible (the default; docs/system/hpc.md §5):
+#   sbatch [-c <cores>] [--mem-per-cpu=<MB>] hpc/jobs/cpu.sbatch <campaign> <config> [cpu|script <path> args...]
+# Runs in standby on a shared node and is requeued automatically when preempted; it resumes from
+# the latest state snapshot. Threads follow the allocation (hpc/run.sh): Julia threads = cores,
+# BLAS/OpenMP 1. RESUBMIT=<n> sbatch ... chains continuations past the time limit.
 #SBATCH --account=coen
-#SBATCH --qos=short
+#SBATCH --partition=priority
+#SBATCH --qos=standby
+#SBATCH --requeue
 #SBATCH --job-name=esm-cpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

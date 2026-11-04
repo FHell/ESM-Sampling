@@ -37,7 +37,7 @@ export MPLCONFIGDIR=$ESM_PROJ/env/mpl
 export ESM_CACHE_DIR=${ESM_CACHE_DIR:-$ESM_SCRATCH/cache}
 export ESM_CACHE_MIRROR=${ESM_CACHE_MIRROR:-$ESM_PROJ/cache}
 
-# --- threads: Julia threads are set per job; keep BLAS/OpenMP from oversubscribing ------------
+# --- threads: set per job from the allocation by hpc/run.sh (shared nodes); outside a job ------
 export OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-1}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
 

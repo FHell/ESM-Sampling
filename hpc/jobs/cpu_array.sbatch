@@ -1,9 +1,11 @@
 #!/bin/bash
-# Job array: one run per line of a list file, each line "<config> [cpu|script <path> args...]".
-#   sbatch --array=1-<n>%<concurrent> hpc/jobs/cpu_array.sbatch <campaign> <list file>
-# The list path is relative to the campaign code (e.g. campaigns/H3/list.txt in the clone).
+# Job array, preemptible: one run per line of a list file, each line "<config> [cpu|script <path> args...]".
+#   sbatch --array=1-<n>%<concurrent> [-c <cores>] hpc/jobs/cpu_array.sbatch <campaign> <list file>
+# The list path is relative to the campaign code (e.g. campaigns/H3/list.txt of the clone).
 #SBATCH --account=coen
-#SBATCH --qos=short
+#SBATCH --partition=priority
+#SBATCH --qos=standby
+#SBATCH --requeue
 #SBATCH --job-name=esm-arr
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

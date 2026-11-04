@@ -1,11 +1,9 @@
 #!/bin/bash
-# Preemptible CPU run in the standby QOS (requeued on preemption; resumes from the checkpoint).
-#   sbatch hpc/jobs/cpu_standby.sbatch <campaign> <config> [cpu|script <path> args...]
+# CPU run with guaranteed runtime (QOS short, not preempted), for when preemption would hurt:
+#   sbatch [-c <cores>] hpc/jobs/cpu_short.sbatch <campaign> <config> [cpu|script <path> args...]
 #SBATCH --account=coen
-#SBATCH --partition=priority
-#SBATCH --qos=standby
-#SBATCH --requeue
-#SBATCH --job-name=esm-sby
+#SBATCH --qos=short
+#SBATCH --job-name=esm-cpus
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8

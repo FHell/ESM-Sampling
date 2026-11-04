@@ -7,9 +7,10 @@ ledger ([../experiments.md](../experiments.md)). User `hellmann`, project and Sl
 `coen`.
 
 > **Status: deviation.** The scripts exist; the driver side is partly missing. The shared cache
-> (`cache_dir`), the checkpoint and resume of the CPU driver are being built (§4, §7); until they
-> are merged, `hpc/run.sh` writes config keys the driver does not know yet. The device driver
-> has no checkpoint (§7). Nothing has run on the cluster yet; campaign H0 is the first check.
+> (`cache_dir`), the state snapshots and resume of the CPU driver are being built (§4, §7);
+> until they are merged, `hpc/run.sh` sets only the config keys the code defines, and a
+> preempted run starts over. The device driver has no snapshots (§7). Nothing has run on the
+> cluster yet; campaign H0 is the first check.
 
 ## 1. The cluster in brief
 
@@ -105,15 +106,30 @@ overridden before sourcing it); `hpc/prepare_env.sh [<code dir>]` prepares a cod
 
 ## 5. Job types and the wrapper
 
+**Preemptible by default.** Jobs run in `standby` (CPU) or `gpupreempt` (GPU) whenever possible,
+with `--requeue`: a preempted job is requeued automatically, keeps its run id and resumes from
+the latest state snapshot (§7); a bit of lost work does not matter. Every job is constructed so
+that it can be restarted this way. Guaranteed-runtime templates exist for the cases where
+preemption would hurt.
+
+**Shared nodes.** Jobs take a part of a node, not the whole node. Thread counts therefore follow
+the allocation (`hpc/run.sh`), because libraries that size themselves from the node's 128 cores
+would oversubscribe the cores the job was given: Julia threads = `--cpus-per-task`
+(`ESM_JULIA_THREADS` to change); BLAS (`OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`) and OpenMP
+single-threaded unless a job sets `ESM_BLAS_THREADS` / `ESM_OMP_THREADS` (their parallel
+regions would multiply with Julia's threads); HiGHS `threads` = `--cpus-per-task`
+(`ESM_LP_THREADS`). Memory: the default of ~6 GB per core, or `--mem-per-cpu` / `--mem` on the
+command line. The run record notes the thread plan.
+
 | template (`hpc/jobs/`) | resources | QOS | used for |
 |---|---|---|---|
 | `prepare.sbatch` | 4 cores on a login node | `io` | environment preparation (§3) |
 | `h0_cpu.sbatch`, `h0_gpu.sbatch` | 8 cores; 1 H100 + 16 cores | `priority`; `gpushort` | campaign H0: offline load, deterministic tests, a smoke run; Reactant on the H100, a family profile |
-| `build.sbatch` | 32 cores, 12 h | `short` | LP solves (e.g. `scripts/lp_reference.jl`), weather-model fits, data preparation, PyPSA-Eur solves |
-| `cpu.sbatch` | 8 cores (`-c` to change), 24 h | `short` | CPU sampler runs |
-| `cpu_standby.sbatch` | as `cpu`, requeued on preemption | `standby` | restartable runs that fill idle nodes |
-| `cpu_array.sbatch` | one run per line of a list file | `short` | many configurations or seeds (`--array=1-n%k`) |
-| `gpu.sbatch` | 1 H100, 16 cores, 160 GB, 24 h | `gpushort` | device runs |
+| `cpu.sbatch` | 8 cores (`-c` to change), 24 h, requeued | `standby` | CPU sampler runs (the default) |
+| `cpu_array.sbatch` | one run per line of a list file, requeued | `standby` | many configurations or seeds (`--array=1-n%k`) |
+| `build.sbatch` | 16 cores, 12 h, requeued | `standby` | LP solves (e.g. `scripts/lp_reference.jl`), weather-model fits, data preparation, PyPSA-Eur solves; a preempted build starts over, finished cache entries are kept |
+| `gpu.sbatch` | 1 H100, 16 cores, 160 GB, 24 h, requeued | `gpupreempt` | device runs |
+| `cpu_short.sbatch`, `gpu_short.sbatch` | as above, not preempted | `short`, `gpushort` | when preemption would hurt |
 | `analysis.sbatch` | 4 cores, 2 h | `priority` | diagnostics, summaries |
 
 Every template calls the wrapper of the campaign's pinned code:
@@ -133,15 +149,17 @@ sbatch hpc/jobs/cpu.sbatch <campaign> <config> [cpu | device | script <path> [ar
 4. appends the start of an attempt to `run.toml`: run id, campaign, config and its hash,
    commit, mode, command, job id, array task, partition, QOS, nodes, cores, GPUs, memory,
    restart count, start;
-5. runs the driver under `srun`; SIGTERM (preemption, `scancel`) and SIGUSR1 (the templates'
-   `--signal=B:USR1@⟨lead⟩` before the time limit) create the stop file;
+5. sets the threads from the allocation (§5) and runs the driver under `srun`; SIGTERM
+   (preemption, `scancel`) and SIGUSR1 (the templates' `--signal=B:USR1@⟨lead⟩` before the time
+   limit) create the stop file;
 6. at the end completes the attempt: exit code, status (`finished`, `checkpointed` = exit 75,
    `failed`), the `sacct` figures (elapsed, MaxRSS, CPU time, energy) and the output files;
    appends one line to the runs indexes (global and the campaign's, under a lock); archives
    finished and failed runs without checkpoints;
-7. a checkpointed run with `RESUBMIT=n > 0` submits its own continuation (afterany dependency,
-   same run id, `n−1` left). Runs longer than 24 hours are such chains, not `medium`/`long`
-   jobs (`long` allows only 32 cores per job).
+7. a run stopped by the time limit (exit 75) with `RESUBMIT=n > 0` submits its own
+   continuation (afterany dependency, same run id, `n−1` left); a preempted run is requeued by
+   Slurm instead. Runs longer than 24 hours are such chains, not `medium`/`long` jobs (`long`
+   allows only 32 cores per job).
 
 The wrapper's mechanics (records, indexes, archive, the stop file on SIGTERM, exit 75) were
 tested locally with a stand-in driver on 2026-11-04.
@@ -162,19 +180,22 @@ tested locally with a stand-in driver on 2026-11-04.
 - **Experiment ledger** ([../experiments.md](../experiments.md)): one row per campaign, whose
   record column points to `campaigns/⟨id⟩/`. The work log notes what was submitted.
 
-## 7. Checkpoints
+## 7. State snapshots and resume
 
-The CPU driver writes the checkpoint file given in the config every `checkpoint_minutes` and
-when the stop file appears, at a sweep boundary, atomically, with everything a resumed run
-needs (chain states, sampler adaptation, RNG states, bias and post-correction state while they
-exist, the CO₂-price tuning, the sweep counter and phase, the traces so far); at start it
-resumes from an existing checkpoint; exit 75 means "stopped after a checkpoint". With
-`ESM_IGNORE_SIGTERM=1` it ignores SIGTERM, so that the wrapper's trap can request the
-checkpoint within Slurm's 5-minute grace. **Status: missing** (being built). A sweep that takes
-longer than the grace (large models) is covered only by the periodic checkpoints; the templates'
-`--signal=B:USR1@⟨lead⟩` gives 15–30 minutes before a time limit. **Status: missing:** the device
-driver's checkpoint (the state is downloaded at every host checkpoint already; the file write
-and the RNG keys are missing).
+No full-fidelity checkpoint: the CPU driver writes a **snapshot of the chain states** to the file
+given in the config (`checkpoint`) every `checkpoint_minutes`, and when the stop file appears, at
+a sweep boundary, atomically (temporary file, then rename), as plain data in HDF5: per chain the
+state vectors (capacities, operation, weather coordinates, level) and the small scalar driver
+state (phase, sweep counter, CO₂ price), not Julia serialization, which breaks across versions.
+At start it resumes from an existing snapshot: the chains continue from the saved states, the
+random streams are re-seeded from the seed and the restart count, caches are rebuilt; adaptation
+state that is not in the snapshot restarts. A resumed run is therefore not bitwise the run
+without interruption, which the ensemble does not require ([ensemble.md](ensemble.md) §3.1).
+Exit code 75 means "stopped after a snapshot". With `ESM_IGNORE_SIGTERM=1` the driver ignores
+SIGTERM, so that the wrapper's trap can request a snapshot within Slurm's 5-minute grace; a sweep
+longer than that is covered by the periodic snapshots. Snapshots are also outputs: a later
+experiment can start from them. **Status: missing** (being built). **Status: missing:** the
+device driver's snapshots.
 
 ## 8. First steps on the cluster
 
