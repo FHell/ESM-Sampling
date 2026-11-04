@@ -52,6 +52,8 @@ GROUPS = {
     "battery": [("Link", ["battery discharger"])],
     "H2": [("Link", ["H2 Fuel Cell"])],
 }
+# HiGHS options of the second attempt when a solve does not end optimal (as in src/lp_baseline.jl)
+FALLBACK = {"solver": "ipx", "presolve": "off"}
 NOM = {"Generator": "p_nom", "Link": "p_nom", "StorageUnit": "p_nom", "Store": "e_nom"}
 
 
@@ -205,6 +207,9 @@ def main():
     # ---- the optimum
     tb = time.time()
     status, cond = n.optimize(solver_name="highs", solver_options=solver_options)
+    if cond != "optimal":                     # HiPO's tolerance check after postsolve: retry with IPX
+        log(f"optimum: {status} {cond}; repeating with IPX without presolve")
+        status, cond = n.optimize.solve_model(solver_name="highs", solver_options={**solver_options, **FALLBACK})
     t_opt = time.time() - tb
     if cond != "optimal":
         sys.exit(f"optimum: {status} {cond}")
@@ -275,7 +280,8 @@ def main():
             for comp, idx in group_index(n, g, True):
                 if len(idx) == 0:
                     continue
-                v = m.variables[f"{comp}-{NOM[comp]}"].sel({comp: idx}).sum()
+                var = m.variables[f"{comp}-{NOM[comp]}"]          # one dimension: the extendable units
+                v = var.sel({var.dims[0]: list(idx)}).sum()
                 expr = v if expr is None else expr + v
             for sense in ("min", "max"):
                 if (e, g, sense) in done:
@@ -286,6 +292,8 @@ def main():
                 else:
                     m.objective = expr if sense == "min" else -1 * expr
                     stt, cc = n.optimize.solve_model(solver_name="highs", solver_options=solver_options)
+                    if cc != "optimal":
+                        stt, cc = n.optimize.solve_model(solver_name="highs", solver_options={**solver_options, **FALLBACK})
                 ok = cc == "optimal" or expr is None
                 # the cost of the solution in PyPSA's convention (capex + opex, fixed costs included)
                 c_ = float(n.statistics.capex().sum() + n.statistics.opex().sum()) if ok and expr is not None \

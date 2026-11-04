@@ -118,6 +118,23 @@ concrete next steps. Update it at the end of every work session.
 
 ## Log
 
+### 2026-11-04 (LP baselines: campaigns H2, H2b)
+
+- Our LP on the historical years of the model files, stacked over years (shared capacities,
+  storage cyclic per year, equal weights), and MGA envelopes per carrier at ε, on one reused
+  model (`src/lp_baseline.jl`, `scripts/lp_baseline.jl`; `solve_lp` split into
+  `lp_build`/`lp_operation!`/`lp_extract`, the same LP bitwise); PyPSA's optimum and MGA on its
+  composed network (`scripts/pypsa_baseline.py`); `hpc/run.sh` mode `python`; tests in
+  `test/test_lp_baseline.jl` (historical weather = the weather model's data; LP cost = the
+  sampler's cost at the LP solution plus the curtailment it prices; stacked with one year = the
+  single-year LP; MGA within the bound, re-optimized dispatch too, min ≤ optimum ≤ max).
+  Campaigns prepared: `campaigns/H2/` (102 lines in three arrays), `campaigns/H2b/` (8 lines);
+  validation.md §2.7, data.md §6, campaigns.md H2/H2b; to run on the rebuilt model files.
+- Found: with `ESM_LP_THREADS` set, every HiGHS solve failed (`OTHER_ERROR`: "global scheduler
+  has already been initialized"), so every LP on the cluster would have failed; fixed in
+  `lp_model` (scheduler reset). HiPO ends MGA capacity objectives often with `OTHER_ERROR` at a
+  feasible point: retried with IPX without presolve.
+
 ### 2026-11-04 (time limits)
 
 - The time-limit signal (`--signal=B:USR1@900`) went to the templates' batch shell, which ran

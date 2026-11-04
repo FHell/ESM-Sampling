@@ -1,0 +1,26 @@
+# Campaign H2b (docs/campaigns.md, row H2b; docs/system/hpc.md). Filled in by hpc/new_campaign.sh on
+# the cluster: commit, created, code, runs, archive.
+id = "H2b"
+question = """
+PyPSA-Eur's own optimum and MGA envelopes on its network configured to our scope (validation.md
+§2.2, §2.7): the reference that our LP (H2) and our sampler are compared with, on the side where
+PyPSA solves its own problem. One weather year (2013, the year of the build), the resolution ladder
+24 h / 6 h / 3 h (and an hourly attempt).
+"""
+design = """
+scripts/pypsa_baseline.py (run.sh python mode, the root project's uv environment: pypsa 1.4,
+HiGHS through highspy) on ${ESM_PYPSA_EUR}/resources/esm256/networks/composed_2050.nc of the
+cluster's PyPSA-Eur build (prepare_data.sh pypsa256; rebuilt with the wind-calibration fix if
+the build is redone). Scope: AC lines and DC links at their ratings, load shedding at 3000 EUR/MWh,
+the build's CO2 cap (5e7 t; its dual is the CO2 price), time series averaged over blocks of the
+resolution. MGA as optimize_mga (budget on PyPSA's capex + opex), carrier groups onwind, solar,
+offwind, gas, battery, H2 (power capacities). Independent of H2: no shared outputs; the comparison
+of H2 and H2b is a separate step.
+  list.txt        (6)   optimum at 24 h, 6 h, 3 h; MGA at 24 h (eps 1, 2, 5, 10 %, 48 solves);
+                        MGA at 6 h (eps 2 % and 5 %, one line each, 12 solves)
+  list_large.txt  (1)   optimum at 1 h (HiGHS time limit 80000 s)
+  list_smoke.txt  (1)   the local smoke case (14 daily snapshots, no CO2 cap, eps 5 %, onwind and gas)
+Outputs per run: summary_pypsa.toml, capacity_pypsa.csv; with eps: mga_pypsa.csv,
+mga_capacity_pypsa.csv, summary_mga_pypsa.toml (docs/system/data.md §6).
+"""
+resources = "see the H2b row of docs/campaigns.md"

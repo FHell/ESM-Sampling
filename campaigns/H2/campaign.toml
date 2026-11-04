@@ -20,8 +20,9 @@ Three job arrays by resources (hpc/jobs/cpu_array.sbatch), one line per case:
   list_medium.txt (71)  40 x 6 h and 256 x 24 h single years (22 each); 40 x 24 h stacked 2004-2013;
                         MGA 40 x 6 h at 2013 (eps 2, 5 %, one line each); MGA 256 x 24 h at 2013 and
                         40 x 24 h stacked 2009-2013 (eps 2, 5 %, one line per eps and carrier)
-  list_large.txt  (7)   40 x 1 h single years 2003, 2010, 2013, 2017; 40 x 24 h stacked over all 22
-                        years; 40 x 6 h stacked 2009-2013; 256 x 6 h at 2013 (HiGHS time limit 80000 s)
+  list_large.txt  (9)   40 x 1 h single years 2003, 2010, 2013, 2017; 40 x 24 h stacked over all 22
+                        years; 40 x 6 h stacked 2009-2013 and 2004-2013; 256 x 24 h stacked
+                        2009-2013; 256 x 6 h at 2013 (HiGHS time limit 240000 s per LP)
   list_smoke.txt  (1)   the local smoke case (40 x 24 h, 2013, eps 5 %, onwind)
 Storage and commitment are cyclic within each year (no carry-over between stacked years). Outputs
 per run: summary_lp.toml, years.csv, capacity.csv; with eps: mga.csv, mga_capacity.csv,
@@ -30,15 +31,25 @@ summary_mga.toml (docs/system/data.md §6).
 resources = """
 Measured locally (laptop, loaded, 4 HiGHS threads): 40 x 24 h, one year: 239659 variables,
 275940 constraints, 317 s for the optimum (HiPO interior point, about 1.1 cores busy), max RSS
-4.2 GB. Extrapolated with memory 1 GB + 13 kB per variable and time ~ size^1.7:
+4.2 GB. Extrapolated with memory 1 GB + 13 kB per variable and time ~ size^1.7 (the exponent
+from the 5-node and the 40-node daily LP; uncertain by a factor of a few at the large end):
   40 x 24 h, 1 year      5 min      4 GB    stacked 5 y: 1.4 h, 17 GB; 10 y: 4.4 h, 33 GB; 22 y: 17 h, 72 GB
-  40 x 6 h,  1 year      1 h       14 GB    stacked 5 y: 14 h, 65 GB
+  40 x 6 h,  1 year      1 h       14 GB    stacked 5 y: 14 h, 65 GB; 10 y: 45 h, 130 GB
   40 x 1 h,  1 year     ~20 h      80 GB
-  256 x 24 h, 1 year     2 h       21 GB
-  256 x 6 h,  1 year    ~24 h      85 GB    (an attempt: may hit the time limit)
-An MGA solve costs about one optimum; a line solves the optimum plus 2 per eps and carrier.
-Requests: list_small -c 4 --mem-per-cpu=6G (24 GB); list_medium -c 8 --mem-per-cpu=6G (48 GB);
-list_large -c 8 --mem-per-cpu=16G (128 GB), QOS short (not preempted: an LP cannot checkpoint).
-HiGHS threads = allocated cores (ESM_LP_THREADS); its interior-point solver used about one core
-here, so more cores buy little.
+  256 x 24 h, 1 year     2 h       21 GB    stacked 5 y: 32 h, 105 GB
+  256 x 6 h,  1 year    ~24 h      85 GB
+An MGA solve costs about one optimum; a line solves the optimum plus 2 per eps and carrier
+(longest lines: MGA 40 x 6 h at one eps, 13 LPs, ~12 h; MGA 256 x 24 h per eps and carrier,
+3 LPs, ~6 h).
+Requests (no resubmission past a time limit: --time covers the estimate with a margin):
+  list_small   standby, -c 4 --mem-per-cpu=6G (24 GB),  --time=12:00:00
+  list_medium  standby, -c 8 --mem-per-cpu=6G (48 GB),  --time=2-00:00:00
+  list_large   QOS medium (guaranteed: a preempted LP restarts from zero, and these run for a day
+               or more), -c 8 --mem-per-cpu=24G (192 GB), --time=4-00:00:00
+A preempted standby line is requeued by Slurm: a single LP starts over, an MGA sweep skips its
+finished solves (mga.csv). HiGHS threads = allocated cores (ESM_LP_THREADS); its interior-point
+solver used about one core here, so more cores buy little.
+Not planned, would need more than a week or more memory than is sensible (to be settled with the
+user first): 256 x 1 h (~37e6 variables, ~0.5 TB, weeks), 256 x 24 h stacked 10 or 22 years
+(~4 days and 200 GB for 10; 22 years beyond a week), 40 x 6 h stacked 22 years (~280 GB, ~1 week).
 """
