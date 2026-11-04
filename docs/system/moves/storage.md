@@ -167,7 +167,7 @@ hydro, PHS or H₂). The selection uses only $k$, the network and fixed probabil
   change. Units that can charge have $\lambda = 0$: half of their steps charge and half
   discharge, so no fixed share fits; their losses go into the residuals of their nodes. Without
   the loss compensation the 10 % hydro loss went into shed at B's node and halved the hydro
-  steps (E26). A same-node pair has no flows and one loss compensation with $(\lambda_A -
+  steps (E27). A same-node pair has no flows and one loss compensation with $(\lambda_A -
   \lambda_B)c$.
 
 In the adaptive kernel half of the long-range sweeps use the learned rule for the leak and
@@ -187,6 +187,6 @@ for two units, about 0.1 ms per move at 40 nodes daily. At the defaults (`storag
 the plain-family scale, about 60 moves per unit and sweep; `storage_xlong` 8) the two add about
 6 % and 9 % to an operation sweep of `chains40`.
 
-**Use.** See ledger E26.
+**Use.** See ledger E27.
 
 **Device.** Missing.

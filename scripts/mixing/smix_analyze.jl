@@ -5,11 +5,11 @@
 # PCs, and the split into the regional level (annual mean) and the seasonal shape (quarter
 # minus annual mean).
 #
-# Ledger E26: the same with base and new runs of any kernel (base prefix "slong_", new "sx_"), plus
+# Ledger E27: the same with base and new runs of any kernel (base prefix "slong_", new "sx_"), plus
 # the seasonal shape per storage unit (Q1 − Q3 of the stored energy) and the long-range sweep's
 # move statistics.
 #
-# Usage: julia --project=. smix_analyze.jl <base dir> <new dir> [new file prefix] [burn-in] [base file prefix] [chains, e.g. 4,1]
+# Usage: julia --project=. smix_analyze.jl <base dir> <new dir> [new file prefix] [burn-in] [base file prefix] [chains, e.g. 4,1] [cost ratio new/base]
 using Serialization, Statistics, LinearAlgebra, Printf
 
 base, new = ARGS[1], ARGS[2]
@@ -17,6 +17,10 @@ prefix = length(ARGS) >= 3 ? ARGS[3] : "slong_"
 burn = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 200
 bprefix = length(ARGS) >= 5 ? ARGS[5] : ""
 chains_ = length(ARGS) >= 6 ? parse.(Int, split(ARGS[6], ",")) : [4, 1]
+# cost ratio new/base per sweep from an interleaved benchmark: replaces the recorded times (which
+# carry the machine load of the time of each run) by base 1 and new `ratio` per sweep (in base sweeps)
+ratio = length(ARGS) >= 7 ? parse(Float64, ARGS[7]) : NaN
+fixt!(r, c) = (isnan(ratio) || (r["time"] = fill(c, length(r["time"]))); r)
 
 "Integrated autocorrelation time, Sokal's automatic window (c = 5)."
 function iat(x)
@@ -68,6 +72,7 @@ end
 for c in chains_
     rb = deserialize(joinpath(base, bprefix * "chain$c.jls"))
     rn = deserialize(joinpath(new, prefix * "chain$c.jls"))
+    fixt!(rb, 1.0); fixt!(rn, ratio)
     tb, tn = cumsum(rb["time"]), cumsum(rn["time"])
     nb, nn = length(tb), length(tn)
     neq = searchsortedlast(tn, tb[end])               # sweeps of the new run within the base run's CPU time

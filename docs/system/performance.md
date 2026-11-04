@@ -78,8 +78,8 @@ s per sweep at 4 threads (`bench_perf.jl sweep`):
 | `local_sweep!`, plain and flow families (the operation part of `flow_sweep!`) | 0.55 | 12.0 |
 | `storage_ms_sweep!` | 0.072 | 0.55 |
 | `storage_long_sweep!` (32 `slong` + 1 `slevel` per unit with ≥ 24 h; measured in the E21 setup, not with `bench_perf.jl`) | 0.10 | — |
-| ... its `sxlong` phase (8 interval storage pairs per unit with ≥ 24 h, rounds of disjoint footprints; E26 setup) | 0.055 | — |
-| `sxpair` in `local_sweep!` at `storage_xpair` = 0.1 (about 3 650 moves; E26 setup) | 0.035 | — |
+| ... its `sxlong` phase (8 interval storage pairs per unit with ≥ 24 h, rounds of disjoint footprints; E27 setup) | 0.055 | — |
+| `sxpair` in `local_sweep!` at `storage_xpair` = 0.1 (about 3 650 moves; E27 setup) | 0.035 | — |
 
 One `slong` move costs about 30 µs for hydro, 50 µs for the large PHS units and 130 µs for H₂
 at 40 nodes daily (one thread; the interior steps are evaluated only where they leave the box),

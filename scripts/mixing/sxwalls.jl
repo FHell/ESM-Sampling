@@ -1,4 +1,4 @@
-# Ledger E26: where the storage moves stop. At a state of a chains40 chain, line draws (no commit)
+# Ledger E27: where the storage moves stop. At a state of a chains40 chain, line draws (no commit)
 # of `slong` (per carrier), `sxlong` (per pair of carriers, same node or across nodes) and
 # `sxpair`; per family the energy moved per draw and the walls on both sides of each walk
 # (scripts/mixing/walls.jl): line limits, storage limits (box, power, the charge/discharge switch,

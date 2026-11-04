@@ -6,7 +6,7 @@
 # Usage: nice -n 19 julia --project=. -t 4 opmix.jl <chains.jls> <chain index> <nsweeps> <out.jls> [kernel] [nmoves] [nx] [sx]
 # kernel "base" (default, ledger E17): local sweep + storage multiscale sweep (probability 1/2);
 # "slong": the same plus the long-range storage sweep every sweep (slong, slevel; nmoves plateaus
-# per unit, default 32; ledger E21); "sx": the slong kernel plus the storage pairs (ledger E26):
+# per unit, default 32; ledger E21); "sx": the slong kernel plus the storage pairs (ledger E27):
 # nx interval pairs sxlong per unit in the long-range sweep (default 8) and the single-instant
 # pair sxpair at rate sx in the local sweep (default 0.1).
 import ESMSampling as ML

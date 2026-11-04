@@ -1,4 +1,4 @@
-# Walls of storage line moves (ledger E21, E26): after a line draw, the kink on each side of the
+# Walls of storage line moves (ledger E21, E27): after a line draw, the kink on each side of the
 # walk where the slope rises most before the potential exceeds its minimum by `nats`, and which
 # terms kink there: a line limit, a generator at a clamp (gas or other; at the move's own nodes or
 # at a leak node), a compensation kink, a storage box, a storage power limit or charge/discharge
