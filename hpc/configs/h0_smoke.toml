@@ -1,0 +1,12 @@
+# Campaign H0 smoke run (hpc/jobs/h0_cpu.sbatch): the CPU driver through the run wrapper, offline,
+# 40 nodes daily, a few sweeps; exercises the cache, the run record and (once the driver has it)
+# the checkpoint. The wrapper sets out, cache_dir, cache_mirror, checkpoint and stop_file.
+data = "data/processed/model.h5"
+basis = "haar"
+levels = [[10, 24], [40, 24]]
+init = "heuristic"
+use_bias = false
+nchains = 2
+warmup0 = 5
+mlda_warmup = 4
+nsamples = 4
