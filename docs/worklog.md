@@ -159,7 +159,12 @@ concrete next steps. Update it at the end of every work session.
   and its seed (heuristic capacities, or the reference LP solved once by a stage-1
   `lp_reference.jl` job into the shared cache), then a common 500-sweep burn-in with the E21
   kernel on its own stream (state hash in the summary), resumable like the main phase; no input
-  files, no pinned model hash; `campaigns/H10/chains40_e15.toml` removed.
+  files, no pinned model hash; `campaigns/H10/chains40_e15.toml` removed; submit lines with
+  `--time` (LP 2 h, runs 12 h). Smoke-tested through `hpc/run.sh`: heuristic start with a stop
+  in the burn-in and a resume (start hash equal to an uninterrupted run), LP start (burn-in, run,
+  summaries). The LP start fails on main with `ESM_LP_THREADS` ≠ HiGHS's default ("global
+  scheduler has already been initialized"); the fix (scheduler reset, f2d09a3) is on the
+  LP-baseline branch and must be on main before H10's stage 1.
 
 ### 2026-11-04 (replica–Langevin sampler in src/)
 
