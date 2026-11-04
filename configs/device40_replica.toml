@@ -1,0 +1,32 @@
+# Device run of the replica–Langevin sampler (docs/replica_sampler.md, docs/system/device.md §5–§6):
+# 4 chains × 4 weather replicas on 40 nodes daily, the capacities shared within a chain and moved by
+# a Langevin step on the replica-averaged score, the weather by staggered pCN bursts on the host,
+# the fast operation families on the device. A host checkpoint every 10 steps.
+#   nice -n 19 julia --project=device -t 4 device/scripts/run_device.jl configs/device40_replica.toml
+out = "results/device40_replica.h5"
+basis = "haar"
+storage = "soc"
+renewables = "load"
+measure = "physical"
+levels = [[10, 24], [40, 24]]
+init = "heuristic"
+use_bias = false
+nchains = 4
+chain_starts = ["low", "high"]
+mlda_warmup = 10
+nsamples = 30
+device_backend = "gpu"
+device_sweeps = 10              # replica steps per host checkpoint
+device_sampler = "replica"
+
+[device_replica]
+M = 4
+eta_w = 5e-4
+clip = 0.02
+inner = 1
+burst_every = 40
+phi = 0.3
+gate = 25
+burst_regime = 0.5
+reg_window = 30
+init_sweeps = 40

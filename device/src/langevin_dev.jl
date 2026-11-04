@@ -73,7 +73,7 @@ rep_sum(x, w, ::Val{M}) where {M} = dropdims(sum(reshape(reshape(w, :, 1) .* x, 
 "The value of the first replica of every chain: (C, U) → (C/M, U)."
 rep_first(x, ::Val{M}) where {M} = reshape(x, M, :, size(x, 2))[1, :, :]
 "Every chain's value for each of its M replicas: (C/M, U) → (C, U) (exact: + 0)."
-rep_bcast(x, ::Val{M}) where {M} = reshape(reshape(x, 1, size(x, 1), size(x, 2)) .+ zeros(M, 1, 1), M * size(x, 1), size(x, 2))
+rep_bcast(x, ::Val{M}) where {M} = reshape(reshape(x, 1, size(x, 1), size(x, 2)) .+ zeros(M, 1, 1), M * size(x, 1), size(x, 2)) .+ 0.0
 
 # ---------------------------------------------------------------------------
 # dispatch following the capacities
