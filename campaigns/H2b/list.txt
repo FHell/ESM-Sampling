@@ -1,0 +1,6 @@
+campaigns/H2b/configs/pypsa256.toml python scripts/pypsa_baseline.py resolution=24h
+campaigns/H2b/configs/pypsa256.toml python scripts/pypsa_baseline.py resolution=6h
+campaigns/H2b/configs/pypsa256.toml python scripts/pypsa_baseline.py resolution=3h
+campaigns/H2b/configs/pypsa256.toml python scripts/pypsa_baseline.py resolution=24h eps=0.01,0.02,0.05,0.1
+campaigns/H2b/configs/pypsa256.toml python scripts/pypsa_baseline.py resolution=6h eps=0.02
+campaigns/H2b/configs/pypsa256.toml python scripts/pypsa_baseline.py resolution=6h eps=0.05

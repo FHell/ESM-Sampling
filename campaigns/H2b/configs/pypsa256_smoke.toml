@@ -1,0 +1,8 @@
+# Campaign H2b smoke test: as pypsa256.toml, the first 14 daily snapshots only (mechanics check).
+network = "${ESM_PYPSA_EUR}/resources/esm256/networks/composed_2050.nc"
+out = "results/h2b/pypsa256_smoke/out.h5"
+resolution = "24h"
+snapshots = 14
+co2 = "none"              # a 14-day horizon cannot carry the annual cap
+load_shedding = 3000.0
+line_expansion = false

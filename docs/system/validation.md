@@ -149,8 +149,60 @@ curtailment; line loading distributions and cross-border flows; the seasonal H�
 charge. Our uncertainties are the MCSE of §1 plus the ensemble spread; PyPSA's are the
 year-to-year spread and the MGA envelope.
 
-> **Status: missing.** None of §2 has been carried out. Missing pieces: the PyPSA-Eur
-> time-series import mode of the extractor, PyPSA-Eur solves of the imported networks,
-> stacked multi-year and MGA runs, ERA5 cutouts for many years (HPC), and the stabilization of
-> the $\alpha = 1$ bias. What exists: the convergence diagnostics and the multi-chain CPU driver, the
-> LP-dual output for §2.3, and the ERA5 weather import (`prepare_era5.py`).
+### 2.7 The LP baselines as built
+
+**Ours** (`src/lp_baseline.jl`, `scripts/lp_baseline.jl`, campaign H2). The capacity-expansion
+LP of `solve_lp` (`src/lp.jl`), built by `lp_build` from one operation block per weather year
+(`lp_operation!`) on shared capacities:
+
+- **Weather.** A historical year of the model file (`historical_weather`): the hourly fields
+  `weather/<field>/data` averaged over the steps of the level (`aggregate`, as in the
+  weather-model fit), then the data map (load ≥ 0, availabilities in [0, 1]). At a spatially
+  complete level this is the weather model's training data of that year at that level, to
+  round-off (`test/test_lp_baseline.jl`). The LP's level is the configuration's reference
+  level, the first spatially complete level of `levels`: a 6 h LP is a configuration with
+  `levels = [[10, 24], [40, 6]]` (the coarse level only makes the configuration valid).
+- **Stacked optimum** (`solve_lp_years`): capacities shared, dispatch per year, objective
+  capex + Σ_y w_y opex_y with equal weights $w_y = 1/Y$ (an annual cost). Storage and fleet
+  commitment are cyclic within each year: every year starts and ends at the same state of
+  charge, with no carry-over between years, as in a single-year LP and in the sampler's
+  annual weather draws; the years are exchangeable scenarios of the two-stage problem, not a
+  chronological sequence. The per-year duals are reported per unit weight (the year's own
+  prices). One year is the single-year LP; the same year twice gives the same optimum.
+- **MGA** (`mga_sweep!`): on the solved model, the bound capex + Σ w opex ≤ (1 + ε) C* is
+  added and, for each ε and carrier (k field), the total capacity Σ_i k_f[i] is minimised and
+  maximised; the model is reused (only the bound and the objective change). The capacity per
+  country is recorded at every extreme. HiGHS's interior-point solver HiPO often ends these
+  capacity objectives with `OTHER_ERROR` (dual residuals after postsolve) at a primal-feasible
+  point; such a solve is repeated with IPX without presolve, which converges on them.
+- **Not in the LP:** line losses and soft thermal limits (hard limits; a configuration with
+  them is solved without them and the summary lists them as ignored). Renewable curtailment is
+  free in the LP; the sampler's energy model charges curtailed output as nodal dump at
+  $c_{m dump}$ plus the renewable's marginal cost, so the sampler's cost at the LP solution
+  is the LP objective plus `curtail_cost_eur` (about 0.6 % of the cost at 40 nodes daily; the
+  test checks the identity to 1e-5).
+
+**PyPSA-Eur's** (`scripts/pypsa_baseline.py`, campaign H2b). PyPSA solves the composed network
+of the build (`resources/esm256/networks/composed_2050.nc`, 2013) with HiGHS, configured to our
+scope (§2.2): lines and DC links at their current ratings, a load-shedding generator at every
+bus at our $c_{m shed}$, the build's CO₂ cap (or none, or a price), the time series averaged
+over blocks of 24, 6, 3 or 1 h (PyPSA-Eur's `average_every_nhours`). MGA as PyPSA's
+`optimize_mga` (budget on capex + opex including the fixed cost of the existing fleet), on one
+model with the budget's right-hand side and the objective changed per solve; carrier groups
+mapped to our k fields (onwind; solar and solar-hsat; the three offwind kinds; CCGT and OCGT
+as gas; the battery discharger and the H₂ fuel cell as the storage powers).
+
+Outputs: [data.md](data.md) §6. The two campaigns are independent; the comparison of their
+results is a separate step.
+
+> **Status: partial.** Built: the historical-year, stacked and MGA LPs of our model (H2) and
+> PyPSA's optimum and MGA on its network (H2b), prepared as cluster campaigns
+> ([campaigns.md](../campaigns.md)); not yet run on the cluster. Missing: the PyPSA-Eur
+> time-series import mode of the extractor (so that our LP runs on PyPSA's own time series
+> for §2.2; until then H2 uses the NASA POWER weather of our model files and H2b PyPSA's
+> own atlite series (ERA5, SARAH), and the comparison of the two mixes the weather source with the
+> formulation), PyPSA solves of several weather years (one composed network per year), the
+> stacked PyPSA optimum, ERA5 cutouts for many years (HPC), the comparison step itself, and the
+> stabilization of the $\alpha = 1$ bias. What exists besides: the convergence diagnostics and
+> the multi-chain CPU driver, the LP-dual output for §2.3, and the ERA5 weather import
+> (`prepare_era5.py`).

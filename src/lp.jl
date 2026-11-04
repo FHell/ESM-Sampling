@@ -26,29 +26,58 @@ end
 
 `W[f]` are node-level weather values after the data map at the level of
 `lv` (which must be complete in space). The environment variable `ESM_LP_THREADS`, if
-set, is HiGHS's `threads` option (otherwise HiGHS's default).
+set, is HiGHS's `threads` option (otherwise HiGHS's default). With `return_model = true`
+also returns the JuMP model and the balance constraints, `(sol, model, balc)`; the
+multi-year LP and the MGA sweep (lp_baseline.jl) use `lp_build` directly.
 """
 function solve_lp(E::EnergyModel, lk::Layout, lv::Layout, W; silent=true, time_limit=Inf,
                   kfixed=nothing, crossover=false, return_model=false, solver="ipm")
-    sys = E.sys
-    N, T, Δt = sys.N, lv.T, Float64(lv.h)
+    lpm = lp_build(E, lv, [W]; silent=silent, time_limit=time_limit, kfixed=kfixed, crossover=crossover, solver=solver)
+    model = lpm.model
+    optimize!(model)
+    @assert termination_status(model) in (MOI.OPTIMAL, MOI.ALMOST_OPTIMAL) "LP: $(termination_status(model))"
+    kval = [value.(lpm.kv[f]) for f in eachindex(E.kspecs)]
+    sol = lp_extract(E, lv, kval, lpm.blocks[1], W, objective_value(model), value(lpm.capex))
+    return return_model ? (sol, model, lpm.blocks[1].balc) : sol
+end
+
+"A HiGHS model with the options of the LPs (`ESM_LP_THREADS`: HiGHS threads)."
+function lp_model(; silent=true, time_limit=Inf, crossover=false, solver="ipm")
     model = Model(HiGHS.Optimizer)
     silent && set_silent(model)
     set_attribute(model, "solver", solver)
     set_attribute(model, "run_crossover", crossover ? "on" : "off")
     isfinite(time_limit) && set_attribute(model, "time_limit", Float64(time_limit))
     lpth = get(ENV, "ESM_LP_THREADS", "")          # shared nodes: HiGHS must not take every core (docs/system/hpc.md §3)
-    isempty(lpth) || set_attribute(model, "threads", parse(Int, lpth))
+    if !isempty(lpth)
+        set_attribute(model, "threads", parse(Int, lpth))
+        # HiGHS keeps one global thread scheduler, created with its default size (half the
+        # hardware threads) before any option is read; a different `threads` then makes the
+        # solve fail ("global scheduler has already been initialized"). Resetting it makes the
+        # next solve create it with this option. (One LP at a time per process.)
+        HiGHS.Highs_resetGlobalScheduler(1)
+    end
+    return model
+end
 
+"""
+    lp_build(E, lv, Ws; weights, kfixed, solver options) -> (; model, kv, capex, obj, ops, blocks)
+
+The capacity-expansion LP over the weather years `Ws` (node-level weather after the data
+map, one entry per year, each at the time step of `lv`): shared capacities `kv`, one
+operation block per year with its own cyclic storage and commitment (`lp_operation!`),
+objective `capex + Σ_y weights[y] · ops[y]` (`obj`). One year with weight 1 is the
+single-year LP of `solve_lp`. Not solved.
+"""
+function lp_build(E::EnergyModel, lv::Layout, Ws; weights=fill(1.0 / length(Ws), length(Ws)), kfixed=nothing, kw...)
+    @assert length(weights) == length(Ws)
+    model = lp_model(; kw...)
     kv = Dict{Int,Any}()
     for (f, s) in enumerate(E.kspecs)
         lo = kfixed === nothing ? (E.brownfield ? copy(s.lo) : zeros(nsupport(s.B))) : kfixed[f]
         hi = kfixed === nothing ? s.hi : kfixed[f]
         kv[f] = @variable(model, [i in 1:nsupport(s.B)], lower_bound = lo[i], upper_bound = hi[i])
     end
-    θ = @variable(model, [1:N, 1:T])
-    bal = [AffExpr(W[1][n, t]) for n in 1:N, t in 1:T]
-    obj = AffExpr(0.0)
     capex = AffExpr(0.0)
     for g in E.gens, f in (g.kf,)
         f > 0 && add_to_expression!(capex, sum(g.capex .* kv[f]))
@@ -57,8 +86,29 @@ function solve_lp(E::EnergyModel, lk::Layout, lv::Layout, W; silent=true, time_l
     for s in E.stors
         s.kf > 0 && add_to_expression!(capex, sum(s.capex .* kv[s.kf]))
     end
+    obj = AffExpr(0.0)
     add_to_expression!(obj, capex)
+    ops, blocks = AffExpr[], Any[]
+    for (y, W) in enumerate(Ws)
+        op, blk = lp_operation!(model, E, lv, kv, W)
+        add_to_expression!(obj, weights[y], op)
+        push!(ops, op); push!(blocks, blk)
+    end
+    @objective(model, Min, obj)
+    return (; model, kv, capex, obj, ops, blocks, weights)
+end
 
+"""
+The operation of one weather year `W` at the capacities `kv`: potentials and line flows,
+DC links, dispatch (vintages, commitment), storage (cyclic over the year), shed and dump,
+the nodal balance. Returns `(op, block)`: the operational cost and the variables.
+"""
+function lp_operation!(model, E::EnergyModel, lv::Layout, kv, W)
+    sys = E.sys
+    N, T, Δt = sys.N, lv.T, Float64(lv.h)
+    θ = @variable(model, [1:N, 1:T])
+    bal = [AffExpr(W[1][n, t]) for n in 1:N, t in 1:T]
+    obj = AffExpr(0.0)
     for e in eachindex(sys.line_s)
         a, b = sys.line_bus0[e], sys.line_bus1[e]
         fl = @expression(model, [t in 1:T], sys.line_b[e] * (θ[a, t] - θ[b, t]))
@@ -88,12 +138,14 @@ function solve_lp(E::EnergyModel, lk::Layout, lv::Layout, W; silent=true, time_l
         p = @variable(model, [1:S, 1:T], lower_bound = 0.0)
         pc = Matrix{ConstraintRef}(undef, S, T)
         κ = g.ucf > 0 ? @variable(model, [1:S, 1:T], lower_bound = 0.0) : nothing   # committed capacity
-        pg[gi] = (p, A, pc, κ)
+        plos = Dict{Int,Any}()
+        pg[gi] = (p, A, pc, κ, plos)
         gmin, su, nl_ = g.uc
         for i in 1:S
             vint = hasvintage(g, i)
             if vint                                   # merit order of the two vintages (convex)
                 plo = @variable(model, [1:T], lower_bound = 0.0)
+                plos[i] = plo
                 oldfirst = g.mc0[i] <= g.mc[i]
                 clo, chi = oldfirst ? (g.mc0[i], g.mc[i]) : (g.mc[i], g.mc0[i])
             end
@@ -150,13 +202,21 @@ function solve_lp(E::EnergyModel, lk::Layout, lv::Layout, W; silent=true, time_l
     dump = @variable(model, [1:N, 1:T], lower_bound = 0.0)
     balc = @constraint(model, bal .== shed .- dump)
     add_to_expression!(obj, Δt * E.c_shed * sum(shed) + Δt * E.c_dump * sum(dump))
-    @objective(model, Min, obj)
-    optimize!(model)
-    @assert termination_status(model) in (MOI.OPTIMAL, MOI.ALMOST_OPTIMAL) "LP: $(termination_status(model))"
+    return obj, (; θ, u, pg, ps, shed, dump, balc)
+end
 
+"""
+The `LPSolution` of one operation block of a solved LP, at the capacities `kval`: the
+operation in utilization coordinates, the free-coordinate counts and the zero-temperature
+scores. The duals are divided by `weight` (the block's weight in the objective), so that
+they are those of the block's own year.
+"""
+function lp_extract(E::EnergyModel, lv::Layout, kval, blk, W, objective, capex; weight=1.0)
+    sys = E.sys
+    N, T = sys.N, lv.T
+    (; θ, u, pg, ps, balc) = blk
     # ---- convert to utilization coordinates and count unpinned coordinates
     rel(x, lo, hi) = (hi - lo) > 1e-9 && (x - lo) > 1e-6 * (hi - lo) && (hi - x) > 1e-6 * (hi - lo)
-    kval = [value.(kv[f]) for f in eachindex(E.kspecs)]
     n_k_free = sum(count(i -> rel(kval[f][i], 0.0, E.kspecs[f].hi[i]), eachindex(kval[f])) for f in eachindex(kval); init=0)
     n_k_total = sum(length, kval)
     ntot = 0
@@ -178,7 +238,7 @@ function solve_lp(E::EnergyModel, lk::Layout, lv::Layout, W; silent=true, time_l
     end
     for (gi, g) in enumerate(E.gens)
         g.vf > 0 || continue                     # renewables as negative load: no dispatch coordinate
-        p, A, _, κ = pg[gi]
+        p, A, _, κ, _ = pg[gi]
         pv = value.(p)
         κv = κ === nothing ? nothing : value.(κ)
         for i in eachindex(g.bus), t in 1:T
@@ -209,11 +269,11 @@ function solve_lp(E::EnergyModel, lk::Layout, lv::Layout, W; silent=true, time_l
     # sensitivities: ∂obj/∂rhs = dual (minimization). Load sits on the rhs of the
     # balance with a minus sign; a capacity constraint p ≤ A·k has rhs A·k.
     dF_dX = [zeros(size(w)) for w in W]
-    dF_dX[1] .= -dual.(balc)
+    dF_dX[1] .= -dual.(balc) ./ weight
     dF_dk = [zeros(length(x)) for x in kval]
     for (gi, g) in enumerate(E.gens)
-        _, A, pc, _ = pg[gi]
-        μ = dual.(pc)                    # ≤ 0
+        _, A, pc, _, _ = pg[gi]
+        μ = dual.(pc) ./ weight           # ≤ 0
         kk = g.kf > 0 ? kval[g.kf] : g.kfix
         g.wf > 0 && (dF_dX[g.wf] .+= μ .* kk)
         g.kf > 0 && (dF_dk[g.kf] .+= vec(sum(μ .* A; dims=2)))
@@ -221,14 +281,14 @@ function solve_lp(E::EnergyModel, lk::Layout, lv::Layout, W; silent=true, time_l
     for (si, s) in enumerate(E.stors)
         s.kf > 0 || continue
         _, _, _, crefs = ps[si]
-        μ = reshape(dual.(crefs), 3, lv.T, length(s.bus))
+        μ = reshape(dual.(crefs), 3, lv.T, length(s.bus)) ./ weight
         for i in eachindex(s.bus)
             dF_dk[s.kf][i] = sum(μ[1, :, i]) + sum(μ[2, :, i]) + s.hours[i] * sum(μ[3, :, i])
         end
     end
-    sol = LPSolution(objective_value(model), value(capex), kval, vvals, nfree, ntot, n_k_free, n_k_total, dF_dX, dF_dk)
-    return return_model ? (sol, model, balc) : sol
+    return LPSolution(objective, capex, kval, vvals, nfree, ntot, n_k_free, n_k_total, dF_dX, dF_dk)
 end
+
 
 "A strictly interior reference point of the operation (node values per v field)."
 function interior_center(E::EnergyModel, lv::Layout)

@@ -54,8 +54,11 @@ the 256-node network.
 |---|---|
 | `ESM_CACHE_DIR` | overrides `cache_dir` when set and non-empty |
 | `ESM_CACHE_MIRROR` | overrides `cache_mirror` when set and non-empty |
-| `ESM_LP_THREADS` | HiGHS's `threads` option in the reference LP (`solve_lp`); unset: HiGHS's default |
-| `ESM_IGNORE_SIGTERM` | `1`: `scripts/run.jl` ignores SIGTERM (the job wrapper stops the run through the stop file) |
+| `ESM_LP_THREADS` | HiGHS's `threads` option in every LP (`solve_lp`, the LP baselines, `scripts/pypsa_baseline.py`); unset: HiGHS's default. HiGHS's global thread scheduler is reset when it is set (otherwise a `threads` different from HiGHS's default makes the solve fail) |
+| `ESM_IGNORE_SIGTERM` | `1`: `scripts/run.jl` and `scripts/lp_baseline.jl` ignore SIGTERM (the job wrapper stops the run through the stop file) |
+| `ESM_PYPSA_EUR` | the PyPSA-Eur clone with its build (default `$ESM_PROJ/external/pypsa-eur`); `${ESM_PYPSA_EUR}` in the `network` key of an H2b configuration |
+
+**LP baselines.** `scripts/lp_baseline.jl` reads the usual keys (`data`, `levels`: its LP is at the reference level, the first spatially complete level; the model terms; `out`: its outputs go to `dirname(out)`); the cases are arguments `years=`, `eps=`, `carriers=`, `time_limit=` ([validation.md](validation.md) §2.7). `scripts/pypsa_baseline.py` reads its own TOML keys (`network`, `resolution`, `co2`, `load_shedding`, `line_expansion`, `snapshots`, `out`), documented in the script and in `campaigns/H2b/configs/`.
 
 **Hierarchy and bases.**
 

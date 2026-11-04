@@ -94,3 +94,30 @@ every write. Vectors are the coefficient vectors of the state at its level (the 
 | `chains/<c>/start`, `chains/<c>/Q` | fine phase: start kind and the monitored trace so far (quantity × sweep) |
 | `co2/price_trace` | the CO₂ price trace of the fine warmup so far |
 | `sampler/sigma_scale`, `sampler/gibbs/{wv,wz,wk}` | level-0 phase: carrier-scaling step sizes and slice widths |
+
+## 6. LP baselines (campaigns H2, H2b)
+
+Small text files in the run directory (`dirname(out)`), collected by `hpc/collect.sh`
+([validation.md](validation.md) §2.7). Costs in €/a, capacities in MW (storage: power), energies
+in MWh/a.
+
+**`scripts/lp_baseline.jl`** (our LP on historical years; `scripts/lp_reference.jl` writes the
+older single-LP `summary_lp.toml` of the sampled-weather reference LP in the same place):
+
+| file | content |
+|---|---|
+| `summary_lp.toml` | `years`, `weights`, `status`; `objective_eur_per_a` (capex + Σ w opex), `capex_eur_per_a`, `opex_eur_per_a`, `opex_by_year_eur`; `sampler_cost_eur_per_a` (plus the curtailment the sampler prices); `mean_stats` (weighted means of the per-year statistics); `capacity.<k field>.total_MW` and `.by_country_MW`; free-coordinate counts; LP size (`lp_variables`, `lp_constraints`), `seconds_setup`, `seconds_optimum`, `maxrss_MB`, threads; `ignored_model_terms`; commit, run id, data hash |
+| `years.csv` | per year: `year, weight, opex_eur, co2_t, curtail_MWh, curtail_cost_eur, dump_MWh, energy_MWh_<carrier>…, shed_MWh` (storage energy: discharge) |
+| `capacity.csv` | `carrier, country, MW` at the optimum |
+| `mga.csv` | one row per MGA solve: `eps, target, sense, status, attempts, cost_eur, cost_rel_excess, total_MW, seconds` (status `OPTIMAL`, `feasible:<status>` for a primal-feasible point within the bound, or a failure with NaN values) |
+| `mga_capacity.csv` | `eps, target, sense, carrier, country, MW`: every carrier's capacity per country at each extreme |
+| `summary_mga.toml` | `envelope.eps_<ε>.<k field>`: `min_MW`, `optimum_MW`, `max_MW`, `status`; total time and memory |
+
+**`scripts/pypsa_baseline.py`** (PyPSA on its network): `summary_pypsa.toml` (resolution,
+snapshots, `total_cost_eur_per_a` = capex + opex in PyPSA's statistics, `objective_eur_per_a`,
+`fixed_capex_eur_per_a` of the existing fleet, `co2_price_eur_per_t` = the cap's dual,
+`shed_MWh`, `energy_MWh` per carrier, `capacity.<group>.total_MW`, `.by_country_MW`, LP size,
+times, memory), `capacity_pypsa.csv`, and with ε `mga_pypsa.csv`
+(`eps, target, sense, status, cost_eur, cost_rel_excess, total_MW, seconds`),
+`mga_capacity_pypsa.csv`, `summary_mga_pypsa.toml`. Groups: `onwind`, `solar`, `offwind`,
+`gas`, `battery`, `H2` as in [validation.md](validation.md) §2.7.
