@@ -655,11 +655,6 @@ const FAMILIES = [
     (; name=:slong, setups=(:A, :B), kind=:line, jac=true, prep=(c, r) -> slsite(c, r), sweep=slsweep()),
     (; name=:slongL, setups=(:B,), kind=:line, jac=true, prep=(c, r) -> slsite(c, r; learn=true), sweep=slsweep(learn=true)),
     (; name=:slevel, setups=(:A, :B), kind=:line, jac=true, prep=(c, r) -> slsite(c, r; level=true), sweep=slsweep(level=true)),
-    # storage pairs across nodes (test_local.jl: footprints, lazy interior = full evaluation, disjoint rounds)
-    (; name=:sxpair, setups=(:A, :B), kind=:line, jac=true, sweep=sxpsweep,
-     prep=(c, r) -> stepsite(c, r, (r_, wa, ws, τm, τ, jac) -> MV.prep_sxpair!(r_, wa, ws, c.P, sxLM(c), c.LC, τm, τ, jac))),
-    (; name=:sxlong, setups=(:A, :B), kind=:line, jac=true, prep=(c, r) -> sxsite(c, r), sweep=sxsweep()),
-    (; name=:sxlongL, setups=(:B,), kind=:line, jac=true, prep=(c, r) -> sxsite(c, r; learn=true), sweep=sxsweep(learn=true)),
     # transport (test_flow.jl: incremental = global for tmode/tline/tmodeL, shares and excess across the kink of tline)
     stepfam(:tpot, (c, r, wa, ws, τm, τ, jac) -> MV.prep_tpot!(r, ws, c.P, c.LM, c.LC, τ, jac); jac=true),
     stepfam(:tpotL, (c, r, wa, ws, τm, τ, jac) -> MV.prep_tpot!(r, ws, c.P, c.LM, c.LC, τ, jac; learn=lrn(c)); setups=(:B,)),
@@ -708,6 +703,12 @@ const FAMILIES = [
      sweep=(c, rng) -> swept!(c, () -> MV.fine_weather_sweep!(rng, c.P, c.LM, c.s; frac=0.002, frac0=0.0, LC=c.LC, BC=c.BC))),
     (; name=:wblock, setups=(:A, :B), kind=:line, jac=true, known_lin=true, prep=(c, r) -> zsite(c, r),
      sweep=(c, rng) -> swept!(c, () -> MV.z0_block_sweep!(rng, c.P, c.LM, c.s, 2; LC=c.LC, BC=c.BC, lengths=(4,)))),
+    # storage pairs across nodes, last: the families run in sequence on one state, and the earlier
+    # entries keep the states they were tuned at (test_local.jl: footprints, lazy interior = full evaluation, disjoint rounds)
+    (; name=:sxpair, setups=(:A, :B), kind=:line, jac=true, sweep=sxpsweep,
+     prep=(c, r) -> stepsite(c, r, (r_, wa, ws, τm, τ, jac) -> MV.prep_sxpair!(r_, wa, ws, c.P, sxLM(c), c.LC, τm, τ, jac))),
+    (; name=:sxlong, setups=(:A, :B), kind=:line, jac=true, prep=(c, r) -> sxsite(c, r), sweep=sxsweep()),
+    (; name=:sxlongL, setups=(:B,), kind=:line, jac=true, prep=(c, r) -> sxsite(c, r; learn=true), sweep=sxsweep(learn=true)),
 ]
 
 # ---------------------------------------------------------------------------
