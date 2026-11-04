@@ -232,6 +232,18 @@ function slsite(c::MCtx, r; level::Bool=false, learn::Bool=false)
                  t -> MV.commit_slong!(m, c.s.v, t), () -> nothing)
 end
 
+"Level model of the storage pairs with every storage unit pairing (`sx_hmin = 0`: setup B has no long-duration capacity)."
+const SXLM = Dict{Symbol,Any}()
+sxLM(c::MCtx) = get!(() -> MV.LocalModel(c.P, c.s.ℓ; sx_hmin=0.0), SXLM, c.name)
+
+"Storage pair over a cyclic interval (`sxlong`): unit, partner, start and length from the site's generator."
+function sxsite(c::MCtx, r; learn::Bool=false)
+    m = MV.SXLong(c.pool.wss[1], c.pool.wss[2], c.pool.wss[3], c.P, sxLM(c), c.LC)
+    MV.prep_sxlong_random!(r, m, c.jac; learn=learn ? (AM=c.AM, FF=c.FF) : nothing) || return nothing
+    return LSite(m, c.jac, signature(m, r; extra=(m.us..., m.j, m.a, m.L, m.τi...)), (0.0, 0.0), x -> 0.0,
+                 t -> MV.commit_sxlong!(m, c.s.v, t), () -> nothing)
+end
+
 "Weather state of a context (compared after the round trip of a weather move)."
 wstate(c::MCtx) = (copy(c.s.z0), [copy(w) for w in c.s.ws], copy(c.s.xs[end]))
 
@@ -586,6 +598,54 @@ function opsweep!(c::MCtx, rng, fam::Symbol)
 end
 
 # ---------------------------------------------------------------------------
+# the weather process of the replica sampler (src/replicas.jl; self-contained entry :wproc)
+# ---------------------------------------------------------------------------
+
+mutable struct WorstW
+    n::Int; ret::Float64; bal::Float64; sig::Int; indep::Int; glob::Float64
+end
+WorstW() = WorstW(0, 0.0, 0.0, 0, 0, 0.0)
+
+"""
+One site of the replica weather process (not a line move): a pCN step of a random angle with
+given noise is undone by its reverse noise and keeps |u|² + |ξ|² (the balance identity); a
+regime window move sees the same conditionals at the moved state (the window draw is a Gibbs
+step); the step from a state with other k and v gives the same weather; the state after a full
+`weather_process_step` equals its global evaluation.
+"""
+function check_wproc_site!(w::WorstW, c::MCtx, @nospecialize(fam), seed::Int)
+    P, s = c.P, c.s
+    W = P.W
+    F = MV.VarFactors(W)
+    r = MersenneTwister(seed)
+    θ = 0.05 + 0.5 * rand(r)
+    n, T0 = MV.n0(W), W.lays[1].T
+    ξe, ξw = MV.draw_pcn_noise(r, n, T0, s.ws)
+    e = MV.z0_innovations(W, F, s.m, s.z0)
+    z1, ws1 = MV.pcn_weather(W, F, s.m, s.z0, s.ws, θ, ξe, ξw)
+    e1 = MV.z0_innovations(W, F, s.m, z1)
+    ξe′, ξw′ = MV.pcn_reverse_noise(e, e1, θ), [MV.pcn_reverse_noise(a, b, θ) for (a, b) in zip(s.ws, ws1)]
+    z2, ws2 = MV.pcn_weather(W, F, s.m, z1, ws1, θ, ξe′, ξw′)
+    w.ret = max(w.ret, maximum(abs, z2 .- s.z0) / (1 + maximum(abs, s.z0)), maximum(maximum(abs, a .- b) for (a, b) in zip(ws2, s.ws)))
+    sq(x) = sum(abs2, x)
+    lhs = sq(e) + sq(ξe) + sum(sq, s.ws) + sum(sq, ξw)
+    w.bal = max(w.bal, abs(lhs - (sq(e1) + sq(ξe′) + sum(sq, ws1) + sum(sq, ξw′))) / lhs)
+    a, b = MV.window_bounds(T0, 60, rand(r))
+    m1 = MV.regime_window(r, W, s.m, a, b)
+    β0, β1 = MV.regime_window_messages(W, s.m, a, b), MV.regime_window_messages(W, m1, a, b)
+    (β0 == β1 && all(MV.regime_window_probs(W, β0, a, τ, τ == 1 ? 0 : m1[τ-1]) == MV.regime_window_probs(W, β1, a, τ, τ == 1 ? 0 : m1[τ-1])
+                     for τ in a:b)) || (w.sig += 1)
+    s2 = MV.make_state(P, s.ℓ, s.m, s.z0, s.ws, 1.1 .* s.k, 0.9 .* s.v)
+    x1 = MV.weather_process_step(MersenneTwister(seed), P, F, s, θ; window=60)
+    x2 = MV.weather_process_step(MersenneTwister(seed), P, F, s2, θ; window=60)
+    (x1.m == x2.m && x1.z0 == x2.z0 && x1.ws == x2.ws) || (w.indep += 1)
+    L1 = x1.L
+    w.glob = max(w.glob, abs(MV.evaluate!(P, x1).L - L1))
+    w.n += 1
+    return
+end
+
+# ---------------------------------------------------------------------------
 # the family table
 # ---------------------------------------------------------------------------
 #
@@ -610,6 +670,12 @@ msweep(; p_shape=0.0, learn=false) = (c, rng) -> swept!(c, () -> MV.storage_ms_s
                                        p_shape=p_shape, LC=c.LC, learn=learn ? lrn(c) : nothing))
 slsweep(; level=false, learn=false) = (c, rng) -> swept!(c, () -> MV.storage_long_sweep!(rng, c.P, c.LM, c.s; nmoves=level ? 0 : 2,
                                        p_level=level ? 1.0 : 0.0, hmin=0.0, LC=c.LC, learn=learn ? lrn(c) : nothing))
+sxsweep(; learn=false) = (c, rng) -> swept!(c, () -> MV.storage_long_sweep!(rng, c.P, sxLM(c), c.s; nmoves=0, p_level=0.0,
+                                       nxmoves=2, LC=c.LC, learn=learn ? lrn(c) : nothing))
+function sxpsweep(c::MCtx, rng)
+    c.s, st = MV.local_sweep!(rng, c.P, sxLM(c), c.s; families=[(:sxpair, 1.0)], atoms=false, extra=2.0 / c.P.E.sys.N, LC=c.LC)
+    return st[1, 2]
+end
 ksweep(f) = (c, rng) -> ((s, n) = f(c, rng); c.s = s; n)
 
 const FAMILIES = [
@@ -685,6 +751,14 @@ const FAMILIES = [
      sweep=(c, rng) -> swept!(c, () -> MV.fine_weather_sweep!(rng, c.P, c.LM, c.s; frac=0.002, frac0=0.0, LC=c.LC, BC=c.BC))),
     (; name=:wblock, setups=(:A, :B), kind=:line, jac=true, known_lin=true, prep=(c, r) -> zsite(c, r),
      sweep=(c, rng) -> swept!(c, () -> MV.z0_block_sweep!(rng, c.P, c.LM, c.s, 2; LC=c.LC, BC=c.BC, lengths=(4,)))),
+    # the replica sampler's weather process (test_replicas.jl: generator, Jacobian, window conditional by enumeration)
+    (; name=:wproc, setups=(:A, :B), kind=:wproc, nsites=5, sweep=nothing),
+    # storage pairs across nodes, last: the families run in sequence on one state, and the earlier
+    # entries keep the states they were tuned at (test_local.jl: footprints, lazy interior = full evaluation, disjoint rounds)
+    (; name=:sxpair, setups=(:A, :B), kind=:line, jac=true, sweep=sxpsweep,
+     prep=(c, r) -> stepsite(c, r, (r_, wa, ws, τm, τ, jac) -> MV.prep_sxpair!(r_, wa, ws, c.P, sxLM(c), c.LC, τm, τ, jac))),
+    (; name=:sxlong, setups=(:A, :B), kind=:line, jac=true, prep=(c, r) -> sxsite(c, r), sweep=sxsweep()),
+    (; name=:sxlongL, setups=(:B,), kind=:line, jac=true, prep=(c, r) -> sxsite(c, r; learn=true), sweep=sxsweep(learn=true)),
 ]
 
 # ---------------------------------------------------------------------------
@@ -697,9 +771,10 @@ function run_families(c::MCtx; families=FAMILIES, nsites=NSITES, verbose=false)
     for fam in families
         c.name in fam.setups || continue
         t0 = time()
-        w = fam.kind == :line ? Worst() : WorstK()
+        w = fam.kind == :line ? Worst() : fam.kind == :wproc ? WorstW() : WorstK()
         for j in 1:get(fam, :nsites, nsites)
             seed = 1000 * j + 7
+            fam.kind == :wproc ? check_wproc_site!(w, c, fam, seed) :
             fam.kind == :line ? check_line_site!(w, c, fam, seed) :
             fam.kind == :kmove ? check_kmove_site!(w, c, fam, seed) : check_kop_site!(w, c, fam, seed)
         end
@@ -721,7 +796,13 @@ function test_families(c::MCtx, res)
         fam = FAMILIES[findfirst(f -> f.name == name, FAMILIES)]
         @testset "$(c.name) $name" begin
             @test w.n >= 5                                     # enough sites gave a move
-            if w isa Worst
+            if w isa WorstW
+                @test w.ret < 1e-9                             # the reverse noise undoes the pCN step
+                @test w.bal < 1e-10                            # |u|² + |ξ|² kept: the pCN balance identity
+                @test w.sig == 0                               # the window conditional is the same at the moved state
+                @test w.indep == 0                             # the weather does not depend on k and v
+                @test w.glob == 0.0                            # the state after the step is evaluated globally
+            elseif w isa Worst
                 if get(fam, :known_lin, false) && w.lin >= 1e-6
                     # known: the event walk of requirement-tracking moves places some kinks ~1e-7
                     # (relative) off, up to ~1e-5 nats between points (docs/system/testing.md §5)

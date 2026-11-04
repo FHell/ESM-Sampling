@@ -8,38 +8,30 @@ concrete next steps. Update it at the end of every work session.
 ## Open to-dos
 
 **Sampler design (decided direction, not yet built):**
-- Capacities by a Langevin step on the sampled scores instead of the learned bias, weather from
-  its prior by refresh ([system/ensemble.md](system/ensemble.md) §3.1,
-  [system/roadmap.md](system/roadmap.md) §1). Tested (ledger E19, E20): renewables meet from
-  different starts, but the dispatch lag biases the stationary capacities unless the step per
-  operation sweep is ≲ 1e-4, and a weather refresh costs about 100 daily sweeps. The user
-  approved the structure (2026-11-04). Replica prototype built and measured (ledger E22–E25,
-  [replica_sampler.md](replica_sampler.md)): prior-reversible weather process exact and tested;
-  continuous pCN too slow at an acceptable dispatch lag, so gated bursts; onwind and solar meet
-  from opposite starts, offwind, gas and batteries not yet, gas overbuilt by the dispatch lag.
-  Next: separate the weather lag from the capacity lag in the probe (probe only replicas long
-  after their burst, or subtract a θ = 0 reference) and average several probes; choose the
-  burst size and gate from a relaxation measurement per burst size; more replicas than active
-  ones; regime windows of B ≥ 60 with their own gate; a better gas score; then move the
-  sampler into `src/`. Then: rewrite ensemble.md §4 and sampler.md §6–7 for the new design, and retire the bias
-  code (ĝ, ĥ, tables, lift, refits, trust region, post-correction, level-0 warmup,
-  `device/src/bias_dev.jl`) and the capacity moves `kscale`/`kpeak`/`kop` as targets of the
-  α = 0 density; record the learned bias in [retired.md](retired.md) with the reason (the
-  precision it needs at r = 1e-3, ledger E16).
+- Replica–Langevin sampler in `src/replicas.jl` (`sampler = "replicas"`, sampler.md §11,
+  ensemble.md §4), with deterministic tests (`test/test_replicas.jl`, `:wproc` in
+  `test_moves.jl`). Next: campaign H4 on the cluster (prepared: low/high starts, 40 nodes daily
+  M = 8 and 4, 6-hourly M = 8; to be submitted on the rebuilt `model.h5` with the
+  wind-calibration fix, after which the prototype's carrier results, offwind in particular, are
+  rechecked); from its results the burst size and gate defaults, then 256 nodes
+  daily and the comparison with H2. Open: gas overbuilt in the prototype (a gas step of its own or
+  a Rao–Blackwellised score), the size of the gate's weather dependence, seasonal storage after a
+  burst. Then retire the bias code (ĝ, ĥ, tables, lift, refits, trust region, post-correction,
+  level-0 warmup, `device/src/bias_dev.jl`) and `kscale`/`kpeak`/`kop` as moves of the α = 0
+  density, and make `sampler = "replicas"` the default.
 - An explicit, controllable tilt of the weather toward expensive years (stress tests): built in
-  the replica prototype as replica weights exp(λΦ) in the capacity drift (E25); to decide: the
-  functional Φ, and whether M = 4 replicas give usable weights (self-normalised, ESS).
+  `src/replicas.jl` as replica weights exp(λΦ) in the capacity drift (`tilt_lambda`, Φ the
+  standardised annual mean residual load); to decide: the functional Φ, and whether M = 8
+  replicas give usable weights (self-normalised, ESS); campaign H9.
 - Rao-Blackwellized capacity scores (averages over the exact line conditionals) to cut the
   per-sweep score noise.
-- Cross-node storage move: store at A, release at B, flows re-routed with the `xloc` templates
-  (single-instant and `slong`-style interval forms), to avoid the node's own gas wall at the end
-  steps; after the `storage_long` merge.
-- Seasonal storage at fixed (k, x) after the long-range moves (ledger E21): the hydro seasonal
-  shape, the large PHS units and opex still drift over 1000 sweeps; their moves stop where the
-  node's own gas saturates at an end step. Next: a run of 3000 sweeps with the new kernel to see
-  whether opex settles; a compensation that spreads over the node's gas and storage units or
-  over several steps; the device port of `slong`/`slevel` and of the nominal storage
-  requirement (`soc_qadj`) for `:tsoc` and `:sblk`.
+- Seasonal storage at fixed (k, x) after the long-range moves and the storage pairs (ledger
+  E21, E27): per-unit hydro and PHS shapes relax about twice as fast with `sxpair`/`sxlong`
+  (equal CPU, chain 4), but the large hydro units and opex still drift over 3000 sweeps; the
+  walls are now the reservoirs' zero discharge at the end steps. Next: campaign H10, redesigned to make its start states on the cluster; a direction
+  whose power change is spread over several steps where the reservoir discharges (selection
+  must not depend on v); the device port of `slong`/`slevel`, of the storage pairs and of the
+  nominal storage requirement (`soc_qadj`) for `:tsoc` and `:sblk`.
 
 **Decisions taken:**
 - The learned bias is retired as part of the target (user, 2026-11-04): work proceeds on the
@@ -57,19 +49,27 @@ concrete next steps. Update it at the end of every work session.
   region on by default, θ_u₂ ≤ 0); `complete40.toml` has `warmup0` below `bias_start`.
 
 **Device port:**
+- Plan (user, 2026-11-04): implement all missing families on plain arrays against the CPU
+  (`slong`/`slevel`, storage pairs, Haar angle atoms and `tcut`/`acut`, local re-routing
+  templates, block aggregates, `adshape`; not the learned `kpeak`, weather moves, fused kernels,
+  multi-GPU), then one Reactant compile pass (CPU backend) over all device code, then a review
+  of the existing and new Reactant code by a Fable agent; GPU timings from H5 on the cluster.
+  The precompile workload stays only if it is a clean win. (Of the port agent's 6.2 h, 3.3 h were
+  waits on background compile and timing scripts; few compiles broke.)
 - Fine-level weather moves: not needed any more (the weather moves on the host by a
   prior-reversible pCN process); marked "not planned" in device.md and moves/README.md.
 - Remaining device families: the localized transport moves `tcut`/`acut` (Haar atoms: per-site
   line lists, sparse templates), learned dispatch shapes (`adshape`), block aggregates
   (cell–class groups), the re-routing templates (`xpair`, `xloc(c)`), `slong`/`slevel`.
-- Next device restructuring steps (ledger E27): the slot-point sort of the slope-jump form (a
+- Next device restructuring steps (ledger E28): the slot-point sort of the slope-jump form (a
   payload sort per balance slot, now one of the larger kernels), the per-column evaluation at the
   slot points (columns × slot points), the dense form of the plain families (unchanged).
 - Whether Float32 (`ESMDevice.F32`) is usable: to be tested empirically (user).
 - Hand-written fused kernels: feasibility noted in the device agent's report; not started.
 - `:cellpairu1`: compile with the stacked builders to be measured; still out of the run set.
-- Device form of the Langevin capacity step (replaces the Metropolis capacity pass and the
-  planned `kop` port and per-carrier scales).
+- Device form of the replica sampler: the CPU reference is `src/replicas.jl` (weather process
+  with explicit noise, `langevin_update`, `follow_capacities!`; architecture.md §2); it replaces
+  the Metropolis capacity pass and the planned `kop` port and per-carrier scales.
 - Re-measure the compile times on a quiet machine (239 s / 149 s were measured under load).
 
 **HPC (PIK cluster, [system/hpc.md](system/hpc.md); campaigns H0–H9 in the ledger):**
@@ -81,9 +81,23 @@ concrete next steps. Update it at the end of every work session.
   hellmann, project directory coen, Slurm account icone, julia/1.12.2, CUDA 13 → Reactant 13.1, ERA5 at
   /p/projects/climate_data_central/reanalysis/ERA5, clone at /p/projects/coen/esm/ESM-Sampling).
   Model files built on the cluster (`hpc/prepare_data.sh`, `hpc/jobs/data.sbatch`), no manual
-  copy. Next on the cluster: pull, prepare_env.sh, data.sbatch small, H0; then H2 with
-  `scripts/lp_reference.jl` (MGA alternatives still to be scripted).
+  copy. H0 done except the SIGTERM and snapshot-resume tests (a test bug, fixed in f89c77e):
+  rerun as H0b. Next on the cluster: the data jobs (2902883 small, 2902884 pypsa256), H0b, H10;
+  then H2 with `scripts/lp_reference.jl` (MGA alternatives still to be scripted).
 - Device driver checkpoint (after the device agent's work).
+
+**Data:**
+- The POWER model files carry the old wind calibration (scale 4, deep in cut-out, at 9 of 19
+  offwind nodes of `model.h5`, 49 of 64 of `model256.h5`; [system/data_sources.md](system/data_sources.md)
+  §2). Fixed in `prepare_data.py` (`smallest_root`, shared with the ERA5 build); a fixed
+  build of `model.h5` changes exactly the 10 affected columns; the fixed builds of all three
+  files (in the session scratchpad) have no scale at 4, every wind series rising with its wind
+  speed, and every generator within 0.005 of its target (`model256.h5` offwind mean 0.436,
+  ERA5 0.418). To do: replace the local files
+  once the running agents are done (they read `data/` through their worktree links), and
+  rebuild on the cluster
+  (hpc.md §8.3, D1 and D2). Then recheck the physical conclusions of the experiments (the
+  ledger's note), in particular offwind in E22–E25.
 
 **Tests and validation:**
 - Move-consistency suite `test/test_moves.jl` built and merged (2026-11-04); it replaces
@@ -93,6 +107,11 @@ concrete next steps. Update it at the end of every work session.
   to ~1e-5 nats between walk points on weather moves; `test_moves.jl` reports it as broken);
   an iterated secant made other lines worse. Needs a root placement that is exact where a
   quantity bends at its own root.
+- `test_moves.jl` is order-dependent: the families run in sequence on one shared state, and
+  entries placed before others changed their outcome (with the storage pairs early, `kopC`'s
+  `lo` check missed by 2.1e-12 against an absolute 1e-12, and `wz0`'s sweep accepted no move).
+  The storage pairs now run last; better: a fresh copy of the setup state per family, and
+  relative tolerances.
 - Exactness tests do not detect small invariance violations (missed the `kpeak` width and the
   storage walk bug): longer reference runs (ledger P6).
 - Sweeps to equilibrium against network size and resolution; 256-node ERA5 run (ledger P7, P8).
@@ -102,7 +121,8 @@ concrete next steps. Update it at the end of every work session.
 - `docs/reactant_design.md` mentions archived notes by bare file name in its text.
 - Worktrees to remove when done: `.claude/worktrees/gpu-timing` (GPU timing copy), and the
   locked worktrees of finished agents whose branches are merged (review 72e12c2, storage
-  09790f6; their outputs are copied to `results/review/` and `results/smix/`).
+  09790f6; their outputs are copied to `results/review/` and `results/smix/`; storage pairs
+  a2ce14d, whose raw runs are in its `results/sxmix/`).
 - Julia MCP sessions of agents restart at nice 0 with 16 threads unless every call passes the
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 
@@ -118,7 +138,7 @@ concrete next steps. Update it at the end of every work session.
   reduce-window over the whole axis); sort networks for short point lists.
 - Stacked term builders (one gather per field, one scatter per state array) for `tsoc`, `tpot`,
   the blocks and the cells; compile of the large families 5–15 s.
-- GPU, full run set at 40 × 6 h with 4 chains: about 24 → 8.7 s per sweep (ledger E27).
+- GPU, full run set at 40 × 6 h with 4 chains: about 24 → 8.7 s per sweep (ledger E28).
 - `soc_qadj` ported to the device (`soc_qadj4`), blocks compensate every moved unit (CPU
   4a5a4ea); main merged; `test_comp.jl` A, B, D, E pass against the new CPU reference.
 - `ESMDevice.F32`: the whole device program in Float32 (same sources, literals mapped).
@@ -126,6 +146,65 @@ concrete next steps. Update it at the end of every work session.
   directions per site and chain from the host; learned block profiles per season class; host
   adaptation in `run_device(…; adapt=true)` (`HostAdapt`: modes, shapes, β; uploads of the same
   shapes).
+
+### 2026-11-04 (time limits)
+
+- The time-limit signal (`--signal=B:USR1@900`) went to the templates' batch shell, which ran
+  `run.sh` as a child: no stop file, no snapshot. The templates now `exec` `run.sh`, which
+  records the signal (`TERM` or `USR1`). A short-lived automatic resubmission past the time
+  limit was removed again: jobs are never chained past a QOS limit (user); every job asks for a
+  `--time` covering its estimate (standby up to 7 days), H4 for 2 days (CLAUDE.md, hpc.md §5).
+  Simulated locally with Slurm stubs.
+  CLAUDE.md: the sampler described as weather replicas with a Langevin capacity step.
+
+### 2026-11-04 (ERA5 built; wind calibration fixed)
+
+- `model256_era5.h5` built on the cluster (job 2903048, 8 minutes, 2003, 2010, 2013, 2017;
+  every generator within 0.005 of its 2013 target); its comparison with `model256.h5` showed
+  POWER offwind anti-correlated with ERA5 (−0.76). Cause, checked node by node against the POWER
+  points: `calibrate` returned the scale 4 whenever the window mean at 4 lay below the target,
+  deep in cut-out (`model.h5`: 9 of 19 offwind, 1 of 40 onwind; `model76.h5`: 10 of 51, 2 of 76;
+  `model256.h5`: 49 of 64, 33 of 256; every such node correlates negatively with its wind
+  speed). `prepare_data.py` now takes the smallest root (`smallest_root`, also used by
+  `prepare_era5.py`, identical results there) and reports target misses; a rebuild of
+  `model.h5` changes exactly the 10 affected columns.
+- `hpc.md` §8: the run book (what runs in which order). Rule (user): campaigns are
+  self-contained, every input made on the cluster by versioned scripts, no files copied
+  between the machines (CLAUDE.md, hpc.md §6); H10 is redesigned accordingly.
+
+### 2026-11-04 (storage pairs across nodes)
+
+- `sxpair` (single instant, local-sweep family, `storage_xpair` 0.1) and `sxlong` (cyclic
+  interval in the long-range storage sweep, `storage_xlong` 8 per unit): a second storage unit at
+  the same or a partner node absorbs the end-step imbalance, flows re-routed on 1-hop ball
+  templates (`storage_xpair_hops`, `storage_xpair_ball`), leak and reservoir losses compensated
+  share-preservingly (`sx_qloss`), interval pairs in rounds of disjoint footprints
+  (`src/storage_cross.jl`); entries in `test_moves.jl`, checks in `test_local.jl`; E21 protocol
+  on chain 4 for 3000 sweeps (ledger E27); the long runs as campaign H10 (`campaigns/H10/`,
+  `scripts/mixing/opmix_hpc.jl`, smoke-tested locally through `hpc/run.sh` with a stop and a
+  resume).
+
+### 2026-11-04 (replica–Langevin sampler in src/)
+
+Commits d833b50, f7d58c3, b7dcc27, a2e4c84, 515b1a1 (branch of the replica agent).
+
+- `src/replicas.jl`: the replica–Langevin sampler as the system's CPU sampler (`run_replicas`,
+  `sampler = "replicas"`): the prior-reversible weather process with explicit-noise building
+  blocks (pCN in the innovations, regime windows, FFBS option), the capacity score, the Langevin
+  update in w with its reflections, the dispatch-following maps, the gate on a measured
+  relaxation indicator (bounded by `replica_gate_max`), a lag probe of relaxed replicas averaged
+  over `replica_probe_avg` probes, 8 replicas by default, the stress tilt (λ = 0 bitwise
+  untilted), snapshots and resume, records and `summary_replicas.txt`. `operation_sweep!`
+  factored out of `fine_local_step` (bitwise the same steps). Config keys `sampler`,
+  `replica_*`, `langevin_*`, `tilt_*`.
+- Tests: `test/test_replicas.jl` (weather-process identities, score against finite differences,
+  Langevin update, following maps, gate/weights/adaptation, one step at λ = 0 and 2, snapshots);
+  the `:wproc` entry of `test_moves.jl`.
+- Campaign H4 prepared (`campaigns/H4/`), smoke-tested through `hpc/run.sh` in a simulated
+  layout (preempted twice, resumed from the snapshot).
+- Docs: ensemble.md §4 rewritten for the sampled ensemble (the bias in a retired note,
+  archived to `archive/learned_bias.md`, entry in retired.md), sampler.md §11, architecture,
+  config, data, testing §6, moves/weather.md, roadmap §1.
 
 ### 2026-11-04 (deterministic move checks)
 
@@ -139,6 +218,19 @@ concrete next steps. Update it at the end of every work session.
 - Found and fixed: `kop` without the commitment walls of its compensators (`kop_uc`); the walk's
   storage mask with commitment walls before the storage secondaries (`MoveWS.soff`). Open: the
   event walk's root placement (up to ~1e-5 nats, sampler.md §3.3).
+
+### 2026-11-04 (HPC: first data jobs fixed)
+
+- `data.sbatch small` (job 2902805) failed in `prepare_data.py`: `write_completion` checked
+  `col in f["generators"]` before a fresh file had that group (only `--augment` worked). It
+  now checks the full path (`"generators/k0" in f`). The failed run's 18 KB partial
+  `model.h5` is overwritten on rerun.
+- `data.sbatch pypsa256` (job 2902812) failed in `uv pip install` of the PyPSA-Eur
+  requirements: the user's shell exports `UV_INDEX` (a PyTorch wheel index), Slurm passes it
+  into the job, and uv used that index first (`certifi==2026.10.23` not found). `hpc/env.sh`
+  now unsets the inherited uv/pip index variables.
+- Fixes ba6caee (merged a8673c8); resubmitted as jobs 2902883 (`small`) and 2902884
+  (`pypsa256`).
 
 ### 2026-11-04 (HPC: shared cache and state snapshots)
 

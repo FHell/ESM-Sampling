@@ -3,8 +3,8 @@
 Storage moves shift energy in time by changing a state-of-charge trajectory, with the
 dispatch at the storage unit's node compensating at every step whose power changes. This
 document covers the single-instant move `tsoc` and its learned variant, the storage
-multiscale plateau and shape moves over dyadic blocks, and the long-range plateaus `slong` and
-the level move `slevel`. All need the state-of-charge storage form (`storage = "soc"`). The
+multiscale plateau and shape moves over dyadic blocks, the long-range plateaus `slong` and
+the level move `slevel`, and the storage pairs across nodes `sxpair` and `sxlong`. All need the state-of-charge storage form (`storage = "soc"`). The
 single-instant storage–generator pair `spair` is in [pairs.md](pairs.md), the learned shapes in
 [learned.md](learned.md).
 
@@ -116,9 +116,86 @@ On `chains40` the sweep adds 11–16 % to an operation sweep and brings the inte
 autocorrelation times of the hydro level and totals from 60–90 sweeps to 1–3 and of the H₂
 totals and patterns from 20–90 to 5–15 (ledger E21).
 
-> **Status: missing.** The hydro seasonal shape and the large PHS units still relax over about
-> 100 sweeps (ledger E21): the end steps of `slong` stop where the node's own dispatchable
-> units reach their capacity. Carrying the change to a neighbour through the `xlocc`
-> templates gave smaller steps and was not kept.
+> **Status: missing.** The seasonal shape of the large hydro units and the PHS units still
+> relaxes over 100–300 sweeps, and opex drifts over 3000 sweeps (ledger E21, E27): the end steps
+> of `slong` stop where a reservoir's discharge reaches zero or the node's own dispatchable units
+> reach a clamp. The storage pairs below halve the per-unit times at equal CPU but leave the
+> zero-discharge wall, which is intrinsic to a two-step move. Carrying the change to a
+> neighbour's generators through the `xlocc` templates gave smaller steps and was not kept.
+
+**Device.** Missing.
+
+## `sxpair` and `sxlong`: storage pairs across nodes
+
+"Store more here, less there, with the flows compensating": a second storage unit, not a
+generator, absorbs the end-step imbalance (`src/storage_cross.jl`).
+
+**Direction.** Unit A's state of charge rises by $t$ (a fraction of $E_A = k_A h_A$) and unit
+B's falls by $\rho t$, $\rho = E_A/E_B$, so the two shift the same nominal energy. At every step
+whose power changes the nominal injection changes by $+c\,t$ at A and $-c\,t$ at B,
+$c = \pm\kappa_A$ ($\kappa_A = E_A/\Delta t$).
+
+- **`sxpair`** (single instant): the instants $\tau$, steps $\tau-1$ ($c = -\kappa_A$) and
+  $\tau$ ($c = +\kappa_A$); a family of the local sweep (linked two-step move).
+- **`sxlong`** (interval): the cyclic instants $a+1,\dots,a+L$, $1\le L\le T-1$, end steps $a$
+  ($c=-\kappa_A$) and $b = a+L$ ($c = +\kappa_A$); built as `slong`, with the interior steps of both
+  units as compact terms (exactly zero cost change while their instants stay in the box).
+
+**Partners and selection.** Only units with at least `storage_long_hours` hours of storage
+(`LM.sxunits`; κ ≥ κ_min). A is uniform among them (`sxpair`) or every one of them gets
+`storage_xlong` interval moves per sweep (`sxlong`, $a$ uniform on $1..T$, $L$ uniform on
+$1..T-1$). B is another such unit at A's node or at a partner node of A's node (within
+`storage_xpair_hops` hops, the `xloc` partner sets), chosen with probability
+$\propto \min(k_A, k_B)$ (`sx_partner`): the end steps stop at the power headroom of the weaker
+unit, so a pair of a 3 GW reservoir with a 20 MW one moves little. Any carriers pair (hydro with
+hydro, PHS or H₂). The selection uses only $k$, the network and fixed probabilities.
+
+**Compensation.** At each power-changing step:
+
+- **Flows.** For a cross-node pair, the angle change $c\,\Delta\theta$ of the pair's ball
+  template (`xloc_directions` with `storage_xpair_hops` and `storage_xpair_ball`, built once per
+  level: `LM.sxpart`, `sxnod`, `sxval`, `sxlkn`, `sxlkg`) carries the nominal change from B to A;
+  every node of the ball keeps its residual. The leak into the first layer outside the ball is
+  compensated share-preservingly at every leak node (`prorata!`), as in `xlocc`. With a 1-hop
+  ball about a quarter of the dipole leaks (median at 40 nodes; half with the pair only, a tenth
+  with 2 hops).
+- **Losses.** The actual injection of a unit differs from its nominal one by its efficiencies.
+  For a unit that only discharges (reservoir hydro, $\eta_{\rm in} = 0$) the expected loss is the
+  fixed share $\lambda = 1-\eta_{\rm out}$ of the nominal change; the dispatch at the unit's node
+  follows $\lambda c$ (A) and $-\lambda c$ (B) share-preservingly, with the requirement
+  $\tilde Q = Q + I - (1-\lambda)N$ ($I$, $N$ the unit's actual and nominal injection with the
+  unclamped state of charge; `sx_qloss`, the $\lambda$-form of `soc_qadj`), which changes by
+  exactly $\lambda c\,t$. In the discharge regime the residuals at A's and B's nodes then do not
+  change. Units that can charge have $\lambda = 0$: half of their steps charge and half
+  discharge, so no fixed share fits; their losses go into the residuals of their nodes. Without
+  the loss compensation the 10 % hydro loss went into shed at B's node and halved the hydro
+  steps (E27). A same-node pair has no flows and one loss compensation with $(\lambda_A -
+  \lambda_B)c$.
+
+In the adaptive kernel half of the long-range sweeps use the learned rule for the leak and
+loss compensations instead. **Jacobian.** The product of the pro-rata factors of all leak and
+loss compensations at both steps (independence Metropolis step). The curve through $s(t)$ is the
+curve through $s$, also across the compensation kinks (`test/test_local.jl`).
+
+**Scheduling.** `sxpair` runs with the steps of one parity class in parallel (it touches two
+steps). An `sxlong` move touches every step of its two units, so the interval pairs run in
+rounds of moves with disjoint footprints (the balance cells of the ball, the other ends of its
+lines and the leak nodes, `LM.sxfoot`; first fit in the random order of the moves,
+`sx_rounds`), after the `slong` moves of the long-range sweep; the coefficient changes are
+summed per thread (the node values of different cells share coarse Haar coefficients).
+
+**Cost.** `sxpair`: two steps with the ball's lines and the leak nodes. `sxlong`: as `slong`
+for two units, about 0.1 ms per move at 40 nodes daily. At the defaults (`storage_xpair` 0.1 on
+the plain-family scale, about 60 moves per unit and sweep; `storage_xlong` 8) the two add about
+6 % and 9 % to an operation sweep of `chains40`.
+
+**Use.** On `chains40` from the heuristic E15 end state (ledger E27; 3000 sweeps, equal CPU
+against the E21 kernel), the seasonal shape Q1 − Q3 per hydro unit relaxes in a median of 117
+instead of 205 sweeps with half the drift, the PHS units in 150 instead of 288; H₂, batteries,
+the scores and opex do not change (opex still drifts, τ ≈ 250). A hydro–hydro interval pair
+moves 950 MWh per draw against 625 for `slong` and stops at the zero discharge of one of the
+two reservoirs at an end step (57 % of the walk sides), at the nuclear or run-of-river units of
+the loss compensation (17 %) or at leak-node generators (12 %); line limits do not bind. The
+longer runs, also from the low start, are campaign H10.
 
 **Device.** Missing.

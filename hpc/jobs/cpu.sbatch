@@ -3,7 +3,8 @@
 #   sbatch [-c <cores>] [--mem-per-cpu=<MB>] hpc/jobs/cpu.sbatch <campaign> <config> [cpu|script <path> args...]
 # Runs in standby on a shared node and is requeued automatically when preempted; it resumes from
 # the latest state snapshot. Threads follow the allocation (hpc/run.sh): Julia threads = cores,
-# BLAS/OpenMP 1. RESUBMIT=<n> sbatch ... chains continuations past the time limit.
+# BLAS/OpenMP 1. --time from the run's estimate (standby allows up to 7 days); the default
+# 24 h is for short runs.
 #SBATCH --account=icone
 #SBATCH --partition=priority
 #SBATCH --qos=standby
@@ -17,4 +18,4 @@
 #SBATCH --chdir=/p/tmp/hellmann/esm
 #SBATCH --output=/p/tmp/hellmann/esm/logs/%x-%j.out
 ESM_PROJ=${ESM_PROJ:-/p/projects/coen/esm}
-bash "$ESM_PROJ/campaigns/$1/code/hpc/run.sh" "$@"
+exec bash "$ESM_PROJ/campaigns/$1/code/hpc/run.sh" "$@"

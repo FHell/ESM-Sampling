@@ -51,14 +51,20 @@ extrapolated with shear exponent 1/7; cut-in 3, rated 12, cut-out 25 m/s), smoot
 represent the spread of a fleet. Solar: capacity factor $\mathrm{clip}(s\cdot\mathrm{GHI}/1000,
 0, 1)$. One scale $s$ per generator is calibrated so that the mean capacity factor over the
 network's snapshot window equals the mean PyPSA-Eur `p_max_pu` of that generator (weighted by
-potential). Every year has 8760 hours; 29 February is dropped.
+potential). The window mean is not monotone in $s$ for wind (cut-out at 25 m/s), so the scale
+is the smallest root on $[0.2, 4]$ (`smallest_root`: a grid of 39 points scanned upwards to
+the first sign change, then `brentq` in that cell); without a root, the grid point of the
+largest window mean, and the build reports how many generators miss their target by more than
+0.005. Every year has 8760 hours; 29 February is dropped.
 
-> **Status: deviation.** `calibrate` brackets the scale on $[0.2, 4]$ and returns $s = 4$
-> when the target exceeds the capacity factor at $s = 4$. The wind capacity factor is not
-> monotone in $s$ (cut-out), so nodes whose target needs a large scale end deep in the
-> cut-out regime and miss their target. In `model256.h5` the 2013 offwind mean is 0.282 against
-> a target of 0.434. The ERA5 processing uses a corrected calibration (§4); the POWER files are
-> not rebuilt with it.
+> **Status: deviation.** The model files built so far, locally and on the cluster, predate the
+> smallest-root calibration: the scale was bracketed on $[0.2, 4]$ and set to 4 whenever the
+> window mean at 4 lay below the target, which puts the node deep in the cut-out regime, where
+> its output falls as the wind rises (correlation with the wind speed about −0.6). Affected:
+> `model.h5` 9 of 19 offwind and 1 of 40 onwind nodes, `model76.h5` 10 of 51 and 2 of 76,
+> `model256.h5` 49 of 64 and 33 of 256 (2013 offwind mean 0.282 against a target of 0.434).
+> A rebuild changes only these wind columns. The files need rebuilding ([hpc.md](hpc.md)
+> §8.3, D1 and D2); `model256_era5.h5` is not affected (its weather is ERA5's).
 
 ## 3. Load
 
@@ -101,8 +107,8 @@ fresh extraction of `composed_2050.nc`. Per bus:
   $\cos$ latitude, remapped conservatively to the 0.25° grid; offwind = ac + dc + floating);
   wind from the 10 m speed $|u_{10},v_{10}|$ extrapolated to 100 m with exponent 1/7 and the same
   power curve; PV from $\mathrm{GHI} = \mathrm{ssrd}/3600$ with the same model;
-- **calibration**: the scale per generator scanned upwards on a grid over $[0.2,4]$ and the
-  smallest root taken (`calibrated_series`), so the 2013 mean equals the PyPSA-Eur target;
+- **calibration**: the scale per generator as for POWER (§2, `smallest_root`), so the 2013 mean
+  equals the PyPSA-Eur target;
 - **temperature** for the load model: the population-weighted mean over the cells whose centre
   lies in the bus's onshore region (at least one cell per region);
 - **time**: ssrd accumulates over the hour ending at its time stamp and is shifted to the hour's
@@ -111,11 +117,28 @@ fresh extraction of `composed_2050.nc`. Per bus:
 The calibrated scales are stored in `weather_calibration/<carrier>_scale` and the source in the
 attributes `weather_source` and `weather_base`.
 
-> **Status: missing.** The ERA5 fetch has not completed: the cut-outs hold January to August or
-> September 2013 for the four fields. `model256_era5.h5` is not built, the comparison of ERA5
-> with NASA POWER (capacity factors, load, extremes per node) has not been made, and
-> `configs/full256_era5.toml` has not been run. Faster retrieval (cut-outs made on the cluster)
-> would need access on the cluster side.
+**Scope.** The box covers the 10-country region of the PyPSA-Eur build, and the processing maps
+the cells onto its 256 buses, so ERA5 exists for `model256.h5` only (`model256_era5.h5`); the
+40- and 76-node files keep NASA POWER. Larger networks need a new build and a wider box.
+
+**On the cluster** the cut-outs are made on a compute node from the ERA5 folder in place
+(`hpc/prepare_data.sh era5 [years]`, `hpc/jobs/era5.sbatch`, after the `pypsa256` build;
+[hpc.md](hpc.md) §4, §8.3), with the same `era5_subset.py` and `prepare_era5.py`; the four
+default years take about 8 minutes. `prepare_era5.py` also writes
+`model256_era5_comparison.csv`, ERA5 against the base file per carrier and node.
+
+**The built file** (cluster, 2003, 2010, 2013, 2017; 117 MB): no NaN in the cut-outs, every
+area weight inside the box, population cells in every region; every scale away from the bounds
+and every generator within 0.005 of its 2013 target (median scales onwind 1.29, offwind 1.02,
+solar 0.96). Against the NASA POWER file `model256.h5`: solar (hourly correlation 0.995, the
+same mean) and load (0.999) agree; onwind correlates at 0.90 and varies more (aggregate
+coefficient of variation 0.66 against 0.51; 10 m wind extrapolated to 100 m); offwind differs
+(mean 0.418 against 0.285, hourly correlation −0.76 in aggregate), which is the calibration
+defect of the POWER file (§2), not ERA5.
+
+> **Status: missing.** The comparison against POWER files rebuilt with the corrected
+> calibration, and of extremes per node, has not been made; `configs/full256_era5.toml` has not
+> been run.
 
 ## 5. Provenance of the model files
 
@@ -124,7 +147,7 @@ attributes `weather_source` and `weather_base`.
 | `model.h5` | example network, 10 countries | NASA POWER, calibrated on 1–21 May 2013 | 2001–2022 | `download_data.sh`, `prepare_data.py`, `--augment` |
 | `model76.h5` | example network, 27 countries | NASA POWER, as above | 2001–2022 | `prepare_data.py --countries AT,BE,BG,CH,CZ,DE,DK,EE,ES,FI,FR,GR,HR,HU,IE,IT,LT,LU,LV,NL,NO,PL,PT,RO,SE,SI,SK` (the example network's 34 countries without AL, BA, GB, ME, MK, RS and the pseudo-country EU; the list is the file's `countries` attribute) |
 | `model256.h5` | PyPSA-Eur build `esm256` | NASA POWER, calibrated on 2013 | 2001–2022 | `prepare_data.py --network composed_2050.nc` |
-| `model256_era5.h5` (not built) | as `model256.h5` | ERA5, calibrated on 2013 | the fetched years | locally `fetch_era5.sh` (copies over the sftp mount), `prepare_era5.py`; on the cluster `hpc/prepare_data.sh era5`, reading the ERA5 folder in place |
+| `model256_era5.h5` | as `model256.h5` | ERA5, calibrated on 2013 | the years of the build (on the cluster 2003, 2010, 2013, 2017) | locally `fetch_era5.sh` (copies over the sftp mount), `prepare_era5.py`; on the cluster `hpc/prepare_data.sh era5`, reading the ERA5 folder in place |
 
 On the cluster the same builds are scripted (`hpc/prepare_data.sh`, [hpc.md](hpc.md) §4), with
 the PyPSA-Eur environment recreated from `configs/pypsa-eur/requirements.txt` (frozen from the

@@ -19,5 +19,5 @@ export JULIA_PKG_OFFLINE=true
 cd "$code"
 echo "== julia $(julia --startup-file=no -e 'print(VERSION)') on $(hostname)"
 julia --project=. -t 8 -e 'using ESMSampling; println("ESMSampling loads offline")'
-EXACT_SKIP=1 julia --project=. -t 8 test/runtests.jl
+EXACT_SKIP=1 julia --project=. -t 8 test/runtests.jl || { echo "H0: test suite failed; smoke run skipped" >&2; exit 1; }
 bash "$code/hpc/run.sh" "$1" hpc/configs/h0_smoke.toml cpu

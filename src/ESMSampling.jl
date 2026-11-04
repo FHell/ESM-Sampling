@@ -37,6 +37,7 @@ include("weather_fine.jl")
 include("weather_blocks.jl")
 include("flowmoves.jl")
 include("storage_long.jl")
+include("storage_cross.jl")
 include("adaptive.jl")
 include("kop.jl")
 include("sampler.jl")
@@ -45,6 +46,7 @@ include("convergence.jl")
 include("run.jl")
 include("checkpoint.jl")
 include("chains.jl")
+include("replicas.jl")
 
 export Config, load_config, run, setup
 

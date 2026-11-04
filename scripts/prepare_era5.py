@@ -51,7 +51,6 @@ import pandas as pd
 import pypsa
 import scipy.sparse as sp
 import xarray as xr
-from scipy.optimize import brentq
 
 warnings.filterwarnings("ignore")
 
@@ -202,29 +201,11 @@ def solar_cf(ghi, s):
 
 
 def calibrated_series(conv, X, w, target, window):
-    """Weighted mean over cells of conv(X[:, c], s), s calibrated on the window.
-
-    The window mean is not monotone in s for wind (cut-out at 25 m/s), so the
-    smallest root on [0.2, 4] is bracketed on a grid first; prepare_data.calibrate
-    tests f(4) < 0 first and then returns s = 4, deep in the cut-out regime, for
-    nodes whose target needs a large scale (most POWER offwind nodes). Without a
-    root the grid maximum of the window mean is used.
-    """
+    """Weighted mean over cells of conv(X[:, c], s), s calibrated on the window: the smallest
+    root on [0.2, 4] (prepare_data.smallest_root; the window mean is not monotone in s for
+    wind, cut-out at 25 m/s); without a root, the grid maximum of the window mean."""
     Xw = X[window]
-    f = lambda s: (conv(Xw, s) @ w).mean() - target
-    grid = np.linspace(0.2, 4.0, 39)
-    fg = []
-    for g in grid:                      # scan upwards to the first sign change
-        fg.append(f(g))
-        if fg[-1] >= 0:
-            break
-    j = len(fg) - 1
-    if fg[j] < 0:
-        s = grid[int(np.argmax(fg))]
-    elif j == 0:
-        s = grid[0]
-    else:
-        s = brentq(f, grid[j - 1], grid[j], xtol=1e-4)
+    s = pdat.smallest_root(lambda s: (conv(Xw, s) @ w).mean() - target, xtol=1e-4)
     return (conv(X, s) @ w).astype(np.float32), s
 
 

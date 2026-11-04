@@ -1,5 +1,11 @@
 # Replica Langevin sampler: prototype and measurements
 
+> The sampler is now in `src/replicas.jl` (`sampler = "replicas"`), described in
+> [system/sampler.md](system/sampler.md) §11 and [system/ensemble.md](system/ensemble.md) §4,
+> with the changes of §6 below (a relaxation gate, a probe of relaxed replicas averaged over
+> several probes, 8 replicas, regime windows of B = 60); this note keeps the prototype and its
+> measurements.
+
 Development note (2026-11-04) on the prototype of the sampler that replaces the learned bias:
 M weather replicas share the capacities; the weather of every replica follows a
 prior-reversible process; the operation of every replica follows its weather and the
@@ -140,6 +146,13 @@ offwind 0.2 GW higher than at λ = 0, capex 0.32e9 €/a higher. The direction i
 the small number of active replicas and the short run.
 
 ## 5. Run on chains40 (E24)
+
+> **Data caveat.** These runs (and E22–E25 generally) used a `model.h5` in which 9 of the 19
+> offwind nodes and 1 onwind node were calibrated into turbine cut-out (they produce less as the
+> wind rises; fixed in [system/data_sources.md](system/data_sources.md) §2, files to be
+> rebuilt). The statements about the sampler (prior invariance, lag, relaxation, cost) stand;
+> which carriers meet from far starts, offwind in particular, is to be rechecked on the rebuilt
+> data.
 
 Setup: `configs/chains40.toml` without bias (40 nodes daily, physical measure); starts at the
 heuristic capacities ×0.5 (low) and ×2 (high), 3.3–3.97× apart per carrier; M = 4 replicas

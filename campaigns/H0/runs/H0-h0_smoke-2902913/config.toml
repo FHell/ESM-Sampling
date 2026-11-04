@@ -1,0 +1,14 @@
+init = "heuristic"
+nsamples = 4
+mlda_warmup = 4
+data = "data/processed/model.h5"
+out = "/p/tmp/hellmann/esm/runs/H0/H0-h0_smoke-2902913/out.h5"
+cache_dir = "/p/tmp/hellmann/esm/cache"
+warmup0 = 5
+levels = [[10, 24], [40, 24]]
+use_bias = false
+basis = "haar"
+cache_mirror = "/p/projects/coen/esm/cache"
+nchains = 2
+stop_file = "/p/tmp/hellmann/esm/runs/H0/H0-h0_smoke-2902913/STOP"
+checkpoint = "/p/tmp/hellmann/esm/runs/H0/H0-h0_smoke-2902913/snapshot.h5"
