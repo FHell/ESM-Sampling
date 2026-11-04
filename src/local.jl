@@ -2345,42 +2345,14 @@ function fine_local_step(rng, P::Problem, s::State, S)
     s = copy(s)
     BC = BiasCache(P, s)
     kopmoves! = x -> K.kop ? kop_sweep!(rng, P, LM, x; BC=BC)[1] : x      # capacity with its operation (kop.jl)
-    if K.mode in (:flow, :adaptive) && P.E.flow !== nothing && LM.complete[P.E.fθ]   # flow design (docs/archive/flow_hierarchy.md)
-        FF = lock(() -> get!(() -> FlowFrames(P, s.ℓ, s), K.frames, s.ℓ), K.lk)
-        isempty(K.pools) && append!(K.pools, [BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
-        sweep! = if K.mode == :adaptive
-            AM = lock(() -> get!(() -> AdaptiveModes(P, s.ℓ), K.adapt, s.ℓ), K.lk)
-            x -> adaptive_sweep!(rng, P, LM, FF, AM, x; wsets=K.wsets, pools=K.pools, extra=K.extra, slong=K.slong)[1]
-        else
-            x -> flow_sweep!(rng, P, LM, FF, x; wsets=K.wsets, pools=K.pools, extra=K.extra, slong=K.slong)[1]
-        end
-        AMk = K.mode == :adaptive ? get(K.adapt, s.ℓ, nothing) : nothing
-        kmoves! = x -> kopmoves!(kpeak_sweep!(rng, P, LM, kscale_sweep!(rng, P, LM, x; BC=BC)[1]; AM=AMk, BC=BC)[1])
-        if rand(rng) < 0.5
-            s = sweep!(s)
-            s = kmoves!(s)
-        else
-            s = kmoves!(s)
-            s = sweep!(s)
-        end
-        return maybe_weather!(rng, P, K, LM, s; BC=BC)
+    AMk = K.mode == :adaptive ? get(K.adapt, s.ℓ, nothing) : nothing
+    op! = x -> operation_sweep!(rng, P, K, LM, x)
+    flow = K.mode in (:flow, :adaptive) && P.E.flow !== nothing && LM.complete[P.E.fθ]
+    if flow && K.mode == :adaptive && AMk === nothing        # the adaptive modes exist before the capacity moves read them
+        AMk = lock(() -> get!(() -> AdaptiveModes(P, s.ℓ), K.adapt, s.ℓ), K.lk)
     end
-    kmoves! = x -> kopmoves!(kpeak_sweep!(rng, P, LM, kscale_sweep!(rng, P, LM, x; BC=BC)[1]; BC=BC)[1])
-    # the plain sweep, then (SoC form, complete level) with probability 1/2 the storage multiscale
-    # sweep as in the flow kernel: without it the seasonal state of charge does not relax
-    # (docs/mixing_diagnosis.md §6.2); it needs no flow basis; then the long-range storage sweep
-    function op!(x)
-        x, _ = local_sweep!(rng, P, LM, x; wsets=K.wsets, extra=K.extra)
-        if rand(rng) < 0.5 && LM.complete[P.E.fθ]
-            isempty(K.pools) && append!(K.pools, [BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
-            x, _ = storage_ms_sweep!(rng, P, LM, x; pools=K.pools)
-        end
-        if rand(rng) < K.slong.p && LM.complete[P.E.fθ]
-            isempty(K.pools) && append!(K.pools, [BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
-            x, _ = storage_long_sweep!(rng, P, LM, x; pools=K.pools, nmoves=K.slong.nmoves, hmin=K.slong.hmin)
-        end
-        return x
-    end
+    kmoves! = flow ? (x -> kopmoves!(kpeak_sweep!(rng, P, LM, kscale_sweep!(rng, P, LM, x; BC=BC)[1]; AM=AMk, BC=BC)[1])) :
+              (x -> kopmoves!(kpeak_sweep!(rng, P, LM, kscale_sweep!(rng, P, LM, x; BC=BC)[1]; BC=BC)[1]))
     if rand(rng) < 0.5
         s = op!(s)
         s = kmoves!(s)
@@ -2389,6 +2361,40 @@ function fine_local_step(rng, P::Problem, s::State, S)
         s = op!(s)
     end
     return maybe_weather!(rng, P, K, LM, s; BC=BC)
+end
+
+"""
+    operation_sweep!(rng, P, K, LM, s) -> s
+
+The operation sweep of the fine kernel `K` at fixed (k, x), as in `fine_local_step`: with the
+flow or adaptive kernel (flow basis, complete level) `flow_sweep!` or `adaptive_sweep!` (which
+include the storage sweeps); otherwise `local_sweep!`, then (complete level) with probability
+1/2 the storage multiscale sweep and with probability `storage_long` the long-range storage
+sweep. Also the operation step of every replica of the replica sampler (replicas.jl).
+"""
+function operation_sweep!(rng, P::Problem, K::LocalKernel, LM::LocalModel, x::State)
+    if K.mode in (:flow, :adaptive) && P.E.flow !== nothing && LM.complete[P.E.fθ]   # flow design (docs/archive/flow_hierarchy.md)
+        FF = lock(() -> get!(() -> FlowFrames(P, x.ℓ, x), K.frames, x.ℓ), K.lk)
+        isempty(K.pools) && append!(K.pools, [BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
+        if K.mode == :adaptive
+            AM = lock(() -> get!(() -> AdaptiveModes(P, x.ℓ), K.adapt, x.ℓ), K.lk)
+            return adaptive_sweep!(rng, P, LM, FF, AM, x; wsets=K.wsets, pools=K.pools, extra=K.extra, slong=K.slong)[1]
+        end
+        return flow_sweep!(rng, P, LM, FF, x; wsets=K.wsets, pools=K.pools, extra=K.extra, slong=K.slong)[1]
+    end
+    # the plain sweep, then (SoC form, complete level) with probability 1/2 the storage multiscale
+    # sweep as in the flow kernel: without it the seasonal state of charge does not relax
+    # (docs/mixing_diagnosis.md §6.2); it needs no flow basis; then the long-range storage sweep
+    x, _ = local_sweep!(rng, P, LM, x; wsets=K.wsets, extra=K.extra)
+    if rand(rng) < 0.5 && LM.complete[P.E.fθ]
+        isempty(K.pools) && append!(K.pools, [BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
+        x, _ = storage_ms_sweep!(rng, P, LM, x; pools=K.pools)
+    end
+    if rand(rng) < K.slong.p && LM.complete[P.E.fθ]
+        isempty(K.pools) && append!(K.pools, [BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
+        x, _ = storage_long_sweep!(rng, P, LM, x; pools=K.pools, nmoves=K.slong.nmoves, hmin=K.slong.hmin)
+    end
+    return x
 end
 
 """

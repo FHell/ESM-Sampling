@@ -45,6 +45,7 @@ include("convergence.jl")
 include("run.jl")
 include("checkpoint.jl")
 include("chains.jl")
+include("replicas.jl")
 
 export Config, load_config, run, setup
 

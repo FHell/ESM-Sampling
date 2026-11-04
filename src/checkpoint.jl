@@ -147,6 +147,10 @@ enabled(C::Checkpointer) = !isempty(C.path)
 function ckpt_where(phase::Symbol, it::Int, cfg::Config)
     phase == :level0 && return "level-0 warmup, iteration $it/$(cfg.warmup0)"
     nw, np = cfg.mlda_warmup, cfg.nsamples
+    if phase == :replicas
+        it == 0 && return "replicas initialised, before the first step"
+        return it <= nw ? "replica warmup, step $it/$nw" : "replica production, step $(it - nw)/$np"
+    end
     it == 0 && return "after the level-0 warmup, before the first fine sweep"
     it <= nw && return "fine warmup, sweep $it/$nw"
     return "production, sweep $(it - nw)/$np"
@@ -216,6 +220,7 @@ the state vectors against the configuration and the problem.
 function read_snapshot(path::String, cfg::Config, P::Problem)
     (isempty(path) || !isfile(path)) && return nothing
     h5open(path, "r") do f
+        haskey(f, "sampler") && error("snapshot $path was written by the $(read(f["sampler"])) driver, not by run_chains")
         v = read(f["version"])
         v == SNAPSHOT_VERSION || error("snapshot $path: format version $v, the code reads $SNAPSHOT_VERSION")
         lv = read(f["config/levels"])
@@ -252,15 +257,17 @@ end
 At a sweep boundary (`it` sweeps of `phase` done): if the stop file exists, write a
 snapshot, remove the stop file and throw `CheckpointStop`; else write one if `force` or
 `checkpoint_minutes` have passed since the last write. `make_data()` builds the snapshot
-data (called only when one is written).
+data (called only when one is written; it has the field `states`), `writer` writes it
+(`write_snapshot`; the replica driver: `write_replica_snapshot`).
 """
-function boundary!(C::Checkpointer, cfg::Config, P::Problem, phase::Symbol, it::Int, make_data; force::Bool=false)
+function boundary!(C::Checkpointer, cfg::Config, P::Problem, phase::Symbol, it::Int, make_data; force::Bool=false,
+                   writer=write_snapshot)
     enabled(C) || return nothing
     C.hook === nothing || C.hook(phase, it)
     stop = !isempty(C.stop_file) && isfile(C.stop_file)
     if stop || force || time() - C.last >= C.interval
         data = make_data()
-        write_snapshot(C, cfg, P, (; phase, it, data...))
+        writer(C, cfg, P, (; phase, it, data...))
         if stop
             rm(C.stop_file; force=true)    # consumed: the resumed run does not stop at once
             throw(CheckpointStop(C.path, ckpt_where(phase, it, cfg), [copy(x) for x in data.states]))
