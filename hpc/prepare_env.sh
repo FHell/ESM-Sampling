@@ -57,4 +57,5 @@ sha() { [ -f "$1" ] && sha256sum "$1" | cut -c1-16 || echo "none"; }
     echo
 } >> "$ESM_PROJ/env/ENVIRONMENT.toml"
 echo "prepare_env: done for $code ($(git rev-parse --short HEAD)); recorded in $ESM_PROJ/env/ENVIRONMENT.toml"
-echo "Next: campaign H0 (offline check on a CPU and a GPU node), hpc/jobs/h0_check.sbatch"
+echo "Next: model files (sbatch hpc/jobs/data.sbatch small), then campaign H0: bash hpc/new_campaign.sh H0;"
+echo "      sbatch hpc/jobs/h0_cpu.sbatch H0; sbatch hpc/jobs/h0_gpu.sbatch H0 (logs in $ESM_SCRATCH/logs/)"
