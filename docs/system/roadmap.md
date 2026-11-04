@@ -7,17 +7,16 @@ when done, and the affected document is updated in the same change.
 
 ## 1. Correctness of the ensemble
 
-- **Bias on the full state.** $\hat b$ depends only on the level-0 weather and capacities, so
-  the weather details and the capacity details beyond level 0 are tilted as at $\alpha = 0$.
-  Decide whether $\hat g$ and $\hat h$ need finer features
-  ([ensemble.md](ensemble.md) §4.4).
-- **Capacity scores under the physical measure.** The $\hat h$ regression omits
-  $\partial_k\log J(k)$ when `measure = "physical"` ([ensemble.md](ensemble.md) §4.4).
 - **Bias stabilization at $\alpha = 1$.** A long enough level-0 warmup before fine-level
-  refits, damping or a trust region for refits (limit the change of $\hat b$ at recent
-  states), regularization of $\hat h$'s slopes. A refit can currently move $\hat b$ by many
-  nats at capacities far from the fit, and capacities can run away after it
-  ([sampler.md](sampler.md) §7.1).
+  refits (`complete40.toml` learns nothing at level 0: `warmup0` < `bias_start`), dropping the
+  cold-start observations from the sums, damping or a trust region for refits ($\hat b$ is
+  linear in $(\theta, a, c)$, so a step toward the new fit can be scaled in closed form to
+  bound its change at recent states, keeping the monotone constraints), and a form of $\hat h$
+  that does not turn over inside the capacity box (no interior maximum of the quadratic, or a
+  saturating form); the linear coefficients of $u_1$ and $u_2$ need a constraint (for instance
+  that firm capacity has no negative value in surplus, $\theta_{u_2}\le0$) because the weather
+  scores do not separate them. A refit currently moves $\hat b$ by $10^7$–$10^8$ nats at the visited states of
+  a cold start, and storage runs to its bound after it ([sampler.md](sampler.md) §7.1).
 - **$\alpha = 1$ end to end.** The weather marginal against exact draws, before and after the
   post-correction.
 - **Exactness test margins.** The capacity part of `test/test_exact.jl` sits near

@@ -24,7 +24,10 @@ $u' = u+\sigma z$ (`mh = true`) mirrors the device kernel.
 
 **Selection.** Every investable unit whose capacity and utilization fields are complete, once
 per pass, in random order. **Cost.** $O(T)$ terms of one unit plus its node's balance terms;
-the bias change at $\alpha = 1$ costs an evaluation of $\hat b$.
+the bias change at $\alpha = 1$ comes from the incremental bias cache
+([../sampler.md](../sampler.md) §6): two table lookups per step and per sample step for a
+non-gas generator (one for gas and storage, whose change shifts $u_2$ only), skipping steps
+without availability.
 
 **Use.** At $\alpha = 0$ and for renewables it moves capacities freely. At $\alpha = 1$ a
 dispatchable capacity is pinned to its peak dispatch within about $1/(\beta_v c)$ (below 1 MW at
@@ -56,8 +59,9 @@ $\propto\pi(g_\delta s)\,(k/(k+\delta))^{T}$ ($2T$ with unit commitment), includ
 operating cost, the bias and the measure term; by slice sampling with width $0.1k$, truncated
 to $k+\delta\ge\kappa_{\min}$. A Metropolis form with a fixed per-unit scale mirrors the device.
 
-**Cost.** $O(T)$ per unit (plus the compensating units in the learned variant) and a bias
-evaluation at $\alpha = 1$. **Use.** The capacity move of $\alpha = 1$; gas capacity moves by
+**Cost.** $O(T)$ per unit (plus the compensating units in the learned variant) and, at
+$\alpha = 1$, one table lookup per step and sample step for the bias change (gas shifts $u_2$
+only). **Use.** The capacity move of $\alpha = 1$; gas capacity moves by
 1–3 GW per sweep at 40 nodes.
 
 **Device.** Metropolis form (`kpeak_mh_loop`), absorb variant only, per-unit scale

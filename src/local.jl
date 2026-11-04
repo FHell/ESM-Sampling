@@ -2023,19 +2023,21 @@ function slice_scalar(rng, lf, u0::Float64, w::Float64, lo::Float64; maxsteps=12
 end
 
 """
-    kscale_sweep!(rng, P, LM, s; LC, κmin, w) -> (s, nmoved)
+    kscale_sweep!(rng, P, LM, s; LC, BC, κmin, w) -> (s, nmoved)
 
 One scaling move per investable unit (random order) at a spatially complete
 level, with the level's weather fixed. Needs the k fields and the units' v
-fields complete at the level.
+fields complete at the level. At α = 1 the bias change comes from the incremental
+bias cache `BC` (built from `s` if not given), which follows the committed moves.
 """
-function kscale_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, κmin::Float64=1.0, w::Float64=0.3,
+function kscale_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, BC=nothing, κmin::Float64=1.0, w::Float64=0.3,
                        mh::Bool=false, σ::Float64=0.3, nprop::Int=1, order::Symbol=:shuffle, kinds::Symbol=:all)
     E = P.E
     ℓ = LM.ℓ
     lk, lv = P.lk[ℓ+1], P.lv[ℓ+1]
     T = LM.T
     LC = LC === nothing ? LocalCost(P, LM, s) : LC
+    BC = (P.use_bias && BC === nothing) ? BiasCache(P, s) : BC
     Kraw = knodes(P, ℓ, s.k)
     units = NTuple{3,Int}[]
     for (gi, g) in enumerate(E.gens)
@@ -2059,11 +2061,8 @@ function kscale_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, κ
         draws = mh ? [(randn(rng), rand(rng)) for _ in 1:nprop] : nothing
         k0 >= κmin || continue
         n = kind == 1 ? (E.gens[gi].vf > 0 ? T : 0) * (E.gens[gi].ucf > 0 ? 2 : 1) : T
-        b0 = P.use_bias ? bias_term(P, k_at0(P, ℓ, s.k), s.z0) : 0.0
-        kbase = copy(s.k)
         function setk!(u)
             Δ = k0 * (exp(u) - 1)
-            copyto!(s.k, kbase)
             Ut = E.kspecs[kf].B.Ut
             for q in nzrange(Ut, i)
                 s.k[lk.off[kf]+rowvals(Ut)[q]] += Δ * nonzeros(Ut)[q]
@@ -2075,11 +2074,7 @@ function kscale_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, κ
         function lf(u)
             val = -kscale_delta!(dp, P, LM, LC, Kraw, kind, gi, i, u) + (1 - n) * u
             phys && (val += n * log(clamp(k0 * exp(u), sp_.lo[i], sp_.hi[i]) + E.κ0) - lm0)
-            if P.use_bias
-                setk!(u)
-                val -= bias_term(P, k_at0(P, ℓ, s.k), s.z0) - b0
-                copyto!(s.k, kbase)
-            end
+            BC === nothing || (val -= bias_delta_k(BC, P.bias, E, lk, kind, gi, i, k0 * exp(u)))
             return val
         end
         if mh
@@ -2096,10 +2091,11 @@ function kscale_sweep!(rng, P::Problem, LM::LocalModel, s::State; LC=nothing, κ
         end
         u == 0.0 && continue
         nmoved += 1
-        # commit: capacities, utilizations, residuals, cell sums
+        # commit: capacities, utilizations, residuals, cell sums, bias cache
         kscale_delta!(dp, P, LM, LC, Kraw, kind, gi, i, u)
         setk!(u)
         k1 = k0 * exp(u)
+        BC === nothing || bias_delta_k(BC, P.bias, E, lk, kind, gi, i, k1; commit=true)
         Kraw[kf][i] = k1
         sp = E.kspecs[kf]
         kc1 = clamp(k1, sp.lo[i], sp.hi[i])
@@ -2160,9 +2156,9 @@ LocalKernel(P::Problem; extra=4.0, mode::Symbol=:auto, weather::Float64=0.0, lmk
                 mode == :auto ? (P.E.flow === nothing ? :local : :flow) : mode, Dict{Int,Any}(), weather, Any[], lmkw)
 
 "Fine-level weather moves of the local kernel (if enabled and the level is spatially complete)."
-function maybe_weather!(rng, P::Problem, K::LocalKernel, LM::LocalModel, s::State)
+function maybe_weather!(rng, P::Problem, K::LocalKernel, LM::LocalModel, s::State; BC=nothing)
     (K.weather > 0 && s.ℓ >= 1 && LM.complete[P.E.fθ]) || return s
-    s, _ = fine_weather_sweep!(rng, P, LM, s; frac=K.weather, frac0=K.weather, pools=K.wpools)
+    s, _ = fine_weather_sweep!(rng, P, LM, s; frac=K.weather, frac0=K.weather, pools=K.wpools, BC=BC)
     return s
 end
 
@@ -2170,13 +2166,15 @@ local_model(K::LocalKernel, P::Problem, ℓ::Int) = lock(() -> get!(() -> LocalM
 
 """
 One π_ℓ-invariant transition of the operation and (where complete) the
-capacities at the level of `s` with the weather fixed: a local sweep, then the
-investment scaling moves, in random order.
+capacities at the level of `s`: an operation sweep and the capacity moves in random
+order, then the weather moves (if enabled). At α = 1 one bias cache serves the
+capacity and weather moves (the operation sweep changes neither k nor x).
 """
 function fine_local_step(rng, P::Problem, s::State, S)
     K = S.loc
     LM = local_model(K, P, s.ℓ)
     s = copy(s)
+    BC = BiasCache(P, s)
     if K.mode in (:flow, :adaptive) && P.E.flow !== nothing && LM.complete[P.E.fθ]   # flow design (docs/flow_hierarchy.md)
         FF = lock(() -> get!(() -> FlowFrames(P, s.ℓ, s), K.frames, s.ℓ), K.lk)
         isempty(K.pools) && append!(K.pools, [BlockPool(P, 140) for _ in 1:Threads.maxthreadid()])
@@ -2187,7 +2185,7 @@ function fine_local_step(rng, P::Problem, s::State, S)
             x -> flow_sweep!(rng, P, LM, FF, x; wsets=K.wsets, pools=K.pools, extra=K.extra)[1]
         end
         AMk = K.mode == :adaptive ? get(K.adapt, s.ℓ, nothing) : nothing
-        kmoves! = x -> kpeak_sweep!(rng, P, LM, kscale_sweep!(rng, P, LM, x)[1]; AM=AMk)[1]
+        kmoves! = x -> kpeak_sweep!(rng, P, LM, kscale_sweep!(rng, P, LM, x; BC=BC)[1]; AM=AMk, BC=BC)[1]
         if rand(rng) < 0.5
             s = sweep!(s)
             s = kmoves!(s)
@@ -2195,9 +2193,9 @@ function fine_local_step(rng, P::Problem, s::State, S)
             s = kmoves!(s)
             s = sweep!(s)
         end
-        return maybe_weather!(rng, P, K, LM, s)
+        return maybe_weather!(rng, P, K, LM, s; BC=BC)
     end
-    kmoves! = x -> kpeak_sweep!(rng, P, LM, kscale_sweep!(rng, P, LM, x)[1])[1]
+    kmoves! = x -> kpeak_sweep!(rng, P, LM, kscale_sweep!(rng, P, LM, x; BC=BC)[1]; BC=BC)[1]
     if rand(rng) < 0.5
         s, _ = local_sweep!(rng, P, LM, s; wsets=K.wsets, extra=K.extra)
         s = kmoves!(s)
@@ -2205,7 +2203,7 @@ function fine_local_step(rng, P::Problem, s::State, S)
         s = kmoves!(s)
         s, _ = local_sweep!(rng, P, LM, s; wsets=K.wsets, extra=K.extra)
     end
-    return maybe_weather!(rng, P, K, LM, s)
+    return maybe_weather!(rng, P, K, LM, s; BC=BC)
 end
 
 """

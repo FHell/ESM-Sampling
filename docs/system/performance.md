@@ -80,9 +80,14 @@ s per sweep at 4 threads (`bench_perf.jl sweep`):
 
 At 256 nodes the atoms take about 5.6 s of the 7.65 s plain sweep (467 200 atom moves at
 48 µs on one thread); the dense transport modes and `tline` come next. One adaptive sweep
-costs about 2.2 times a plain local sweep at 40 nodes × 6 h. A `kpeak` pass takes about
-0.1 s per sweep at 40 nodes daily without the bias and about 1.8 s with the bias evaluation at
-$\alpha = 1$.
+costs about 2.2 times a plain local sweep at 40 nodes × 6 h.
+
+**Capacity and weather passes with the bias** (40 nodes × 6 h, all model terms, 219 investable
+units, 4 threads, `bias_sample_steps` = 4096): a `kscale` pass takes 0.15 s at $\alpha = 1$
+against 0.06 s at $\alpha = 0$, a `kpeak` pass 0.53 s against 0.54 s, a weather sweep at
+`fine_weather = 0.05` 3.6 s against 3.8 s. The bias change comes from the incremental bias cache
+(two table lookups per step and sample step); building the cache and a global evaluation of
+$\hat b$ cost about 4 ms each.
 
 **Model-completion terms** (all on: losses, soft limits, lossy links, vintages, commitment),
 40 nodes × 6 h, 8 threads: a fine step takes 9.2 s against 4.0 s for the plain model, and a

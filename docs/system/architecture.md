@@ -31,17 +31,17 @@ In include order (`src/ESMSampling.jl`):
 | `layout.jl` | `FieldSpec` (kinds `KFIELD`, `STEP`, `INSTANT`), `Layout`, `Transfer`, `split_state`/`merge_state`, `restrict_to`/`prolong_to` |
 | `system.jl` | `System`, `load_system` (HDF5 input), `subsystem` (sub-networks for tests) |
 | `flowbasis.jl` | `FlowBasis`: proxy capacities and injections, `CongestionADMM`, transport modes, angle basis, storage shapes |
-| `energy.jl` | `GenGroup`, `StorGroup`, `LineTerms`, `EnergyModel`, `build_energy_model`, `energy_cost` (with gradients), `log_measure`, `set_co2_price!` |
+| `energy.jl` | `GenGroup`, `StorGroup`, `LineTerms`, `EnergyModel`, `build_energy_model`, `energy_cost` (with gradients), `log_measure` and `log_measure_grad`, `set_co2_price!` |
 | `lp.jl` | the reference capacity-expansion LP (JuMP/HiGHS), `LPSolution`, cache, `interior_center`, `to_modes` |
 | `weather.jl` | `WeatherModel`, `DetailModel`, fit (EM, details), exact sampling, `weather_nodes`, cache; `season`, the one season definition (DJF, MAM, JJA, SON) |
-| `bias.jl` | `BiasModel`: $\hat g$, $\hat h$, $\hat b$, score regression, monotone QP |
-| `hierarchy.jl` | `Problem`, `State`, `logtarget`, `make_state`, `bias_term`, `level0_potential` (pre-descent) |
-| `bias_online.jl` | `OnlineBias`, `online_bias_step!` |
-| `bias_post.jl` | `PostBias`, `post_correct` |
+| `bias.jl` | `BiasModel` at its level $\ell_b$: tables of $F_1$, $F_2$ (`RampTable`), $\hat g$, $\hat h$, $\hat b$, sample steps of $\bar{\mathbb E}$ (`bias_samples`), `lift_bias!`, score regression (`bias_design`, `bias_observe!`), monotone QP; the incremental `BiasCache` with the capacity update `bias_delta_k` |
+| `hierarchy.jl` | `Problem`, `State`, `logtarget`, `make_state`, `bias_term` and `bias_restrict` (the state at the level of the bias), `BiasCache` of a state, `level0_potential` (pre-descent) |
+| `bias_online.jl` | `OnlineBias`, `bias_scores` (scores at the level of the bias), `online_bias_step!` |
+| `bias_post.jl` | `PostBias` (per-sample bias features and score statistics), `post_record!`, `post_correct` |
 | `level0.jl` | level-0 slice updates of the bias warmup (`GibbsState`, `SweepCtx`, `StepWS`, `step_term`, `update_colour!`, `update_k!`, `slice_coord!`) |
 | `local.jl` | the local exact kernel: `GridSolver`, `LocalModel`, `LocalCost`, `MoveWS`, `eval_move!`, line sampler, move preparation, `local_sweep!`, `kscale_sweep!`, `LocalKernel`, `fine_local_step`, `local_base_step`, block-move workspaces and `commit_block!` |
 | `weather_moves.jl` | level-0 weather move with pro-rata shear |
-| `weather_fine.jl` | fine-level weather moves |
+| `weather_fine.jl` | fine-level weather moves, with their bias change `bias_delta_weather` |
 | `flowmoves.jl` | `FlowFrames`, transport families, storage multiscale sweep, `flow_sweep!`, localized modes |
 | `adaptive.jl` | `AdaptiveModes`, learned families, `adaptive_sweep!`, `kpeak_sweep!` |
 | `sampler.jl` | `ChainSampler` (the kernels of one chain), `quantities`, carrier scaling `scale_step`, `base_step` |
@@ -70,8 +70,11 @@ families), `cells.jl` (cell templates), `kmove.jl` (`kscale`/`kpeak` Metropolis)
   the optional `FlowBasis`.
 - `WeatherModel`: specs, layouts and transfers of the weather fields, climatology and scales,
   the switching VAR, the `DetailModel`s, the historical data per level and the responsibilities.
-- `BiasModel`: basis knots, coefficients $\theta$, $a$, $c$, the bias samples, the regression
-  accumulators and the `active` flag of level-0 learning.
+- `BiasModel`: its level $\ell_b$ and step length, basis knots, coefficients $\theta$, $a$, $c$,
+  the tables of $F_1$, $F_2$, the sample steps of $\bar{\mathbb E}$ with their weight, the
+  regression accumulators and the `active` flag of level-0 learning. `BiasCache`: the
+  incremental bias of a state at that level (per-step features and table values of the
+  chain's weather and of the sample steps, capacities, clamped coefficients, the sums).
 - `Problem`: energy model, weather model, levels with their layouts and transfers,
   $\beta_k$, $\beta_v$, the bias and `use_bias` ($\alpha$).
 - `State`: level `ℓ`, regimes `m`, `z0`, innovations `ws`, anomalies `xs` per level, coefficient
@@ -96,8 +99,8 @@ families), `cells.jl` (cell templates), `kmove.jl` (`kscale`/`kpeak` Metropolis)
   storage blocks, weather windows), behind the same line-sampler interface.
 - `FlowFrames`: per-step predicted binding lines, face-projected modes and proxy classes, keyed
   by a hash of $(k,x)$. `AdaptiveModes`: learned directions, shapes and response coefficients.
-- `OnlineBias`, `PostBias`: observation counts and refit schedule; recorded samples for the
-  post-correction. `PriceAcc`, `RegionPriceAcc`: sampled price accumulators.
+- `OnlineBias`, `PostBias`: observation counts and refit schedule; recorded bias features and
+  score statistics of the production samples for the post-correction. `PriceAcc`, `RegionPriceAcc`: sampled price accumulators.
 
 **Device.** `DeviceModel`, `DeviceIndex`, `DeviceState`, `FlatState`; `TermBatch` with
 `GenTerms`, `UCTerms`, `LinkTerms`, `LineTermsD`, `SocTerms`, `Kinks`; `Consts`, `StaticParams`,
@@ -122,7 +125,7 @@ reference level (`make_state`).
 → `run_level0!` with `learn = true` for `warmup0` iterations, each a `base_step`
 (`local_base_step`: local operation sweep, weather slice updates, weather shear, capacity
 slice updates, FFBS, carrier scaling, in random order), with bias observations and refits →
-`bias.active = false`.
+`bias.active = false` → `lift_bias!` to the finest level (both drivers).
 
 **CPU driver** (`run_chains`): `setup` → level-0 warmup → `chain_start` per chain →
 `new_sampler` per chain → per sweep and chain `fine_local_step`, during the warmup
@@ -136,17 +139,18 @@ calibration).
 **Fine step** (`fine_local_step`): `local_model` → for the flow and adaptive kernels
 `FlowFrames` (refreshed) and `AdaptiveModes` → in random order the operation sweep
 (`local_sweep!`, `flow_sweep!` or `adaptive_sweep!`) and the capacity moves
-(`kscale_sweep!` then `kpeak_sweep!`) → `maybe_weather!` → `fine_weather_sweep!`.
+(`kscale_sweep!` then `kpeak_sweep!`) → `maybe_weather!` → `fine_weather_sweep!`; at
+$\alpha = 1$ one `BiasCache`, built at the start, serves the capacity and weather moves.
 
 **Operation sweep** (`local_sweep!`): `LocalCost` → per parity class, threaded over its steps:
 build the move list → per move `clear!`, `prep_*` (direction and compensation) → `finalize!`
 (touch sets, primary breakpoints) → `sample_line!` (`walk!` over `eval_move!`) → Jacobian step
 (`logjac`) → `commit!`/`commit_block!` → `evaluate!` of the state.
 
-**Device driver** (`run_device`): `setup` → level-0 warmup at $\alpha = 1$ → `chain_start` →
-`pack`, `to_device`, `plan` → compile `run_sweeps` and `capacity_pass` → per checkpoint: sweeps,
-capacity pass, `unflat!`, `to_host!`, online bias, `monitor_quantities`, `post_record!` →
-`chains_report`.
+**Device driver** (`run_device`): `setup` → level-0 warmup and lift at $\alpha = 1$ →
+`chain_start` → `pack`, `to_device`, `plan`, `pack_bias` → compile `run_sweeps` and
+`capacity_pass` → per checkpoint: sweeps, capacity pass, `unflat!`, `to_host!`, online bias (the
+bias re-packed after a refit), `monitor_quantities`, `post_record!` → `chains_report`.
 
 ## 5. Caches
 
