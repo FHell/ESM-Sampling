@@ -157,6 +157,10 @@ concrete next steps. Update it at the end of every work session.
 - Our Julia MGA held (PyPSA's is the reference envelope); H2 gets `lp256_pypsa_24h`/`_6h`; H2b
   gets the CO₂-price configuration, a 6 h array on QOS medium, and a held list (6 h MGA, 3 h,
   1 h: beyond a week by estimate).
+- Found, open: `test/test_moves.jl` setup B `wz0` fails `nacc > 0` (0 of its moves accepted) since
+  b9b611e: setup A's LP start changed with the matched LP, so the bias θ handed to setup B changed
+  (as for the bias KS check that b9b611e marked broken); `runtests.jl` stops there, the files after
+  it pass when run on their own.
 
 ### 2026-11-04 (LP baselines: campaigns H2, H2b)
 
