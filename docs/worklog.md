@@ -102,6 +102,8 @@ concrete next steps. Update it at the end of every work session.
 
 ### 2026-11-04 (replica–Langevin sampler in src/)
 
+Commits d833b50, f7d58c3, b7dcc27, a2e4c84, 515b1a1 (branch of the replica agent).
+
 - `src/replicas.jl`: the replica–Langevin sampler as the system's CPU sampler (`run_replicas`,
   `sampler = "replicas"`): the prior-reversible weather process with explicit-noise building
   blocks (pCN in the innovations, regime windows, FFBS option), the capacity score, the Langevin
