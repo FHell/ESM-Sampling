@@ -37,8 +37,12 @@ concrete next steps. Update it at the end of every work session.
 
 **Device port:**
 - Fine-level weather moves: not needed any more (the weather moves on the host by a
-  prior-reversible pCN process). Device agent (2026-11-04) on: GPU form choice and the `tpot`
-  padding, mixed precision in the slope-jump form, the learned and adaptive families.
+  prior-reversible pCN process). Device agent (2026-11-04) on, in order: GPU form choice and
+  the `tpot` padding; restructuring so XLA does not materialize large intermediates
+  (points × columns tensors, sort payloads, concatenations, transposes); a uniform Float32
+  switch (FP64 stays the tested default; whether Float32 is a problem is tested empirically
+  once everything is built); the learned and adaptive families. Hand-written fused kernels
+  deferred (the estimates promise large gains; feasibility note requested).
 - `:cellpairu1` compiles in about 290 s at 8 GB and stays out of the run set.
 - Device form of the Langevin capacity step (replaces the Metropolis capacity pass and the
   planned `kop` port and per-carrier scales).
