@@ -33,6 +33,13 @@ mode-coefficient vector. `pack` builds the static model (`DeviceModel`) of a com
 level, where every basis is orthonormal), and `cost_parts` evaluates the cost of every chain
 ($=$ `energy_cost` to round-off).
 
+**Float32 build.** `ESMDevice.F32` is the whole device program in Float32: state, caches, terms,
+line sampler, capacity pass and uniforms. It is the same source (`device/src/core.jl` and the files
+it includes) read a second time with every Float64 literal, `Float64`, `Inf`, `NaN` and the default
+element type of `zeros`/`ones` mapped to Float32 (`ft32`), and every device input converted at the
+upload (`ftconv`). FP64 (`ESMDevice`) stays the default and the reference of the tests; the Float32
+build is only checked to compile and run (`FLOAT=32` in the device scripts).
+
 ## 3. Moves and the exact line sampler
 
 A move is a set of **sites**, one per chain and site index, each a line move
@@ -120,11 +127,13 @@ pairs that fuse into their producers) instead of a sort op.
 
 The cost per site is the sum of the columns' local points plus a sort of the entries.
 
-**Form choice.** The plain families use the dense form. A compensated, cell or block family uses
-the slope-jump form if its dense points × columns are at least `JUMP_RATIO` (4) × its
-slope-jump entries (`plan(...; jump=:auto)`; `:none`, `:all` or a list of families override).
-At 40 nodes daily: slope-jump for `:tsoc`, `:tpot`, all `:sblk…`, `:cell1`, `:cell2`,
-`:cellpair1`, `:cellpair2`; dense for `:spair0`, `:cell3`, `:cellpair3`.
+**Form choice.** The plain families use the dense form. A compensated, cell, block or dense
+angle family uses the slope-jump form if its dense points × columns are at least `JUMP_RATIO` ×
+its slope-jump entries (`plan(...; jump=:auto, backend)`; `:none`, `:all` or a list of families
+override). The ratio is per backend (`JUMP_RATIO`: 4 on the CPU, 10 on the GPU, where the payload
+sort costs relatively more; measured in [performance.md](performance.md) §7). At 40 nodes × 6 h
+on the GPU: slope-jump for `:tpot`, `:sblk4` … `:sblk32`, `:cell1`, `:cell2`, `:cellpair1`,
+`:cellpair2`, `:tdir`, `:tdir0`; dense for `:spair0`, `:tsoc`, `:sblk2`, `:cell3`, `:cellpair3`.
 
 **Guards.** A site stays at $t = 0$:
 * if some secondary quantity has more sign changes than kept;
@@ -156,17 +165,38 @@ and $r$.
 | `:tpot`, `:tpotL` | `tpot`, `tpotL` | share-preserving, linear |
 | `:cell{q}`, `:cellu{q}` | `cell` at partition level q (`u`: committable carriers) | additive |
 | `:cellpair{q}`, `:cellpairu{q}` | `cellpair` at level q | balanced |
-| `:sblk{L}`, `:sblkL{L}` ($L$ = 2, 4, 8, 16, 32) | storage plateau and shapes (`prep_storage_ms!`), one unit | share-preserving, linear |
+| `:sblk{L}`, `:sblkL{L}` ($L$ = 2, 4, 8, 16, 32) | storage plateau and shapes (`prep_storage_ms!`), one unit; learned shapes per season class | share-preserving, linear |
+| `:tdir`, `:tdirL`, `:tdir0` | `tmode`, `tline`, `amode` and their `…L` and `…0` variants (`prep_tdir!`, `prep_tline!`, `prep_amode!`): one dense angle direction per step | share-preserving, linear, none |
 
 **Choices made on the host.** Choices that do not depend on the state are drawn when the
 schedule is built: the unit pair of `:spair`, the carriers of the cell moves, and the block
-offset and profile.
+offset and profile. The directions of the dense angle families are drawn per site and chain by a
+host source (`TDIR_SOURCE`, `tdir_source`), as the CPU families of the rule with the CPU's relative
+rates: a transport mode projected onto the face of the step's predicted binding lines (`tmode`,
+the chain's frames; flow basis), the re-routed injection pair of a predicted binding line
+(`tline`), a learned mode projected onto the face (`amode`, once the host has learned modes). The
+table holds per site and chain the node direction $d$ and the requirement change $g$ of the nodes
+that compensate (`tdir_g`: $g = L_b d$, kept where $|g_n| > 10^{-9}\max|g|$, as `prep_tdir!`;
+`tline`: $\pm 1$ at the line's ends). They are refreshed between device calls with the same table
+shapes (`tdir_refresh`), so the program is not recompiled.
+
+**Dense angle families.** A site carries every line (static bus slots, so the balance sums stay
+static), every node's balance slot, G unit columns per node and one kink per node (share-preserving
+rule); one site per step and time class, one round per class: each step gets one dense move per
+family and sweep (the CPU draws about six `tmode` moves per step and sweep at 40 nodes, but at
+$O(N + n_{lines})$ per move the families run at a low rate in the design). The localized
+transport moves (`tcut`, `acut`: Haar atoms with sparse support) are not ported: their templates
+need per-site line lists (`Status`).
 
 **Cell families.** They are bucketed by level and padded to the level's largest cell. Level q
 gets rounds ∝ (cells)^(cell_power−1), which reproduces the CPU's level probabilities.
 
 **Block profiles.** The profile table holds the plateau and optional shapes with zero ends
-(`set_profiles!`).
+(`set_profiles!`), each with a season class (0: any). A site draws its profile among those of its
+block's season class and those of any season. With the host adaptation the table holds the
+plateau and per season class two learned state-of-charge shapes (`set_learned_profiles!`, from
+`AdaptiveModes.shapes`; the plateau stands in until they are learned), so it keeps its shape when
+the shapes are relearned.
 
 **Requirement tracking.** The share-preserving families refuse models with line losses or lossy
 links, whose compensation needs requirement tracking on the CPU (an event walk). With those
@@ -272,6 +302,11 @@ parameters are then recomputed on the device.
 4. `mlda_warmup + nsamples` checkpoints: sweeps and capacity pass, download, conversion to
    `State`s, online bias refits during the warmup (pooled over chains, frozen afterwards, the
    bias aggregates re-packed after a refit), monitored quantities, post-correction records;
+   with `adapt = true` the host adaptation (`HostAdapt`, `adapt_step!`): the chains are observed
+   by one `AdaptiveModes` (pooled over chains: transport modes, storage shapes per length and
+   season, response coefficients per node and proxy class, updated at observation counts $2^j$),
+   the chains' frames are refreshed (flow basis), and the static parameters (β1, β2), the tables
+   of the dense angle families and the block profiles are uploaded anew (same shapes);
 5. `chains_report`: the same diagnostics and HDF5 output as the CPU driver (without the
    additional outputs of `write_run_outputs`).
 
@@ -294,20 +329,24 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | compensated families `:spair`, `:spair0`, `:tsoc(L)`, `:tpot(L)` | verified on arrays and compiled (CPU backend); scheduled with `families = :all` |
 | cell templates (all partition levels) | verified on arrays; compiled except `:cellpairu1` (see §3); scheduled with `families = :all` except `:cellpairu1` |
 | storage blocks, one unit (plateau, shapes) | verified on arrays ($L$ = 2–32) and compiled; scheduled with `families = :all` |
-| nominal storage requirement of the share-preserving `:tsoc`, `:sblk{L}` (CPU `soc_qadj`, [moves/storage.md](moves/storage.md)) | deviation: the device uses the actual requirement; its comparisons against the CPU for these share-preserving families no longer hold until it adds the correction |
+| nominal storage requirement of the share-preserving `:tsoc`, `:sblk{L}` (CPU `soc_qadj`, [moves/storage.md](moves/storage.md)) | done (`soc_qadj4`); verified on arrays against the CPU |
 | long-range storage moves `slong`, `slevel` | missing |
 | memory cap of a round (`DENSE_BUDGET`) | done |
 | slope-jump form of the line sampler, per-family choice (`JUMP_RATIO`) | done; verified on arrays against the CPU and the dense form, Reactant (CPU backend) against arrays |
-| term axis (program size independent of the term count) | done |
+| term axis (program size independent of the term count); stacked builders (one gather per field) for the compensated, block, cell and dense angle families | done |
+| commitment columns of non-committable units left out (`UC_COLS`); balance jumps on the column entries; entry-axis-first global part; two-level scans; sort networks for short lists | done; verified on arrays against the CPU and the dense form |
 | one program per checkpoint (operation sweeps + capacity pass) | done (`sweep_program`, `merged = true`); not the default (compile time) |
 | capacity pass (`kren`, `kscale`, `kpeak` absorb) with the bias, host loop | done |
 | templates for Haar angle atoms and localized proxy and learned modes (`tcut`, `acut`) | missing |
 | local re-routing templates in place of `xpair`, `xloc(c)`, `tline` | missing |
-| block aggregates (cell–class groups), learned shapes | missing |
-| dense transport modes (`tmode`, `amode`) | missing; low rate, may be dropped |
-| adaptation on the host with table uploads (modes, shapes, response coefficients); learned `kpeak` | missing |
+| block aggregates (cell–class groups) | missing |
+| learned storage shapes (profile columns per season class) | done |
+| learned dispatch shapes (`adshape`) | missing |
+| dense angle directions `:tdir`, `:tdirL`, `:tdir0` (`tmode`, `tline`, `amode` and variants) | verified on arrays against the CPU (`test_comp.jl` cases F, G); scheduled with `families = :all` and `adapt = true` |
+| adaptation on the host with table uploads (modes, shapes, response coefficients) | done (`adapt = true`); the learned `kpeak` variant missing |
 | weather moves with compensation as a device family | not planned: the weather moves to a prior-reversible pCN process on the host, the capacities to a Langevin step ([../worklog.md](../worklog.md)); `kop` and the device bias (`bias_dev.jl`, kept as it is until it is retired) are not extended |
-| fused kernels, FP32 intermediates, tiling, multi-GPU, full-Europe memory plan | missing |
+| Float32 build of the whole program (`ESMDevice.F32`) | done; compiles and runs (no exactness tests by design) |
+| fused kernels, tiling, multi-GPU, full-Europe memory plan | missing |
 
 **Reactant constraints met so far.** Inside `@trace for`, every captured scalar becomes
 traced, so structs captured by a loop are type-parametric in their scalars and static flags

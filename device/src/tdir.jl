@@ -127,6 +127,8 @@ for f in TDIR_FAMILIES
     @eval build(::Val{$(QuoteNode(f))}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r, k::Consts) =
         build_tdir(st, cp, sp, tab, r, k, Val($(QuoteNode(tdir_rule(f)))), $(QuoteNode(f)))
     @eval commit_tb(::Val{$(QuoteNode(f))}, st, tab, r, t, dr, aux, tb) = commit_tdir(st, tab, r, t, dr, aux, tb)
+    # every line moves: with line losses a balance residual crosses 0 up to 5 times (test_comp G); 6 kept
+    @eval nroots(::Val{$(QuoteNode(f))}) = Val(6)
 end
 
 function commit_tdir(st, tab, r, t, dr, aux, tb)

@@ -188,16 +188,38 @@ move:
 | | `cell1`, `cell2` | 0.050, 0.133 | 8.57, 2.28 |
 | | `cellpair1`, `cellpair2` | 0.079, 0.184 | 13.6, 3.93 |
 
-With every family of the run set (`device_families`) a sweep costs about 23 s in the slope-jump
-form (ad73f13, with `sblk32` added to the set), against about 54 s in the dense form at 4fd3d2c.
-In the dense form `tpot` and the storage blocks took 50 s: their cost per site grows with
-points × terms (`tpot` 520 points × 87 columns, `sblk16` 1403 × 139), and the memory cap
-(`DENSE_BUDGET`, 256 MB) split their rounds into many small ones (`tpot` 312 rounds of 183
-sites). In the slope-jump form `tpot` (8.3 s) and `tsoc` (3.4 s) lead; their most expensive
-kernel is the payload sort of the (point, jump) entries (`sort_0_1`, 1.2 s per sweep in `tpot`
-at 33 % occupancy). `tsoc` is slower on the GPU than in the dense form (3.41 against 2.46 s),
-although the static choice (`plan(...; jump=:auto)`, by the dense/slope-jump entry ratio) picks
-the slope-jump form for it: on the CPU backend it is 2.6× faster.
+With every family of the run set (`device_families`) a sweep cost about 23 s in the slope-jump
+form at ad73f13 (54 s in the dense form at 4fd3d2c). Its most expensive kernels were the payload
+sort of the (point, jump) entries (`sort_0_1`, 1.2 s per sweep in `tpot`), the transposes around it
+and the concatenations of the term pieces, not arithmetic.
+
+**After the restructuring** (2026-11-04 afternoon, same configuration and profiler, GPU; one
+process per family group): the commitment columns of non-committable units left out (this
+configuration has no fleet commitment, so all of them: 48 of the 87 columns of a `tpot` site); the
+balance-slot jumps attached to the column entries (no slot entries, one residual evaluation per
+slot instead of two); the entry axis first for the payload sort and the scans; two-level scans;
+stacked builders (one gather per field instead of n gathers and a concatenation); the dense form on
+the GPU for `tsoc` and `sblk2` (`JUMP_RATIO["gpu"]` = 10). Seconds per sweep, before (ad73f13 code,
+measured again this session) → after:
+
+| family | before | after | form after |
+|---|---|---|---|
+| `spair0` | 0.452 | 0.451 | dense |
+| `tsoc` | 3.81 | 1.08 | dense |
+| `tpot` | 8.59 | 2.21 | slope-jump |
+| `sblk2`, `sblk4` | 2.85, 2.23 | 1.08, 0.92 | dense, slope-jump |
+| `sblk8`, `sblk16`, `sblk32` | 1.93, 1.67, 1.60 | 0.74, 0.62, 0.57 | slope-jump |
+| `cell1`, `cell2`, `cell3` | 0.050, 0.133, 0.028 | 0.040, 0.098, 0.033 | slope-jump, slope-jump, dense |
+| `cellpair1`, `cellpair2`, `cellpair3` | 0.079, 0.184, 0.027 | 0.066, 0.167, 0.032 | slope-jump, slope-jump, dense |
+| `FAMILIES_FAST` (sum) | 0.60 | 0.62 | dense |
+| run set (sum) | ≈ 24 | 8.7 | |
+
+The `sblk32` and cell rows before are those of ad73f13 (the profile of the old code was stopped by
+the memory limit before them). In `tpot` the payload sort fell from 1.26 to 0.26 s per sweep (921
+instead of 1 817 entries per site with commitment, fewer without), and its largest kernel is now a
+reduction over the columns (0.29 s). Compile times of the large families fell with the stacked
+builders: `sblk16` 68 → 11 s, `sblk32` 15 s, the cell levels 5–12 s (the first family of a process
+carries 100–150 s of one-time JIT).
 
 **Slope-jump form** (§3 of [device.md](device.md); Reactant's CPU backend, `configs/device40.toml`:
 40 nodes daily, $T$ = 365, 4 chains, 4 threads; one family alone, seconds per sweep, dense →

@@ -125,7 +125,6 @@ function build_block(st, cp, sp, tab, r, k, ::Val{L}, ::Val{lin}, fam::Symbol=bl
     on = m3(tab.on[:, r])
     s = tab.s[:, r]
     κs = g3(cp.ks, s) .* s3(sp.sh, s) ./ k.Δt
-    okm = (on .> 0.0) .& (κs .>= k.κmin)
     z = 0.0 .* κs
     z4 = c4(z)
     w = block_weights4(tab, r, L) .* c4(ifelse.(on .> 0.0, 1.0, 0.0))     # (C|1, B, 1, L)
@@ -141,7 +140,8 @@ function build_block(st, cp, sp, tab, r, k, ::Val{L}, ::Val{lin}, fam::Symbol=bl
                qt=rep(s3(sp.sqt, s)), mc=rep(s3(sp.smc, s)), slot=collect(1:L+1),
                mve=vcat(false, fill(true, L)), mve1=vcat(fill(true, L), false))
     r0 = G4(st.r, tab.cr[:, :, r])                            # (C, B, 1, L+1)
-    dg = ifelse.(c4(okm), c4(κs) .* (wb .- wa), 0.0)          # requirement change of every step per unit t
+    # requirement change of every step per unit t (every moved unit, as `soc_qadj`; CPU 4a5a4ea)
+    dg = ifelse.(c4(on .+ z) .> 0.0, c4(κs) .* (wb .- wa), 0.0)
     q = tab.gq[:, :, r]
     gcol = tab.gcol[:, :, r]                                  # (B, (L+3) G): steps b0−1 … b0+L+1, G units each
     gstep(j) = gcol[:, (j+1)*G+1:(j+2)*G]                     # units at step b0+j
@@ -154,7 +154,7 @@ function build_block(st, cp, sp, tab, r, k, ::Val{L}, ::Val{lin}, fam::Symbol=bl
     if !lin
         ω = G4(st.ω, gs)
         v = gons .& (absd.(κ) .>= k.κmin)
-        d = prorata4(κ, ω, v, r0, dg, L + 1)
+        d = prorata4(κ, ω, v, r0, dg, L + 1; qadj=soc_qadj4(k.Δt, soc.k, soc.h, soc.ηin, soc.ηout, soc.qt, soc.e0, soc.e10))
         kk = skinks(z4; Q=d.Q, g=ifelse.(d.act, dg, 0.0), P=d.P, e=d.e, nm=d.nm, on=ifelse.(d.act, 1.0, 0.0))
         x = ifelse.(d.act[:, :, :, sl] .& v, ω ./ ifelse.(d.act[:, :, :, sl], d.P[:, :, :, sl], 1.0), 0.0)
         gen = gen4(st, cp, sp, z4, qs, gs, sl; ak=x, kid=sl)

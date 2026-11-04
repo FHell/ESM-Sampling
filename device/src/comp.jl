@@ -305,7 +305,8 @@ function build_tsoc(st, cp, sp, tab, r, k, ::Val{T2}, fam::Symbol=T2 ? :tsoc : :
         v = gon2 .& (absd.(κ) .>= k.κmin)
         κs4, ok4 = c4(κs), c4(okm)
         gs = ifelse.(ok4, cat(κs4, .-κs4; dims=4), 0.0)       # requirement change per unit t: +κs at τ−1, −κs at τ
-        d = prorata4(κ, ω, v, r0, gs, 2)
+        so = soc
+        d = prorata4(κ, ω, v, r0, gs, 2; qadj=soc_qadj4(k.Δt, so.k, so.h, so.ηin, so.ηout, so.qt, so.e0, so.e10))
         kk = skinks(z4; Q=d.Q, g=ifelse.(d.act, gs, 0.0), P=d.P, e=d.e, nm=d.nm, on=ifelse.(d.act, 1.0, 0.0))
         x = ifelse.(d.act[:, :, :, sl] .& v, ω ./ ifelse.(d.act[:, :, :, sl], d.P[:, :, :, sl], 1.0), 0.0)   # σ/κ = ω/P
         gen = gen4(st, cp, sp, z4, qq, cg, sl; ak=x, kid=sl)

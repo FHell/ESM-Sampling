@@ -5,9 +5,9 @@
 # the commits are one scatter-add per state array.
 
 "X (C, K) at the index table idx (B, n): (C, B, 1, n)."
-G4(X, idx) = (C = size(X, 1); (B, n) = size(idx); rs(X[:, vec(idx)], C, B, 1, n))
+G4(X, idx) = (C = size(X, 1); (B, n) = size(idx); rs(X[:, rs(idx, length(idx))], C, B, 1, n))
 "Static per-item vector v at the index table idx (B, n): (1, B, 1, n)."
-S4(v, idx) = ((B, n) = size(idx); rs(v[vec(idx)], 1, B, 1, n))
+S4(v, idx) = ((B, n) = size(idx); rs(v[rs(idx, length(idx))], 1, B, 1, n))
 "A (B, n) table as (1, B, 1, n)."
 M4(m) = rs(m, 1, size(m, 1), 1, size(m, 2))
 "(C, B, 1) as (C, B, 1, 1)."
@@ -15,7 +15,7 @@ c4(x) = rs(x, size(x, 1), size(x, 2), 1, 1)
 "Columns of two (B, n) tables side by side (index tables of a round)."
 hcat2(a, b) = cat(a, b; dims=2)
 "X[:, idx] += V (C, B, 1, n) for the index table idx (B, n): one scatter-add."
-scadd4(X, idx, V) = scadd(X, vec(idx), rs(V, size(V, 1), size(V, 2) * size(V, 4)))
+scadd4(X, idx, V) = scadd(X, rs(idx, length(idx)), rs(V, size(V, 1), size(V, 2) * size(V, 4)))
 
 """
 Stacked generator terms: fields (C|1, B, 1, n) or `nothing` (static zero), static per column: the
@@ -72,18 +72,28 @@ function kinkφ4(tb::TermBatch, t)
 end
 
 """
+Nominal minus actual injection of a storage unit at the step between the states of charge e0 and e1
+(CPU `soc_qadj`): k h (e1 − e0)/Δt − k (p⁺ − p⁻), the first with the unclamped states of charge. Added
+to the requirement of the share-preserving compensation of a storage move, it makes the requirement
+change by exactly g t along the move (the efficiencies, the power limits and the box bend the actual
+injection), so the shares and the excess are coordinates of the curve.
+"""
+soc_qadj4(Δt, k, h, ηin, ηout, qt, e0, e1) = k .* h .* (e1 .- e0) ./ Δt .- soc_j.(soc_d.(Δt, e0, e1, h, qt), k, ηin, ηout)
+
+"""
 Pro-rata data of the units u (C, B, 1, G) at the node slots of a site (columns grouped by slot: G
 units per slot, nslot slots; validity `v`, outputs ω): P, Q, e, nm per slot (C, B, 1, nslot) and the
-activity flag, for a requirement change g (C, B, 1, nslot) per unit t; Q = r (C, B, 1, nslot) + Σ κ clamp(ω).
+activity flag, for a requirement change g (C, B, 1, nslot) per unit t; Q = r (C, B, 1, nslot) + Σ κ clamp(ω)
+(+ qadj, the storage correction `soc_qadj4` of the storage moves).
 """
-function prorata4(κ, ω, v, r, g, nslot::Int)
+function prorata4(κ, ω, v, r, g, nslot::Int; qadj=nothing)
     C, B = size(r, 1), size(r, 2)
     G = size(κ, 4) ÷ nslot
     sum_slot(x) = rs(sum(rs(x .+ 0.0 .* κ, C, B, G, nslot); dims=3), C, B, 1, nslot)
     P = sum_slot(ifelse.(v, κ .* ω, 0.0))
     Qs = sum_slot(ifelse.(v, κ .* clamp01.(ω), 0.0))
     nu = sum_slot(ifelse.(v, 1.0, 0.0))
-    Q = r .+ Qs
+    Q = qadj === nothing ? r .+ Qs : (r .+ Qs) .+ qadj
     act = (g .!= 0.0) .& (nu .> 0.0) .& (absd.(P) .>= 1e-6)
     return (P=P, Q=Q, e=P .- max.(Q, 0.0), nm=nu .- 1.0, act=act)
 end

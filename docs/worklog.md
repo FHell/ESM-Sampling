@@ -58,13 +58,16 @@ concrete next steps. Update it at the end of every work session.
 
 **Device port:**
 - Fine-level weather moves: not needed any more (the weather moves on the host by a
-  prior-reversible pCN process). Device agent (2026-11-04) on, in order: GPU form choice and
-  the `tpot` padding; restructuring so XLA does not materialize large intermediates
-  (points × columns tensors, sort payloads, concatenations, transposes); a uniform Float32
-  switch (FP64 stays the tested default; whether Float32 is a problem is tested empirically
-  once everything is built); the learned and adaptive families. Hand-written fused kernels
-  deferred (the estimates promise large gains; feasibility note requested).
-- `:cellpairu1` compiles in about 290 s at 8 GB and stays out of the run set.
+  prior-reversible pCN process); marked "not planned" in device.md and moves/README.md.
+- Remaining device families: the localized transport moves `tcut`/`acut` (Haar atoms: per-site
+  line lists, sparse templates), learned dispatch shapes (`adshape`), block aggregates
+  (cell–class groups), the re-routing templates (`xpair`, `xloc(c)`), `slong`/`slevel`.
+- Next device restructuring steps (ledger E26): the slot-point sort of the slope-jump form (a
+  payload sort per balance slot, now one of the larger kernels), the per-column evaluation at the
+  slot points (columns × slot points), the dense form of the plain families (unchanged).
+- Whether Float32 (`ESMDevice.F32`) is usable: to be tested empirically (user).
+- Hand-written fused kernels: feasibility noted in the device agent's report; not started.
+- `:cellpairu1`: compile with the stacked builders to be measured; still out of the run set.
 - Device form of the Langevin capacity step (replaces the Metropolis capacity pass and the
   planned `kop` port and per-carrier scales).
 - Re-measure the compile times on a quiet machine (239 s / 149 s were measured under load).
@@ -94,6 +97,25 @@ concrete next steps. Update it at the end of every work session.
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 
 ## Log
+
+### 2026-11-04 (afternoon, device port)
+
+- GPU form choice per backend (`JUMP_RATIO`: CPU 4, GPU 10: `tsoc` and `sblk2` dense on the
+  GPU); commitment columns of non-committable units left out (`UC_COLS`).
+- Slope-jump form restructured: balance-slot jumps attached to the column entries (no slot
+  entries, one residual evaluation per slot), crossings by one side convention (`slot_cross`);
+  entry axis first for the payload sort and the scans; two-level scans (Reactant's `cumsum` is a
+  reduce-window over the whole axis); sort networks for short point lists.
+- Stacked term builders (one gather per field, one scatter per state array) for `tsoc`, `tpot`,
+  the blocks and the cells; compile of the large families 5–15 s.
+- GPU, full run set at 40 × 6 h with 4 chains: about 24 → 8.7 s per sweep (ledger E26).
+- `soc_qadj` ported to the device (`soc_qadj4`), blocks compensate every moved unit (CPU
+  4a5a4ea); main merged; `test_comp.jl` A, B, D, E pass against the new CPU reference.
+- `ESMDevice.F32`: the whole device program in Float32 (same sources, literals mapped).
+- Dense angle families `:tdir`, `:tdirL`, `:tdir0` (`tmode`, `tline`, `amode` and variants),
+  directions per site and chain from the host; learned block profiles per season class; host
+  adaptation in `run_device(…; adapt=true)` (`HostAdapt`: modes, shapes, β; uploads of the same
+  shapes).
 
 ### 2026-11-04 (seasonal storage)
 

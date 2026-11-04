@@ -71,6 +71,7 @@ function jump_case(name; tracking_model::Bool, fams, cells=false, C=2)
             @test count(dt[ok] .> 1e-9) <= 0.002 * length(dt)
             @test count(overj) <= 0.02 * length(overj)
             @test count(overj .& .!overd) <= 0.01 * length(overj)    # the slope-jump cap
+            flush(stdout); GC.gc()
         end
     end
 end

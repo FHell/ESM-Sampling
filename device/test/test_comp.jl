@@ -50,7 +50,7 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
     D.TDIR_SOURCE[] = (fam, τ, rng, c) -> begin
         sys = E.sys
         rand(rng) < 0.3 && return D.tline_dir(sys, LM, rand(rng, eachindex(sys.line_s)))
-        d = randn(rng, sys.N); d .-= sum(d) / sys.N
+        d = randn(rng, sys.N); d .-= sum(d) / sys.N; d ./= sqrt(sum(abs2, d))      # unit norm, as the modes
         D.tdir_g(sys, d)
     end
     pl = D.plan(M, S, β; families=fams, cpumap=true, cls=cls, bmax=Dict(f => NSITE for f in fams), cells=ci)

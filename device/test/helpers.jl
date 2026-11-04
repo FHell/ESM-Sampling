@@ -71,8 +71,9 @@ function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], 
         κs < κmin && return nothing
         n = st.bus[i]
         ML.prep_node!(ws, P, LM, st.fe, i, 1.0, τ)
-        ML.prorata!(wa, jac, P, LM, LC, n, κs, τm; learn=learn)
-        ML.prorata!(ws, jac, P, LM, LC, n, -κs, τ; learn=learn)
+        u = ((si, i),)                                         # nominal storage requirement (CPU `soc_qadj`, as `prep_tsoc!`)
+        ML.prorata!(wa, jac, P, LM, LC, n, κs, τm; learn=learn, qadj=ML.soc_qadj(P, LM, LC, u, n, τm))
+        ML.prorata!(ws, jac, P, LM, LC, n, -κs, τ; learn=learn, qadj=ML.soc_qadj(P, LM, LC, u, n, τ))
     elseif fam == :tpot || fam == :tpotL
         ML.prep_tpot!(nothing, ws, P, LM, LC, τ, jac; n=site[1], learn=learn) || return nothing
     elseif fam == :cell

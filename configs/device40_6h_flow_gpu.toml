@@ -1,0 +1,14 @@
+# Device profiling run with the flow basis (transport modes for the dense angle families, `ADAPT=1`; mechanics test: α = 0, physical measure, capacity scaling): 40 nodes × 6 h, GPU.
+out = "results/device40_6h_flow_gpu.h5"
+basis = "flow"
+storage = "soc"
+renewables = "load"
+measure = "physical"
+levels = [[10, 24], [40, 24], [40, 6]]
+init = "heuristic"
+use_bias = false
+nchains = 4
+mlda_warmup = 2
+nsamples = 6
+device_backend = "gpu"
+device_sweeps = 10
