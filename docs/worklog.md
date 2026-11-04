@@ -49,6 +49,13 @@ concrete next steps. Update it at the end of every work session.
   region on by default, θ_u₂ ≤ 0); `complete40.toml` has `warmup0` below `bias_start`.
 
 **Device port:**
+- Plan (user, 2026-11-04): implement all missing families on plain arrays against the CPU
+  (`slong`/`slevel`, storage pairs, Haar angle atoms and `tcut`/`acut`, local re-routing
+  templates, block aggregates, `adshape`; not the learned `kpeak`, weather moves, fused kernels,
+  multi-GPU), then one Reactant compile pass (CPU backend) over all device code, then a review
+  of the existing and new Reactant code by a Fable agent; GPU timings from H5 on the cluster.
+  The precompile workload stays only if it is a clean win. (Of the port agent's 6.2 h, 3.3 h were
+  waits on background compile and timing scripts; few compiles broke.)
 - Fine-level weather moves: not needed any more (the weather moves on the host by a
   prior-reversible pCN process). Device agent (2026-11-04) on, in order: GPU form choice and
   the `tpot` padding; restructuring so XLA does not materialize large intermediates
