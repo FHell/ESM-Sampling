@@ -17,29 +17,33 @@
 #      for the compensators with |A k| ≥ κ_min; a unit with k0 < κ_min moves alone.
 
 "Per-unit parameters of the Langevin step (type-parametric: uploaded as device arrays)."
-struct LgvParams{V}
-    κg::V; ηg::V; hg::V          # dispatchable units: offset κ_s, step η_w (0: frozen), upper box bound
-    κs::V; ηs::V; hs::V          # storage
-    κr::V; ηr::V; hr::V          # renewables (`ren_units` order)
+struct LgvParams{V,Mx}
+    κg::V; ηg::Mx; hg::V         # dispatchable units: offset κ_s, step η_w per chain (C/M, U_g; 0: frozen), upper box bound
+    κs::V; ηs::Mx; hs::V         # storage
+    κr::V; ηr::Mx; hr::V         # renewables (`ren_units` order)
 end
 
 """
     lgv_params(P, M, ix; κs, ηw) -> LgvParams
 
-Per-unit arrays from per-k-field values `κs`, `ηw` (vectors over `P.E.kspecs`); units without a
-k field (fixed capacities) get η = 0.
+Per-unit arrays from per-k-field values: `κs` a vector over `P.E.kspecs`, `ηw` one such vector
+for all chains or a vector of them, one per chain (the steps adapted per chain); units without
+a k field (fixed capacities) get η = 0.
 """
 function lgv_params(P::ML.Problem, M::DeviceModel, ix::DeviceIndex; κs, ηw)
     E = P.E
     gk = [E.gens[g].kf for (g, i) in ix.gidx]
     sk = [E.stors[s].kf for (s, i) in ix.sidx]
     rk = [E.gens[g].kf for (g, i) in ren_units(P)]
+    ηc = eltype(ηw) <: Real ? [ηw] : ηw
     pick(v, kf) = [f > 0 ? Float64(v[f]) : 0.0 for f in kf]
+    pickc(kf) = reduce(vcat, [reshape(pick(η, kf), 1, :) for η in ηc])
     hi(kf, idx) = [f > 0 ? E.kspecs[f].hi[i] : 1.0 for (f, (_, i)) in zip(kf, idx)]
     nz(v) = isempty(v) ? zeros(1) : v
-    return LgvParams(nz(pick(κs, gk)), nz(pick(ηw, gk)), nz(hi(gk, ix.gidx)),
-                     nz(pick(κs, sk)), nz(pick(ηw, sk)), nz(hi(sk, ix.sidx)),
-                     nz(pick(κs, rk)), nz(pick(ηw, rk)), nz(hi(rk, ren_units(P))))
+    nzm(A) = size(A, 2) == 0 ? zeros(size(A, 1), 1) : A
+    return LgvParams(nz(pick(κs, gk)), nzm(pickc(gk)), nz(hi(gk, ix.gidx)),
+                     nz(pick(κs, sk)), nzm(pickc(sk)), nz(hi(sk, ix.sidx)),
+                     nz(pick(κs, rk)), nzm(pickc(rk)), nz(hi(rk, ren_units(P))))
 end
 
 """
@@ -49,7 +53,7 @@ The Langevin step of one unit class (C, U): scores s (r s̄ enters as `rr .* s`)
 noise ξ ~ N(0, 1). Elementwise (`lgv_knew` of the prototype).
 """
 function lgv_w(k, s, f, κs, η, hi, ξ; rr, clip, κmin, box::Bool)
-    κ, ηr = reshape(κs, 1, :), reshape(η, 1, :)
+    κ, ηr = reshape(κs, 1, :), η                          # η: (1 or C/M, U)
     g = -f .+ rr .* s
     w = log.(k .+ κ)
     dw0 = ηr .* ((k .+ κ) .* g .+ 1)

@@ -129,6 +129,25 @@ concrete next steps. Update it at the end of every work session.
 
 ## Log
 
+### 2026-11-04 (device: replica driver on the src/ sampler)
+
+- The device replica driver (`device_sampler = "replicas"`, device/src/replica_run.jl) now runs
+  the CPU sampler's parts: `replica_weather!` without its compensation (weather process, window,
+  FFBS, gate reset), `update_gate!`, `drift_weights` with the tilt, `lag_probe` on the host CPU and
+  `adapt_step!` (per-chain η_w uploaded), the snapshot layout of `write_replica_snapshot`, the
+  outputs and summary of `run_replicas`; settings from the CPU keys (`replicas`, `replica_*`,
+  `langevin_*`, `tilt_*`), the `[device_replica]` table and the prototype include removed.
+  `compile = false` runs the driver on plain arrays.
+- Tests on arrays (`device/test/test_replica_driver.jl`): weather paths and gate schedules equal
+  `run_replicas` bitwise; per step scores, gates, weights, Langevin step and dispatch following
+  equal the CPU functions to round-off; a probe step; stop (exit 75) and resume. The compiled
+  check of the four programs is written, not run (`device/test/test_replica_compiled.jl`,
+  `ESM_DEVICE_COMPILE=1`).
+- `ren_units`, `pack_ren`, `ren_to_host!` and the renewable structs in `device/src/ren.jl` (out of
+  `bias_dev.jl`, `kren.jl`, `driver.jl`).
+- Open: the compiled check and a `hpc/run.sh` device smoke run on the new driver (the port agent's
+  compile pass); records every `device_sweeps` steps only; the probe runs synchronously on the host.
+
 ### 2026-11-04 (device: capacity side of the replica sampler, snapshots)
 
 - Device capacity score (`device/src/score.jl`: `cap_score`, the CPU's capacity gradient term by

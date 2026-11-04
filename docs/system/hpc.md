@@ -263,13 +263,13 @@ a full-fidelity checkpoint: plain HDF5 data that survives code and Julia version
   creates the stop file, and the driver writes the snapshot at the next sweep boundary and
   exits with 75. The grace time must cover one sweep plus the write.
 
-**Device driver** (`run_device`, both samplers; [device.md](device.md) §6.3): the same keys, file
-layout (plus a group `device/`), stop file, exit code 75 and `ESM_IGNORE_SIGTERM`
-(`device/scripts/run_device.jl`); the boundaries are the host checkpoints (every
-`device_sweeps` operation sweeps or replica steps), so the grace time must cover one of them
-plus the write. On resume the device arrays and programs are rebuilt from the saved states
-(the compile is repeated: 2–6 minutes) and Reactant's RNG is re-seeded. The replica driver
-also writes a snapshot at the end of the run. Tested locally on 2026-11-04 through
+**Device driver** (`run_device`, both samplers; [device.md](device.md) §6.3): the same keys, stop
+file, exit code 75 and `ESM_IGNORE_SIGTERM` (`device/scripts/run_device.jl`); the Metropolis
+driver writes the chains layout plus a group `device/`, the replica driver the layout of the CPU
+replica driver (so either replica driver resumes from the other's snapshot). The boundaries are
+the host checkpoints (every `device_sweeps` operation sweeps or replica steps), so the grace time
+must cover one of them plus the write. On resume the device arrays and programs are rebuilt
+from the saved states (the compile is repeated: 2–6 minutes) and the streams are re-seeded. Tested locally on 2026-11-04 through
 `hpc/run.sh` in `device` mode on the CPU backend (`hpc/configs/device_smoke.toml`, the
 simulated layout of §5).
 

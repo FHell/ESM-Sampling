@@ -256,7 +256,7 @@ chains, 50–100 times the throughput of 4 CPU threads; full Europe (about 4 000
 hourly with localized moves, 10–20 s per sweep (2–5 s fused) against about 30 min on 4
 threads, at most 8–12 chains per 80 GB.
 
-**Replica step on the laptop GPU** (2026-11-04, `run_device` with `device_sampler = "replica"`,
+**Replica step on the laptop GPU** (2026-11-04, `run_device` with `device_sampler = "replicas"`,
 `configs/device40_replica.toml`: 40 nodes daily, 4 chains × 4 replicas, C = 16, FP64, operation
 families reduced to `:gen0` for the measurement): per step, the score accumulation 10 ms, the
 Langevin step with the dispatch following 38 ms, the weather upload with the compensation 54 ms
