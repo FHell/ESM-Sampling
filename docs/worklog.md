@@ -11,9 +11,24 @@ State for a fresh session; details in the to-dos and the log below.
 
 **Update at the wind-down (usage limit).** Two agents were stopped mid-work; their branches hold
 what they committed:
-- `worktree-agent-af8bb885e2cc307b7`: the code-only device package (merge of the FMA fix branch
-  `worktree-agent-ae8ec558cca8954cf`, `families = :all` with every family, review L2, M3, M4,
-  H5 lines). Read its last commit message for what is done. Nothing in it is tested.
+- `worktree-agent-af8bb885e2cc307b7` (45c4a69 merge of the FMA fix, 8697199 work in progress):
+  done in code, untested (not even `using ESMDevice`): the FMA fix merged; `families = :all` =
+  every family (storage pairs and `xlocc` left out for lossy models; dispatch shapes only with
+  host adaptation; the host adaptation now sets the learned dispatch shapes); L2 (`slevel` its
+  own family, `slong` plateaus only, 32 per unit from `storage_long_moves`); M3 (guard counters
+  per row, family and guard, `device/guard_*`, `replicas/<c>/guard_*`, a `guards` table in
+  `summary_device.toml`; cap margin 1.5 × + 16); M4 (no trace-time globals; the plan carries the
+  schedule context; a test that two plans don't interfere). Not done: H5 estimates (the full set
+  has 8× the `slong` rounds), the docs (device.md families table, §3/§4/§6/§7 and the M4 note;
+  config.md; data.md guard outputs; testing.md; campaigns.md). API changes: `sample_jump` and
+  `line_draw` return 4 values, `do_round` 3; `device_table(pl, f, ht)`, `jumpform(pl, f)`,
+  `jumpcap(pl, f)`; `test_mock.jl`, `test_sampler.jl`, `test_program.jl` still use the old forms.
+  Its test list (in the agent's order): (0) `julia --project=device -e 'using ESMDevice'`;
+  (1) `ESM_DEVICE_COMPILE=1 ESM_DEVICE_FAMILIES=<the 16-family list> … test_replica_compiled.jl`,
+  then `ESM_DEVICE_FAMILIES=all` (30–60 min); (2) `CASE=A FAMS=all … test_reactant_fams.jl` and
+  `CASE=B` (30–60 min each); (3) arrays: `test_comp.jl` CASE=A…O, `test_jump.jl`, `test_redraw.jl`,
+  `test_replica_driver.jl`; (4) `ESM_DEVICE_COMPILE=1 … test_residual.jl` (stop and resume with
+  guards); (5) the device smoke run through `hpc/run.sh` with default families and `FAMILIES=all`.
 - `worktree-agent-ac0e7bbc4dd332da8`: an exploratory fused-kernel prototype (Fable), with
   `docs/fused_kernel_exploration.md` if it got that far. Not to be merged now.
 
