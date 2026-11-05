@@ -29,8 +29,16 @@ what they committed:
   `CASE=B` (30–60 min each); (3) arrays: `test_comp.jl` CASE=A…O, `test_jump.jl`, `test_redraw.jl`,
   `test_replica_driver.jl`; (4) `ESM_DEVICE_COMPILE=1 … test_residual.jl` (stop and resume with
   guards); (5) the device smoke run through `hpc/run.sh` with default families and `FAMILIES=all`.
-- `worktree-agent-ac0e7bbc4dd332da8`: an exploratory fused-kernel prototype (Fable), with
-  `docs/fused_kernel_exploration.md` if it got that far. Not to be merged now.
+- `worktree-agent-ac0e7bbc4dd332da8` (0b09a78; exploratory, not to be merged now): fused-kernel
+  prototype for the slope-jump "global part" (fold, payload sort, cap, potential, inverse CDF),
+  first for `tpot` (36 % of the full laptop sweep; the same kernel serves blocks, tsoc, cells,
+  slong, sx*). Route: a KernelAbstractions kernel inside the Reactant program (separate
+  environment `device/experimental/`, Reactant kept at 0.2.304); a test kernel with shared memory
+  and barriers ran correctly on the GPU, but `raise=true` fails for such kernels, so the compiled
+  check is GPU-only. The code is written, not yet run; next: `timeout 600 nice -n 19 julia
+  --project=device/experimental -t 4 device/experimental/tpot_fused.jl` (C=2 H=24 NSITE=200).
+  Expected 1.3–1.5× per slope-jump family from this part alone; see
+  `docs/fused_kernel_exploration.md` on the branch.
 
 Next, in order: finish and merge the device package; then run **the one big test** (user: no
 test runs in between): the CPU suite on the rebuilt model files (`ESM_LP_THREADS=3 nice -n 19
