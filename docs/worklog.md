@@ -70,8 +70,10 @@ concrete next steps. Update it at the end of every work session.
 - Fine-level weather moves: not needed any more (the weather moves on the host by a
   prior-reversible pCN process); marked "not planned" in device.md and moves/README.md.
 - All device families are built (storage pairs last); open from the review: the guard rate of
-  the slope-jump cap (M3), the trace-time globals into the plan (M4), a level family for
-  `slevel` without generator columns (L2).
+  the slope-jump cap (M3; the cap is from the initial state and later sites exceed it, e.g.
+  `:slong` 1858 against 1833: a counter per family and a wider margin), the trace-time globals
+  into the plan (M4), a level family for `slevel` without generator columns (L2). The compiled
+  ≠ arrays divergence of the all-family program is fixed (sign tests ignore round-off, device.md §3).
 - Next device restructuring steps (ledger E28): the slot-point sort of the slope-jump form (a
   payload sort per balance slot, now one of the larger kernels), the per-column evaluation at the
   slot points (columns × slot points), the dense form of the plain families (unchanged).
@@ -145,6 +147,40 @@ concrete next steps. Update it at the end of every work session.
 
 ## Log
 
+### 2026-11-05 (device: compiled ≠ arrays with all families in one program — cause and fix)
+
+- The divergence of the all-family operation program (2.6e-2 at a few sites in 5 of 6 rows)
+  was not round-off growth and not an interaction of the trace-time globals or of the compiled
+  loop: localised to `:sxlong` by the one program returning the state after every family
+  (copies: a traced loop rebinds the arrays it carries), every family before it equal to the
+  arrays to ≤ 6e-11, and the arrays run from the compiled input reproducing the array result
+  (no input sensitivity). Cause: the real-candidate count of the slope-jump form, the input of
+  the cap guard, counted spurious roots in the compiled program only: at an argument's own
+  clamp point the value is the bound only to round-off (one fused multiply-add there, two
+  roundings on arrays), so a SoC quantity that is identically 0 beyond the clamp is ±1e-16 at
+  the point and `rootsK` counts a crossing to the exact 0 of the ray (182 of 730 columns of one
+  site; +6 % on the count); a second, smaller source: the balance residual on a ray changes by
+  its injection round-off (1e-11 MW) and a crossing from that slope lands inside `RAYMAX` for
+  small |r|. One `:sxlong` site had counts 2831–2965 on the arrays and 3014–3114 compiled
+  against the cap 2996: guarded (t = 0) in the compiled program, drawn on the arrays.
+- Fix (device.md §3, "Round-off and the sign tests"): the SoC and commitment quantities are 0
+  within 32 ulp of their scale before the sign tests (`zsnap`), a segment with a change below
+  1e-9 of the quantity's magnitude is flat (`flat_tol`), and the residual's rays are flat below
+  256 ulp of |r₀| + Σ(|injection| + |injection at 0|) (`raytol`, `eval_terms(…; absv = true)`),
+  in both forms. After it the guard inputs of all 13 families agree exactly between arrays and
+  compiled on the failing inputs (0 of ~5e5 site-rows), and the all-family program (the
+  per-family form) equals the arrays after every family (≤ 5.9e-11; 2.5e-10 after `:cell2`);
+  `test_jump.jl`, `test_mock.jl`, `test_comp.jl` pass on arrays. Not yet run with the fix: the
+  plain `run_rounds` form of the all-family program (stopped when the machine was needed) and
+  `test_replica_compiled.jl` itself with `ESM_DEVICE_COMPILE=1` (its new per-family `op`).
+- `test_replica_compiled.jl` compares the operation program after every family's loop (the
+  robust form of the combination test); device.md §7 and testing.md updated; the `@trace for`
+  write-back noted among the Reactant constraints.
+- Side results: the chain of per-family compiled programs over 21 families and 8 sweeps with
+  fresh uniforms stayed within 2e-7 of the arrays (no flip): round-off growth alone is slow.
+  The slope-jump cap from the initial state (M3) remains a deviation: `:slong` counts in a
+  later state exceeded their cap (1858 against 1833), guarded identically on both sides.
+
 ### 2026-11-05 (device: storage pairs, site redraws, the compile pass)
 
 - Storage pairs on the device (`device/src/storagepair.jl`: `:sxpair`, `:sxpairn`, `:sxlong`,
@@ -167,7 +203,9 @@ concrete next steps. Update it at the end of every work session.
 - Compiled replica check (`test_replica_compiled.jl`, my families in groups): equal to the arrays to
   ≤ 1e-10 per group; all 16 families in one sweep differ at a few sites (2.6e-2): round-off grows
   over the rounds of a long sweep until a draw changes (each family and each group alone is
-  equal). The compiled short run of the replica driver (with the site redraws) passes.
+  equal). [Cause found and fixed: the section "cause and fix" above; it was a guard flip of
+  `:sxlong`, not round-off growth.] The compiled short run of the replica driver (with the site
+  redraws) passes.
 - Compiled Langevin section (`test_langevin_dev.jl`) passes on the merged code; the device smoke
   run through `hpc/run.sh` (`device_smoke.toml`, CPU backend): SIGTERM after the first step gave
   the snapshot, exit 75, status `checkpointed`; the same run id resumed (restart 1, step 8/12)

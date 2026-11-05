@@ -57,7 +57,20 @@ pos, chg = ones(Int, C), zeros(C)
 pos[rows] .= 1:nch; chg[rows] .= 1.0
 src = collect(1:C); src[[D.slotrow(RD, c, RD.Mp) for c in 1:nch]] .= [D.slotrow(RD, c, 2) for c in 1:nch]   # replica 2 into the probe slot
 
-op(st, cp, sp, k, tabs, U) = D.run_rounds(st, cp, sp, k, tabs, 1, nothing, U, fv)
+# The operation sweep family by family in one program, the state after every family returned (a copy:
+# a traced loop rebinds the arrays it carries, so a later family's loop would overwrite an uncopied
+# one): a difference is then localised to the family whose loop first differs, with inputs that agree
+# to round-off, instead of showing up as the sum over a long sweep.
+const OPFAMS = typeof(fv).parameters[1]
+cp_state(st) = D.FlatState((copy(getfield(st, k)) for k in fieldnames(D.FlatState))...)
+function op(st, cp, sp, k, tabs, U)
+    outs = Any[]
+    for f in OPFAMS
+        st = D.run_rounds(st, cp, sp, k, tabs, 1, nothing, U, Val((f,)))
+        push!(outs, cp_state(st))
+    end
+    return Tuple(outs)
+end
 sa(st, kg, ks, RS, KP, RP, acc, wt) = D.score_acc(st, kg, ks, RS, KP, RP, acc, wt, dims, ph; βv=P.βv, βk=P.βk)
 lg(st, kg, ks, RS, dn, cr, cap, KP, RP, LP, acc, W, ξg, ξs, ξr, wsh, rg, sg) =
     D.lgv_pass(st, kg, ks, RS, dn, cr, cap, KP, RP, LP, acc, W, ξg, ξs, ξr, wsh, rg, sg, dims; kw...)
@@ -95,16 +108,26 @@ function compile_check(k)
     o = f(a...)
     d = maxrel(o, outs[k])
     @printf("  %s: compile %.0f s, max relative |compiled − arrays| %.2e\n", k, tc, d)
-    if d > 1e-9 && o isa D.FlatState                 # where: entries beyond 1e-9 per field, rows, first columns
-        for fld in fieldnames(typeof(o))
-            x, y = Array(getfield(o, fld)), getfield(outs[k], fld)
-            bad = findall(abs.(x .- y) ./ max.(1.0, abs.(y)) .> 1e-9)
-            isempty(bad) && continue
-            println("    $fld: $(length(bad)) of $(length(y)) entries, rows $(sort(unique(first.(Tuple.(bad))))), columns ",
-                    sort(unique(last.(Tuple.(bad))))[1:min(end, 12)])
+    if k == :op                                       # per family: the state after each family's rounds
+        for (i, f) in enumerate(OPFAMS)
+            di = maxrel(o[i], outs[k][i])
+            @printf("    after %-8s %.2e%s\n", f, di, di > 1e-9 ? "  <- first beyond 1e-9" : "")
+            di > 1e-9 && (where_differs(o[i], outs[k][i]); break)
         end
+    elseif d > 1e-9 && o isa D.FlatState
+        where_differs(o, outs[k])
     end
     return tc, d
+end
+"Where two states differ: entries beyond 1e-9 per field, rows, first columns."
+function where_differs(o, y0)
+    for fld in fieldnames(typeof(o))
+        x, y = Array(getfield(o, fld)), getfield(y0, fld)
+        bad = findall(abs.(x .- y) ./ max.(1.0, abs.(y)) .> 1e-9)
+        isempty(bad) && continue
+        println("      $fld: $(length(bad)) of $(length(y)) entries, rows $(sort(unique(first.(Tuple.(bad))))), columns ",
+                sort(unique(last.(Tuple.(bad))))[1:min(end, 12)])
+    end
 end
 "dot_general precisions in the HLO of a Float32 one-hot contraction (`tmul`) traced through `ftcompile` and without it."
 function f32_precisions()

@@ -195,7 +195,8 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
         y(t) = argloc(g.y0, g.a, g.ak, Qc, gc, t)
         addgroup!(P, pe -> gen_c.(Δt, cv, y(pe), g.κ, g.w, g.mc, g.clo, g.chi, g.plo, g.hv) .-
                            gen_c.(Δt, cv, g.y0, g.κ, g.w, g.mc, g.clo, g.chi, g.plo, g.hv))
-        push!(roles, (length(gP), g.slot, pe -> .-(gen_p.(y(pe), g.κ) .- gen_p.(g.y0, g.κ))))
+        push!(roles, (length(gP), g.slot, pe -> .-(gen_p.(y(pe), g.κ) .- gen_p.(g.y0, g.κ)),
+                      pe -> absd.(gen_p.(y(pe), g.κ)) .+ absd.(gen_p.(g.y0, g.κ))))
     end
     q = S.uc
     if q !== nothing && q.on !== nothing && any(x -> x !== nothing, (q.ay, q.aky, q.au, q.aku, q.au1, q.aku1))
@@ -211,9 +212,9 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
         pe = extend4(P)
         yc, ucl, uc1 = clamp01.(av(1, pe)), clamp01.(av(2, pe)), clamp01.(av(3, pe))
         Rv = Any[]
-        roots!(Rv, q.on .* (yc .- ucl), pe, q.cy .+ q.cu)
-        roots!(Rv, q.on .* (q.gmin .* ucl .- yc), pe, q.cy .+ q.cu)
-        roots!(Rv, q.on .* (uc1 .- ucl), pe, q.cu .+ q.cu1)
+        roots!(Rv, zsnap(q.on .* (yc .- ucl), UC_TOL), pe, q.cy .+ q.cu)
+        roots!(Rv, zsnap(q.on .* (q.gmin .* ucl .- yc), UC_TOL), pe, q.cy .+ q.cu)
+        roots!(Rv, zsnap(q.on .* (uc1 .- ucl), UC_TOL), pe, q.cu .+ q.cu1)
         P = isempty(Rv) ? P : sort3(cat(P, Rv...; dims=3))
         addgroup!(P, pe -> q.on .* (uc_val.(Δt, cv, clamp01.(av(1, pe)), av(2, pe), av(3, pe), q.κ, q.w, q.gmin, q.su, q.nl) .-
                                     uc_val.(Δt, cv, clamp01.(q.y0), q.u0, q.u10, q.κ, q.w, q.gmin, q.su, q.nl)))
@@ -226,8 +227,10 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
         P = sort3(cat(P...; dims=3))
         yl(t) = l.y0 .+ l.a .* t
         addgroup!(P, pe -> link_c.(Δt, cv, yl(pe), l.cap) .- link_c.(Δt, cv, l.y0, l.cap))
-        push!(roles, (length(gP), l.slot0, pe -> link_j0.(yl(pe), l.cap, l.η) .- link_j0.(l.y0, l.cap, l.η)))
-        push!(roles, (length(gP), l.slot1, pe -> link_j1.(yl(pe), l.cap, l.η) .- link_j1.(l.y0, l.cap, l.η)))
+        push!(roles, (length(gP), l.slot0, pe -> link_j0.(yl(pe), l.cap, l.η) .- link_j0.(l.y0, l.cap, l.η),
+                      pe -> absd.(link_j0.(yl(pe), l.cap, l.η)) .+ absd.(link_j0.(l.y0, l.cap, l.η))))
+        push!(roles, (length(gP), l.slot1, pe -> link_j1.(yl(pe), l.cap, l.η) .- link_j1.(l.y0, l.cap, l.η),
+                      pe -> absd.(link_j1.(yl(pe), l.cap, l.η)) .+ absd.(link_j1.(l.y0, l.cap, l.η))))
     end
     if S.line !== nothing && S.line.df !== nothing
         ln = S.line
@@ -242,8 +245,9 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
         u0 = absd.(ln.f0) ./ ln.s
         dloss(f) = ln.α .* ln.s .^ 2 .* (hinge(k.Lq, absd.(f) ./ ln.s) .- hinge(k.Lq, u0))
         addgroup!(P, pe -> (cv * Δt) .* linewc(ln, ln.s .* (hinge(k.ψ, absd.(fl(pe)) ./ ln.s) .- hinge(k.ψ, u0))))
-        push!(roles, (length(gP), ln.near, pe -> (f = fl(pe); (f .- ln.f0) .+ 0.5 .* dloss(f))))
-        push!(roles, (length(gP), ln.far, pe -> (f = fl(pe); .-(f .- ln.f0) .+ 0.5 .* dloss(f))))
+        fa(pe) = (f = fl(pe); absd.(f) .+ absd.(ln.f0) .+ 0.5 .* absd.(dloss(f)))
+        push!(roles, (length(gP), ln.near, pe -> (f = fl(pe); (f .- ln.f0) .+ 0.5 .* dloss(f)), fa))
+        push!(roles, (length(gP), ln.far, pe -> (f = fl(pe); .-(f .- ln.f0) .+ 0.5 .* dloss(f)), fa))
     end
     if S.soc !== nothing && (S.soc.ae !== nothing || S.soc.ae1 !== nothing)
         so = S.soc
@@ -260,14 +264,16 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
         pe = extend4(P)
         d1 = dd(pe)
         Rv = Any[]
-        for zq in (d1, ifelse.(so.ηin .> 0.0, d1 .- so.ηin, 1.0), .-d1 .* so.ηout .- 1.0)
+        tol = soc_tol(Δt, so.h, so.qt, so.ηout)
+        for zq in (zsnap(d1, tol), zsnap(ifelse.(so.ηin .> 0.0, d1 .- so.ηin, 1.0), tol), zsnap(.-d1 .* so.ηout .- 1.0, tol))
             roots!(Rv, zq, pe, so.cnt)
         end
         P = isempty(Rv) ? P : sort3(cat(P, Rv...; dims=3))
         addgroup!(P, pe -> soc_c.(Δt, cv, ye(pe), ye1(pe), so.k, so.w, so.h, so.ηin, so.ηout, so.qt, so.mc) .-
                            soc_c.(Δt, cv, so.e0, so.e10, so.k, so.w, so.h, so.ηin, so.ηout, so.qt, so.mc))
         d0 = soc_d.(Δt, so.e0, so.e10, so.h, so.qt)
-        push!(roles, (length(gP), so.slot, pe -> soc_j.(dd(pe), so.k, so.ηin, so.ηout) .- soc_j.(d0, so.k, so.ηin, so.ηout)))
+        push!(roles, (length(gP), so.slot, pe -> soc_j.(dd(pe), so.k, so.ηin, so.ηout) .- soc_j.(d0, so.k, so.ηin, so.ηout),
+                      pe -> absd.(soc_j.(dd(pe), so.k, so.ηin, so.ηout)) .+ absd.(soc_j.(d0, so.k, so.ηin, so.ηout))))
     end
     R = S.nr
     if R > 0 && !isempty(roles)
@@ -281,19 +287,19 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
         #    the residual there (one evaluation of every column at the points of its slot)
         Ps = Any[rs(z, C, B, 1, 1) .+ 0.0 .* S.r0]
         offs, np = Int[], 1
-        for (gid, sl, _) in roles
+        for (gid, sl, _, _) in roles
             G = slotgather(gP[gid], sl, R)
             push!(offs, np)
             G === nothing || (push!(Ps, G); np += size(G, 3))
         end
-        r1(pe) = begin                                   # residual of every slot at its points pe (C, B, L, R)
-            inj = nothing
+        r1(pe; absv=false) = begin                       # residual of every slot at its points pe (C, B, L, R); absv: its round-off scale
+            inj = nothing                                # |r0| + Σ(|injection| + |injection at 0|), as `eval_terms(…; absv = true)`
             z4 = 0.0 .* pe[:, :, :, 1:1]
-            for (_, sl, f) in roles
-                X = track(f(pe[:, :, :, [s == 0 ? 1 : s for s in sl]]))
+            for (_, sl, f, fa) in roles
+                X = track((absv ? fa : f)(pe[:, :, :, [s == 0 ? 1 : s for s in sl]]))
                 inj = addinj(inj, slotsum(X, sl, R, z4))
             end
-            S.r0 .+ (inj === nothing ? 0.0 .* pe : inj)
+            (absv ? absd.(S.r0) : S.r0) .+ (inj === nothing ? 0.0 .* pe : inj)
         end
         Pu = cat(Ps...; dims=3)                           # (C, B, np, R), unsorted
         rv = track(r1(Pu))
@@ -301,7 +307,7 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
         # 2. the balance part of the jump at every column point, and the slope of r right of 0
         rp0 = nothing
         z1 = 0.0 .* zc
-        for (ρ, (gid, sl, f)) in enumerate(roles)
+        for (ρ, (gid, sl, f, _)) in enumerate(roles)
             P = gP[gid]
             m, n = size(P, 3), size(P, 4)
             pos = zeros(Int, n)
@@ -325,9 +331,12 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
         Pq, rq = sortpair1(permutedims(Pu, (3, 1, 2, 4)), permutedims(rv, (3, 1, 2, 4)))
         lo, hi = Pq[1:1, :, :, :], Pq[np:np, :, :, :]
         pext = cat(lo .- (1.0 .+ absd.(lo)), hi .+ (1.0 .+ absd.(hi)); dims=1)     # (2, C, B, R)
-        rext = permutedims(r1(permutedims(pext, (2, 3, 1, 4))), (3, 1, 2, 4))
+        pext4 = permutedims(pext, (2, 3, 1, 4))
+        rext = permutedims(r1(pext4), (3, 1, 2, 4))
+        aext = permutedims(r1(pext4; absv=true), (3, 1, 2, 4))          # (2, C, B, R): the round-off scale of r on the rays
         rts, cn, jr = slot_cross(cat(rext[1:1, :, :, :], rq, rext[2:2, :, :, :]; dims=1),
-                                 cat(pext[1:1, :, :, :], Pq, pext[2:2, :, :, :]; dims=1), NR, Δt, k.cshed, k.cdump)
+                                 cat(pext[1:1, :, :, :], Pq, pext[2:2, :, :, :]; dims=1), NR, Δt, k.cshed, k.cdump;
+                                 raytol=(RAY_ULP * eps(Float64)) .* aext)
         over = over .| (rs(maximum(cn; dims=(1, 4)), C, B, 1) .> NR)
         push!(gP, permutedims(rts, (2, 3, 1, 4))); push!(gJ, permutedims(jr, (2, 3, 1, 4)))
     end
@@ -347,7 +356,7 @@ there, Δt (w after − w before) r' (0 where none). A crossing is a change of t
 the ends of a segment (on a ray: between its end and infinity), so it is also found where r vanishes
 at a point; a crossing on a ray farther than `RAYMAX` is dropped (as in `rootsK`).
 """
-function slot_cross(z, pe, NR::Int, Δt, cs, cd)
+function slot_cross(z, pe, NR::Int, Δt, cs, cd; raytol=nothing)
     n = size(pe, 1)
     za, zb = z[1:n-1, :, :, :], z[2:n, :, :, :]
     pa, pb = pe[1:n-1, :, :, :], pe[2:n, :, :, :]
@@ -356,6 +365,10 @@ function slot_cross(z, pe, NR::Int, Δt, cs, cd)
     ua, ub = za .>= 0.0, zb .>= 0.0
     seg = reshape(collect(1:n-1), n - 1, 1, 1, 1)
     isl, isr = seg .== 1, seg .== n - 1
+    if raytol !== nothing                                            # a ray on which r changes by no more than its round-off (2, C, B, R) is flat
+        dz = absd.(zb .- za)
+        s = ifelse.((isl .& (dz .<= raytol[1:1, :, :, :])) .| (isr .& (dz .<= raytol[2:2, :, :, :])), 0.0, s)
+    end
     ulo, uhi = s .< 0.0, s .> 0.0                                # side at −∞ and +∞ of a ray
     sn = ifelse.(s .== 0.0, 1.0, s)
     x = ifelse.(isl, pb .- zb ./ sn, ifelse.(isr, pa .- za ./ sn, pa .+ L .* sdiv.(za, za .- zb)))

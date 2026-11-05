@@ -146,6 +146,34 @@ end
 @inline link_j1(y, cap, η) = (x = cap * clamp(y, -1.0, 1.0); -x + (1 - η) * max(x, 0.0))
 
 @inline soc_d(Δt, ye, ye1, h, qt) = h * (clamp01(ye1) - clamp01(ye)) / Δt - qt
+
+"""
+A secondary quantity within `tol` of 0 is exactly 0 for the sign tests of the root searches (`rootsK`,
+`slot_cross`) and the sign-change counts of the guards. An argument at its own clamp point is the
+bound only to round-off (two roundings on arrays, one fused multiply-add in the compiled program), so a
+quantity that vanishes identically beyond a clamp (a SoC step with both ends clamped, a commitment at
+its bound) is ±ulp at that point and would otherwise count a crossing to the exact 0 of the ray, in
+one program and not in the other; the count of such roots enters the cap guard of the slope-jump form.
+"""
+zsnap(z, tol) = ifelse.(absd.(z) .<= tol, 0.0, z)
+"Round-off scale of the SoC quantities: the bound error of the clamped fractions times h/Δt (and qt)."
+soc_tol(Δt, h, qt, ηout) = (32 * eps(Float64)) .* (h ./ Δt .* max.(1.0, ηout) .+ absd.(qt))
+"Round-off scale of the commitment quantities (differences of clamped fractions)."
+const UC_TOL = 32 * eps(Float64)
+"""
+A secondary quantity whose change over a segment is within this of its magnitude is flat there
+(`rootsK`; a sign change between the ends is still a root: it needs a change of the full magnitude).
+Beyond the clamps the slope of a quantity is pure round-off, and a root placed from it on a ray lands
+at 10⁹–10¹² extension lengths, inside `RAYMAX`, in one program and not in the other; a genuine root
+beyond 10⁹ extension lengths is irrelevant for the draw (the potential there is far above 10³ nats)
+but would enter the counts. The balance residual's round-off is that of its injection sums, far above
+the ulp of its value: its rays use the absolute tolerance `raytol` (`RAY_ULP` ulp of
+|r0| + Σ(|injection| + |injection at 0|) at the ray points, `eval_terms(…; absv = true)`) in `rootsK`
+and `slot_cross`. The changes seen are a few ulp of that scale; 256 leaves room for the summation
+order over many columns, and a genuine crossing with a slope below it lies far beyond `RAYMAX`.
+"""
+flat_tol(za, zb) = 1e-9 .* (absd.(za) .+ absd.(zb))
+const RAY_ULP = 256
 @inline soc_pc(d, ηin) = ifelse(d >= 0.0, ifelse(ηin > 0.0, d / ifelse(ηin > 0.0, ηin, 1.0), 0.0), 0.0)
 @inline soc_mc(d, ηout) = ifelse(d >= 0.0, 0.0, min(-d * ηout, 1.0))
 @inline function soc_c(Δt, cv, ye, ye1, k, w, h, ηin, ηout, qt, mc)
@@ -288,7 +316,7 @@ Potential βΔC(t) at the points t (C, B, K), the secondary quantities Z (a vect
 Roots kept: 1 for a quantity of one monotone moving argument, :fam (the family's K) otherwise;
 quantities of static arguments only are left out.
 """
-function eval_terms(tb::TermBatch, k::Consts, t; sec::Bool=true)
+function eval_terms(tb::TermBatch, k::Consts, t; sec::Bool=true, absv::Bool=false)
     S = tb.st
     Δt, cv = k.Δt, k.cv
     C, B, K = size(t, 1), size(t, 2), size(t, 3)
@@ -301,12 +329,15 @@ function eval_terms(tb::TermBatch, k::Consts, t; sec::Bool=true)
     inj = nothing
     R = S.nr
     red(x) = sum(x; dims=4)
+    # absv: instead of the residual, its round-off scale |r0| + Σ(|injection| + |injection at 0|) per slot: the
+    # injection changes are differences of the injections themselves, whose rounding stays when the change is 0
+    dj(A, B) = absv ? absd.(A) .+ absd.(B) : A .- B
     if S.gen !== nothing
         g = S.gen
         y = argval(g.y0, g.a, g.ak, g.kid, t4, φz)
         c = c .+ red(gen_c.(Δt, cv, y, g.κ, g.w, g.mc, g.clo, g.chi, g.plo, g.hv) .-
                      gen_c.(Δt, cv, g.y0, g.κ, g.w, g.mc, g.clo, g.chi, g.plo, g.hv))
-        R > 0 && (inj = addinj(inj, slotsum(.-(gen_p.(y, g.κ) .- gen_p.(g.y0, g.κ)), g.slot, R, z4)))
+        R > 0 && (inj = addinj(inj, slotsum(absv ? dj(gen_p.(y, g.κ), gen_p.(g.y0, g.κ)) : .-dj(gen_p.(y, g.κ), gen_p.(g.y0, g.κ)), g.slot, R, z4)))
     end
     if S.uc !== nothing && S.uc.on !== nothing
         q = S.uc
@@ -317,8 +348,8 @@ function eval_terms(tb::TermBatch, k::Consts, t; sec::Bool=true)
                               uc_val.(Δt, cv, clamp01.(q.y0), q.u0, q.u10, q.κ, q.w, q.gmin, q.su, q.nl)))
         if sec
             ucl, uc1 = clamp01.(u), clamp01.(u1)
-            for (zq, cnt) in ((q.on .* (yc .- ucl), q.cy .+ q.cu), (q.on .* (q.gmin .* ucl .- yc), q.cy .+ q.cu),
-                              (q.on .* (uc1 .- ucl), q.cu .+ q.cu1))
+            for (zq, cnt) in ((zsnap(q.on .* (yc .- ucl), UC_TOL), q.cy .+ q.cu), (zsnap(q.on .* (q.gmin .* ucl .- yc), UC_TOL), q.cy .+ q.cu),
+                              (zsnap(q.on .* (uc1 .- ucl), UC_TOL), q.cu .+ q.cu1))
                 c1 = findall(cnt .== 1); cK = findall(cnt .>= 2)
                 isempty(c1) || push!(Z, (cols4(zq, c1), 1))
                 isempty(cK) || push!(Z, (cols4(zq, cK), :fam))
@@ -329,8 +360,8 @@ function eval_terms(tb::TermBatch, k::Consts, t; sec::Bool=true)
         l = S.link
         y = l.y0 .+ (l.a === nothing ? 0.0 : l.a) .* t4
         c = c .+ red(link_c.(Δt, cv, y, l.cap) .- link_c.(Δt, cv, l.y0, l.cap))
-        inj = addinj(inj, slotsum(link_j0.(y, l.cap, l.η) .- link_j0.(l.y0, l.cap, l.η), l.slot0, R, z4))
-        inj = addinj(inj, slotsum(link_j1.(y, l.cap, l.η) .- link_j1.(l.y0, l.cap, l.η), l.slot1, R, z4))
+        inj = addinj(inj, slotsum(dj(link_j0.(y, l.cap, l.η), link_j0.(l.y0, l.cap, l.η)), l.slot0, R, z4))
+        inj = addinj(inj, slotsum(dj(link_j1.(y, l.cap, l.η), link_j1.(l.y0, l.cap, l.η)), l.slot1, R, z4))
     end
     if S.line !== nothing
         ln = S.line
@@ -341,9 +372,9 @@ function eval_terms(tb::TermBatch, k::Consts, t; sec::Bool=true)
         dov = s .* (hinge(k.ψ, u1) .- hinge(k.ψ, u0))
         dloss = ln.α .* s .^ 2 .* (hinge(k.Lq, u1) .- hinge(k.Lq, u0))
         c = c .+ (cv * Δt) .* red(linewc(ln, dov))
-        df = f .- ln.f0
-        inj = addinj(inj, slotsum(df .+ 0.5 .* dloss, ln.near, R, z4))
-        inj = addinj(inj, slotsum(.-df .+ 0.5 .* dloss, ln.far, R, z4))
+        df = dj(f, ln.f0)
+        inj = addinj(inj, slotsum(absv ? df .+ 0.5 .* absd.(dloss) : df .+ 0.5 .* dloss, ln.near, R, z4))
+        inj = addinj(inj, slotsum(absv ? df .+ 0.5 .* absd.(dloss) : .-df .+ 0.5 .* dloss, ln.far, R, z4))
     end
     if S.soc !== nothing
         so = S.soc
@@ -353,9 +384,10 @@ function eval_terms(tb::TermBatch, k::Consts, t; sec::Bool=true)
                      soc_c.(Δt, cv, so.e0, so.e10, so.k, so.w, so.h, so.ηin, so.ηout, so.qt, so.mc))
         d1 = soc_d.(Δt, ye, ye1, so.h, so.qt)
         d0 = soc_d.(Δt, so.e0, so.e10, so.h, so.qt)
-        inj = addinj(inj, slotsum(soc_j.(d1, so.k, so.ηin, so.ηout) .- soc_j.(d0, so.k, so.ηin, so.ηout), so.slot, R, z4))
+        inj = addinj(inj, slotsum(dj(soc_j.(d1, so.k, so.ηin, so.ηout), soc_j.(d0, so.k, so.ηin, so.ηout)), so.slot, R, z4))
         if sec
-            for zq in (d1, ifelse.(so.ηin .> 0.0, d1 .- so.ηin, 1.0), .-d1 .* so.ηout .- 1.0)
+            tol = soc_tol(Δt, so.h, so.qt, so.ηout)
+            for zq in (zsnap(d1, tol), zsnap(ifelse.(so.ηin .> 0.0, d1 .- so.ηin, 1.0), tol), zsnap(.-d1 .* so.ηout .- 1.0, tol))
                 c1 = findall(so.cnt .== 1); cK = findall(so.cnt .>= 2)
                 isempty(c1) || push!(Z, (cols4(zq, c1), 1))
                 isempty(cK) || push!(Z, (cols4(zq, cK), :fam))
@@ -364,8 +396,8 @@ function eval_terms(tb::TermBatch, k::Consts, t; sec::Bool=true)
     end
     if R > 0
         inj = inj === nothing ? 0.0 .* S.r0 .+ z4 : inj
-        r1 = S.r0 .+ inj
-        c = c .+ red(bal_val.(Δt, k.cshed, k.cdump, r1) .- bal_val.(Δt, k.cshed, k.cdump, S.r0))
+        r1 = (absv ? absd.(S.r0) : S.r0) .+ inj
+        absv || (c = c .+ red(bal_val.(Δt, k.cshed, k.cdump, r1) .- bal_val.(Δt, k.cshed, k.cdump, S.r0)))
         sec && push!(Z, (r1, :fam))
     end
     return k.β .* rs(c, C, B, K), Z, inj
@@ -551,9 +583,11 @@ function dense_points(tb::TermBatch, k::Consts, z0; K::Val{NR}=Val(2)) where {NR
     # refined by the other roots (the other quantities are linear between primaries)
     twostage = tb.st.nr > 0 && tb.st.soc !== nothing
     nz = twostage ? length(Z) - 1 : length(Z)
-    for (zq, nrq) in Z[1:nz]
+    # the residual's ray tolerance: its absolute round-off at the two ray points (`RAY_ULP` ulp of its scale)
+    rtol(pex) = (RAY_ULP * eps(Float64)) .* eval_terms(tb, k, pex[:, :, [1, size(pex, 3)]]; absv=true)[2][end][1]
+    for (i, (zq, nrq)) in enumerate(Z[1:nz])
         nr = nrq === :fam ? NR : min(nrq, NR)
-        rts, cnt = rootsK(zq, pe4, nr)
+        rts, cnt = rootsK(zq, pe4, nr; raytol=(!twostage && tb.st.nr > 0 && i == nz) ? rtol(pe) : nothing)
         push!(R, flat3(rts))
         over = over .| (rs(maximum(cnt; dims=4), C, B, 1) .> nr)
     end
@@ -561,7 +595,7 @@ function dense_points(tb::TermBatch, k::Consts, z0; K::Val{NR}=Val(2)) where {NR
         p1 = isempty(R) ? p0 : sort3(cat(p0, R...; dims=3))
         pe1 = extend(p1)
         _, Z1, _ = eval_terms(tb, k, pe1)
-        rts, cnt = rootsK(Z1[end][1], rs(pe1, C, B, size(pe1, 3), 1), NR)
+        rts, cnt = rootsK(Z1[end][1], rs(pe1, C, B, size(pe1, 3), 1), NR; raytol=rtol(pe1))
         over = over .| (rs(maximum(cnt; dims=4), C, B, 1) .> NR)
         return sort3(cat(p1, flat3(rts); dims=3)), over
     end
@@ -572,14 +606,19 @@ end
 The NR smallest sign changes of every column of z (C, B, n, m) over the extended points pe4
 (C, B, n, 1): roots (C, B, NR, m) (0 where fewer) and their number (C, B, 1, m).
 """
-function rootsK(z, pe4, NR::Int)
+function rootsK(z, pe4, NR::Int; raytol=nothing)
     n = size(pe4, 3)
     za, zb = z[:, :, 1:n-1, :], z[:, :, 2:n, :]
     pa, pb = pe4[:, :, 1:n-1, :], pe4[:, :, 2:n, :]
-    den = za .- zb
-    x = pa .+ (pb .- pa) .* sdiv.(za, den)
     seg = reshape(collect(1:n-1), 1, 1, n - 1, 1)
     isl, isr = seg .== 1, seg .== n - 1
+    den = za .- zb
+    den = ifelse.(absd.(den) .<= flat_tol(za, zb), 0.0, den)       # flat to round-off: no root on a ray from noise
+    if raytol !== nothing                                           # the residual: flat within its absolute round-off on a ray (C, B, 2, m)
+        flat = (isl .& (absd.(den) .<= raytol[:, :, 1:1, :])) .| (isr .& (absd.(den) .<= raytol[:, :, 2:2, :]))
+        den = ifelse.(flat, 0.0, den)
+    end
+    x = pa .+ (pb .- pa) .* sdiv.(za, den)
     ok = ifelse.(isl, (den .!= 0.0) .& (zb .!= 0.0) .& (x .< pb),
                  ifelse.(isr, (den .!= 0.0) .& (za .!= 0.0) .& (x .> pa), za .* zb .< 0.0))
     ok = ok .& (absd.(x) .< RAYMAX)
