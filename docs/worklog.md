@@ -9,6 +9,25 @@ concrete next steps. Update it at the end of every work session.
 
 State for a fresh session; details in the to-dos and the log below.
 
+**Update at the wind-down (usage limit).** Two agents were stopped mid-work; their branches hold
+what they committed:
+- `worktree-agent-af8bb885e2cc307b7`: the code-only device package (merge of the FMA fix branch
+  `worktree-agent-ae8ec558cca8954cf`, `families = :all` with every family, review L2, M3, M4,
+  H5 lines). Read its last commit message for what is done. Nothing in it is tested.
+- `worktree-agent-ac0e7bbc4dd332da8`: an exploratory fused-kernel prototype (Fable), with
+  `docs/fused_kernel_exploration.md` if it got that far. Not to be merged now.
+
+Next, in order: finish and merge the device package; then run **the one big test** (user: no
+test runs in between): the CPU suite on the rebuilt model files (`ESM_LP_THREADS=3 nice -n 19
+julia --project=. -t 8 test/runtests.jl`), the device array tests (`test_comp.jl`,
+`test_jump.jl`, `test_redraw.jl`, `test_replica_driver.jl`), one compile pass
+(`test_reactant_fams.jl` cases A and B with every family; `ESM_DEVICE_COMPILE=1
+test_replica_compiled.jl` with every family; the compiled section of `test_langevin_dev.jl`), the
+device smoke run through `hpc/run.sh`, and a simulated campaign through `run.sh` and
+`collect.sh` that checks `stages.csv` and `cost.csv`. Untested on main since the last suite run:
+the stage clock, `cost_table.jl`, `collect.sh`, the runbook commands. Main can be pushed for the
+campaigns before that (the runbook `hpc/RUNBOOK.md` does not use the untested device package).
+
 **Repository.** `main` passes the full CPU suite (`test/runtests.jl`, 43 sets; broken by design:
 the 2 event-walk markers in `test_moves.jl` and the 2 bias KS checks in `test_bias.jl`) and the
 device array tests (`device/test/test_replica_driver.jl`, `test_redraw.jl`; `test_comp.jl`
