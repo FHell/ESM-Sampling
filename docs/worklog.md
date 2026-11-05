@@ -167,6 +167,10 @@ concrete next steps. Update it at the end of every work session.
   than 40 min and 15 GB at T = 1460, now 12 s; `catn`, stacked `SlotChanges`, review H2).
   `device/scripts/compile_probe.jl` and a "Debugging compile time" paragraph in device.md §7.
   `:cellpairu1` now compiles in about 25 s (3.8 GB) and is in `families = :all`.
+- Compiled replica check (`test_replica_compiled.jl`, my families in groups): equal to the arrays to
+  ≤ 1e-10 per group; all 16 families in one sweep differ at a few sites (2.6e-2): round-off grows
+  over the rounds of a long sweep until a draw changes (each family and each group alone is
+  equal). The compiled short run of the replica driver (with the site redraws) passes.
 - Compiled Langevin section (`test_langevin_dev.jl`) passes on the merged code; the device smoke
   run through `hpc/run.sh` (`device_smoke.toml`, CPU backend): SIGTERM after the first step gave
   the snapshot, exit 75, status `checkpointed`; the same run id resumed (restart 1, step 8/12)
