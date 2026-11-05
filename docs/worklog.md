@@ -25,8 +25,10 @@ julia --project=. -t 8 test/runtests.jl`), the device array tests (`test_comp.jl
 test_replica_compiled.jl` with every family; the compiled section of `test_langevin_dev.jl`), the
 device smoke run through `hpc/run.sh`, and a simulated campaign through `run.sh` and
 `collect.sh` that checks `stages.csv` and `cost.csv`. Untested on main since the last suite run:
-the stage clock, `cost_table.jl`, `collect.sh`, the runbook commands. Main can be pushed for the
-campaigns before that (the runbook `hpc/RUNBOOK.md` does not use the untested device package).
+the stage clock, `cost_table.jl`, `collect.sh`, the runbook commands. Do not start the campaigns from
+this main before at least the CPU suite has passed: every campaign script and both CPU drivers
+now call the untested stage clock (`src/stages.jl`, ec39f58), and `collect.sh` the untested
+cost table. The last tested main is 8078aba (with the tests of beab23c for the device).
 
 **Repository.** `main` passes the full CPU suite (`test/runtests.jl`, 43 sets; broken by design:
 the 2 event-walk markers in `test_moves.jl` and the 2 bias KS checks in `test_bias.jl`) and the
