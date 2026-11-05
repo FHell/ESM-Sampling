@@ -68,12 +68,10 @@ one storage unit (`device/src/blocks.jl`).
 * *Compensation.* It runs at every step whose power changes.
 * *Rounds.* Blocks of one parity × one storage slot per node.
 
-> **Status: deviation.** The device's share-preserving rule of `:tsoc` and `:sblk{L}` uses the
-> actual requirement, not the nominal one above.
->
-> **Status: missing.** The cell–class aggregates of the block moves; the proxy and learned
-> shapes as device tables (any shape can be set with `set_profiles!`); the driver does not
-> schedule the block families yet ([../device.md](../device.md)).
+The cell–class aggregates are `:sblkg{L}` and `:sblkgL{L}` (the units of one class in one cell,
+`BLOCK_GROUPS`); the learned shapes are profile columns per season class (`set_learned_profiles!`).
+The driver schedules the one-unit blocks with `families = :all` and redraws the block offsets and
+profiles between device calls ([../device.md](../device.md) §6.1).
 
 ## `slong` and `slevel`: long-range plateaus and the level of a trajectory
 
@@ -123,7 +121,12 @@ totals and patterns from 20–90 to 5–15 (ledger E21).
 > zero-discharge wall, which is intrinsic to a two-step move. Carrying the change to a
 > neighbour's generators through the `xlocc` templates gave smaller steps and was not kept.
 
-**Device.** Missing.
+**Device.** `:slong` (share-preserving, with the nominal requirement) and `:slongL` (linear),
+`device/src/slong.jl`: one site per storage unit and round holds the whole cycle; the instant a
+and the length are host draws, redrawn between device calls.
+
+> **Status: deviation.** The device draws $L$ on 2 … T−1; the CPU includes $L = 1$, which is the
+> `tsoc` move.
 
 ## `sxpair` and `sxlong`: storage pairs across nodes
 
@@ -198,4 +201,16 @@ two reservoirs at an end step (57 % of the walk sides), at the nuclear or run-of
 the loss compensation (17 %) or at leak-node generators (12 %); line limits do not bind. The
 longer runs, also from the low start, are campaign H10.
 
-**Device.** Missing.
+**Device.** `:sxpair` and `:sxpairn` (one instant, cross-node and same-node pair) and `:sxlong`,
+`:sxlongn` (the interval form), share-preserving, `device/src/storagepair.jl`: a site holds the
+pair's two units, the node slots of the ball template at the two end steps (A's and B's node, the
+ball, the far ends of the moving lines, the leak nodes) with the line ends, G compensation columns
+per slot and step, the leak and `sx_qloss` as requirement changes, and for the interval form the
+SoC terms of every step of the cycle. The sites are host draws (`SX_SOURCE`), packed into rounds
+of disjoint node sets over the steps τ−2 … τ+1 (pair) or the whole cycle (interval), and redrawn
+between device calls.
+
+> **Status: deviation.** The device draws B uniformly among the eligible units of A's partner
+> slot; the CPU draws B ∝ min(k_A, k_B). Both choices are state-independent at fixed capacities;
+> the device's does not follow the capacities. No requirement tracking: models with line losses or
+> lossy links do not get the storage pairs on the device.

@@ -164,7 +164,7 @@ function jump_parts(tb::TermBatch, k::Consts; K::Val{NR}=Val(4), sz=nothing) whe
     roles = Any[]                                       # (group, slots, injection at points)
     gP, gJ = Any[], Any[]                               # local points and cost jumps of every column group
     # real candidates at 0 of a group (V: indicators), every column point counted once
-    addz!(V, _=nothing) = (nz0 = nz0 .+ rs(sum(sum(cat(V...; dims=3); dims=3); dims=4), C, B, 1))
+    addz!(V, _=nothing) = (nz0 = nz0 .+ rs(sum(sum(catn(collect(V), 3); dims=3); dims=4), C, B, 1))
     copies(slotsets...) = nothing
     track(x) = (sz === nothing || (sz[] = max(sz[], size(x, 3) * size(x, 4))); x)
     function addgroup!(P, f)
@@ -481,7 +481,7 @@ line-invariant; count ≥ Nc means the kept entries may miss points: guard) and 
 (round-off scale). `pts`, `jmp`: vectors of (C, B, m) pieces; nz0 (C, B, 1).
 """
 function jump_points1(pts, jmp, nz0, cap::Int)
-    qa, Ja = cat((efirst(x) for x in pts)...; dims=1), cat((efirst(x) for x in jmp)...; dims=1)
+    qa, Ja = catn([efirst(x) for x in pts], 1), catn([efirst(x) for x in jmp], 1)
     z = qa .== 0.0
     cnt = sum(ifelse.(z, 0.0, 1.0); dims=1) .+ eone(nz0)
     J0 = sum(ifelse.(z, Ja, 0.0); dims=1)

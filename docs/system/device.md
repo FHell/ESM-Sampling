@@ -130,6 +130,11 @@ own points:
 4. the (point, jump) entries of a site: every entry at exactly 0 is folded into one, the rest
    sorted with the jumps as payload (one stable sort), and only the first `cap` kept
    (`JUMP_CAP`, set by `plan` from the sites of three rounds: 1.25 × the largest count + 8);
+
+   > **Status: deviation.** The cap is fixed from the initial state; the count is state-dependent,
+   > so a site can exceed it later in a run and then stays at t = 0 (the exact guard: invariant, a
+   > lost move). `do_round` drops the guard flag, so the drivers do not report its rate; a per-family
+   > counter in the loop state and a more generous margin are open;
 5. the segment slopes from the slope right of 0 outwards, the potential integrated outwards from
    $c(0) = 0$; every partial sum accumulates from 0 outwards, so no value near 0 carries the
    round-off of far, large terms, and a slope within the round-off of its sum is 0 (a flat stretch
@@ -190,6 +195,8 @@ and $r$.
 | `:sblkg{L}`, `:sblkgL{L}` | storage blocks of a cell–class group (`prep_storage_ms!` with the group's units) | share-preserving, linear |
 | `:dshp{L}` | learned dispatch shapes of a generator pair at one node (`prep_adshape!`) | none (balanced) |
 | `:slong`, `:slongL` | `slong`, `slevel` (`prep_slong!`): a cyclic plateau of one unit, or its level | share-preserving, linear |
+| `:sxpair`, `:sxpairn` | `sxpair` (`sxpair_move!`): two storage units at one instant, across nodes on the ball template or at one node | share-preserving (leak, `sx_qloss`) |
+| `:sxlong`, `:sxlongn` | `sxlong` (`prep_sxlong_random!`): the same over a cyclic interval | share-preserving (leak, `sx_qloss`) |
 
 **Choices made on the host.** Choices that do not depend on the state are drawn when the
 schedule is built: the unit pair of `:spair`, the carriers of the cell moves, and the block
@@ -203,13 +210,23 @@ that compensate (`tdir_g`: $g = L_b d$, kept where $|g_n| > 10^{-9}\max|g|$, as 
 `tline`: $\pm 1$ at the line's ends). They are refreshed between device calls with the same table
 shapes (`tdir_refresh`), so the program is not recompiled.
 
+**Host sources and redraws** (`device/src/sources.jl`). The sparse angle sites (`SPARSE_SOURCE`:
+the Haar pieces of the flow basis's transport modes and, with the host adaptation, the learned
+pieces), the cell–class groups (`BLOCK_GROUPS`) and the storage pairs (`SX_SOURCE`) are set by
+`set_sources!` in `device_setup` and `replica_device_setup`. Between device calls `redraw_tables` draws the sites of every
+family with random sites again (sparse angle, storage pairs, `:slong` instants and lengths, block
+offsets and profiles, dispatch shapes, `:spair` partners, cell carriers) into tables of the plan's
+shapes (both drivers, at every host checkpoint; the replica driver in `replica_redraw!`): every drawn round cut to
+the plan's B sites, the rest into spare rounds, sites beyond the shape dropped (well below 1 % at
+40 nodes); a redraw that does not fit keeps the old table. The commitment columns of these
+families are flagged by generator index (`uc_cols_any`), so a redraw never needs a column the
+plan left out.
+
 **Dense angle families.** A site carries every line (static bus slots, so the balance sums stay
 static), every node's balance slot, G unit columns per node and one kink per node (share-preserving
 rule); one site per step and time class, one round per class: each step gets one dense move per
 family and sweep (the CPU draws about six `tmode` moves per step and sweep at 40 nodes, but at
-$O(N + n_{lines})$ per move the families run at a low rate in the design). The localized
-transport moves (`tcut`, `acut`: Haar atoms with sparse support) are not ported: their templates
-need per-site line lists (`Status`).
+$O(N + n_{lines})$ per move the families run at a low rate in the design).
 
 **Cell families.** They are bucketed by level and padded to the level's largest cell. Level q
 gets rounds ∝ (cells)^(cell_power−1), which reproduces the CPU's level probabilities.
@@ -226,7 +243,13 @@ partners and units, `xpair` pairs) and are packed per step into rounds of disjoi
 order a, b, then the others: the SoC term of each step with the site's 0/1 profile of raised
 instants (host data), the node's balance slot at each step, and the G compensation columns at the
 two end steps with the nominal requirement (`soc_qadj4`). The level move uses the same template
-without compensation.
+without compensation. Per unit and round one level move and `SLONG_MOVES` = 4 plateaus, against
+the CPU's 32 plateaus per unit and sweep (`storage_long`); with the redraw between device calls
+every call gets new instants and lengths.
+
+> **Status: deviation.** The level move still carries the 2G generator columns and the commitment
+> sets with zero slopes (flagged as moving), which adds primaries and root searches for nothing; a
+> separate level family with SoC terms only would halve its cost.
 
 **Block profiles.** The profile table holds the plateau and optional shapes with zero ends
 (`set_profiles!`), each with a season class (0: any). A site draws its profile among those of its
@@ -242,14 +265,11 @@ terms the device uses the linear rule.
 **Linear rule.** Its coefficients are host tables (`StaticParams.β1`, `β2`, equal split by
 default), with the proxy class `ChainParams.cls` from `proxy_class`.
 
-> **Status: deviation.** The cell pair at the coarsest level (`:cellpairu1`, two carriers over the
-> whole 40-node network: 80 generator and 160 commitment terms) compiles in about 290 s at an
-> 8 GB peak on the CPU backend, also in the slope-jump form, and is left out of the run set. It is
-> verified on arrays (`test_jump.jl`) and compiled against arrays; the dense diagnostics of the CPU
-> comparison (`test_comp.jl`) exceed 10 GB for it.
-
-> **Status: deviation.** Cell–class aggregates of the block moves (one class in one cell) are not
-> ported.
+The cell pair at the coarsest level (`:cellpairu1`, two carriers over the whole 40-node network:
+80 generator and 160 commitment terms) compiles in about 25 s (125 s with the first Julia
+compilation of the process, 3.8 GB peak) since the stacked builders. It is verified on arrays
+(`test_jump.jl`) and compiled against arrays; the dense diagnostics of the CPU comparison
+(`test_comp.jl`) exceed 10 GB for it, so case C leaves it out.
 
 ## 4. Schedule
 
@@ -274,7 +294,7 @@ square of the ratio. `families = :all` (`device_families`) adds:
 * `:spair0`, `:spair`;
 * `:tsoc`, `:tpot` (`:tsocL`, `:tpotL` with requirement tracking);
 * the storage blocks of `BLOCK_SCHED` ($L$ = 2, 4, 8, 16, 32; `:sblk…`, or `:sblkL…` with tracking);
-* the cell families of the partition, except `:cellpairu1` (§3).
+* the cell families of the partition.
 
 **Memory cap.** The largest tensor of a round has $C \cdot B \cdot e$ elements. Here $e$ is
 points × columns in the dense form (`dense_size`). In the slope-jump form it is the larger of
@@ -426,7 +446,8 @@ bound.
    by one `AdaptiveModes` (pooled over chains: transport modes, storage shapes per length and
    season, response coefficients per node and proxy class, updated at observation counts $2^j$),
    the chains' frames are refreshed (flow basis), and the static parameters (β1, β2), the tables
-   of the dense angle families and the block profiles are uploaded anew (same shapes);
+   of the dense angle families and the block profiles are uploaded anew (same shapes); then the
+   sites of the families with random sites are redrawn (`redraw_tables`, §3) and uploaded;
 5. `chains_report`: the same diagnostics and HDF5 output as the CPU driver (without the
    additional outputs of `write_run_outputs`).
 
@@ -561,11 +582,13 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | device model, exact cost, round trip | done |
 | term batch, exact dense sampler, plain families, rounds, compiled multi-sweep program | done |
 | compensated families `:spair`, `:spair0`, `:tsoc(L)`, `:tpot(L)` | verified on arrays and compiled (CPU backend); scheduled with `families = :all` |
-| cell templates (all partition levels) | verified on arrays; compiled except `:cellpairu1` (see §3); scheduled with `families = :all` except `:cellpairu1` |
+| cell templates (all partition levels) | verified on arrays and compiled; scheduled with `families = :all` |
 | storage blocks, one unit (plateau, shapes) | verified on arrays ($L$ = 2–32) and compiled; scheduled with `families = :all` |
 | nominal storage requirement of the share-preserving `:tsoc`, `:sblk{L}` (CPU `soc_qadj`, [moves/storage.md](moves/storage.md)) | done (`soc_qadj4`); verified on arrays against the CPU |
-| long-range storage moves `slong`, `slevel` (`:slong`, `:slongL`) | verified on arrays against the CPU (`test_comp.jl` M, N); L drawn on 2 … T−1 (the CPU includes L = 1, the `tsoc` move) |
-| storage pairs `sxpair`, `sxlong` (re-routing templates, leak and loss compensation, footprint rounds) | missing |
+| long-range storage moves `slong`, `slevel` (`:slong`, `:slongL`) | verified on arrays against the CPU (`test_comp.jl` M, N) and compiled (14 s `:slong`, 16 s `:slongL` at T = 1460, after removing the varargs concatenates below); L drawn on 2 … T−1 (the CPU includes L = 1, the `tsoc` move) |
+| storage pairs `sxpair`, `sxlong` (`:sxpair`, `:sxpairn`, `:sxlong`, `:sxlongn`: ball templates, leak and `sx_qloss` compensation, footprint rounds) | verified on arrays against the CPU (`test_comp.jl` O, with the CPU walk extended to 2000 nats: its 40-nat stop truncates 11 % of these lines, whose potential falls again further out); B uniform among the partner slot's units (the CPU: ∝ min(k_A, k_B)); share-preserving only; compiled (CPU backend) against arrays |
+| host sources and redraw of the random sites between device calls (`set_sources!`, `redraw_tables`) | done (`test_redraw.jl`: plan shapes, conflict-free, new and reproducible draws, under 0.01 % of the sites dropped); the plan's own draw and the redraws come from restart-seeded streams |
+| one compile pass over every family (Reactant CPU backend against arrays, `test_reactant_fams.jl` A and B, 2 rounds × 60 sites) | done: every family equal to the arrays to ≤ 1e-13 relative; 4–52 s per family once the process has compiled the traced code (the first compile in a process adds 100–150 s of Julia compilation); peak 4.8–8.3 GB per test process; `:cellpairu1` 125 s with the first Julia compilation. The replica programs (`test_replica_compiled.jl`, 40 nodes daily, 6 device rows) equal the arrays with the plain families plus `:slong`, `:sxlong` (3.5e-11), plus `:spair`, `:tsoc`, `:sblkg2` (1.0e-10) or plus `:tcut`, `:xloc`, `:dshp4`, `:sxpair`, `:cell2` (5.9e-11); with all 16 in one sweep a few sites in 5 of the 6 rows differ (2.6e-2 relative; 64 angle, 108 dispatch, 3878 SoC entries): the round-off differences grow over the sweep's rounds until a draw changes, so the full set is compared family by family or in groups |
 | memory cap of a round (`DENSE_BUDGET`) | done |
 | slope-jump form of the line sampler, per-family choice (`JUMP_RATIO`) | done; verified on arrays against the CPU and the dense form, Reactant (CPU backend) against arrays |
 | term axis (program size independent of the term count); stacked builders (one gather per field) for the compensated, block, cell and dense angle families | done |
@@ -578,18 +601,71 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | row-wise weather upload (the moved replicas only) | done; bitwise the full upload |
 | residual cache rebuilt at every host checkpoint, drift recorded (both drivers; §2) | done; verified on arrays against `cost_parts` (bitwise), compiled (CPU backend) |
 | snapshots and resume of both drivers, exit code 75 | done; smoke-tested through `hpc/run.sh` (device mode, CPU backend) |
-| sparse angle templates: Haar atoms of the proxy and learned modes (`:tcut`, `:tcutw`, `:tcutL`, `:tcutLw` for `tcut`, `acut`, `tcutL`, `acutL`) | verified on arrays against the CPU (`test_comp.jl` H, I) |
-| local re-routing templates (`:xloc`, `:xlocc`, `:xpair`; `tline` as `:tdir`) | verified on arrays against the CPU (`test_comp.jl` H, I); generator units only (the CPU draws any unit of `LM.units`, which are the generators) |
-| block aggregates (cell–class groups: `:sblkg{L}`, `:sblkgL{L}`) | verified on arrays against the CPU (`test_comp.jl` K, L) |
+| sparse angle templates: Haar atoms of the proxy and learned modes (`:tcut`, `:tcutw`, `:tcutL`, `:tcutLw` for `tcut`, `acut`, `tcutL`, `acutL`) | verified on arrays against the CPU (`test_comp.jl` H, I) and compiled |
+| local re-routing templates (`:xloc`, `:xlocc`, `:xpair`; `tline` as `:tdir`) | verified on arrays against the CPU (`test_comp.jl` H, I); generator units only (the CPU draws any unit of `LM.units`, which are the generators); compiled |
+| block aggregates (cell–class groups: `:sblkg{L}`, `:sblkgL{L}`) | verified on arrays against the CPU (`test_comp.jl` K, L) and compiled |
 | learned storage shapes (profile columns per season class) | done |
-| learned dispatch shapes (`adshape`: `:dshp{L}`) | verified on arrays against the CPU (`test_comp.jl` J) |
-| dense angle directions `:tdir`, `:tdirL`, `:tdir0` (`tmode`, `tline`, `amode` and variants) | verified on arrays against the CPU (`test_comp.jl` cases F, G); scheduled with `families = :all` and `adapt = true` |
+| learned dispatch shapes (`adshape`: `:dshp{L}`) | verified on arrays against the CPU (`test_comp.jl` J) and compiled |
+| dense angle directions `:tdir`, `:tdirL`, `:tdir0` (`tmode`, `tline`, `amode` and variants) | verified on arrays against the CPU (`test_comp.jl` cases F, G) and compiled; scheduled with `families = :all` and `adapt = true` |
 | adaptation on the host with table uploads (modes, shapes, response coefficients) | done (`adapt = true`); the learned `kpeak` variant missing |
 | weather moves with compensation as a device family | not planned: the weather moves to a prior-reversible pCN process on the host, the capacities to a Langevin step ([../worklog.md](../worklog.md)); `kop` and the device bias (`bias_dev.jl`, kept as it is until it is retired) are not extended |
 | Float32 build of the whole program (`ESMDevice.F32`) | done: every upload converted (both drivers), contractions at HIGHEST precision (`ftcompile`); uploads Float32 only, compiles and runs (no exactness tests by design) |
-| fused kernels, tiling, multi-GPU, full-Europe memory plan | missing |
+| fused kernels (planned option, below), tiling, multi-GPU, full-Europe memory plan | missing |
 
-**Reactant constraints met so far.** Inside `@trace for`, every captured scalar becomes
+> **Status: deviation.** Trace-time state lives in module globals set by `plan` and
+> `set_sources!` (`UC_COLS`, `JUMP_CAP`, `JUMP_FAMILIES`, `CELLINFO`, `CELL_BUCKETED`, `TDIR_*`,
+> `SPARSE_SOURCE`, `BLOCK_GROUPS`, `SX_SOURCE`, `PROFILES`, `DSHAPES`, `SCHED_FAMILIES`): two plans in
+> one process change what a later compile bakes in. They are to become fields of the plan and
+> static parts of the tables passed to `build`.
+
+**Fused kernels (planned option, not built).** XLA materializes the intermediates of a round
+(points × columns of every site, the sorted jump lists) in device memory, and the restructuring
+(§3) only shrinks them. Reactant can embed hand-written kernels: KernelAbstractions and CUDA.jl
+kernels run inside traced programs, and its `raise = true` pass turns them into HLO for the other
+backends. A per-round kernel (one thread block per site: gather, terms, the site's line in
+registers or shared memory, the draw, the scatter) would therefore fit into the same program; the
+sites of a round are disjoint by construction (footprint rounds), so no synchronisation between
+blocks is needed. On the test path, step 2 would compare the raised kernel on the CPU backend with
+the array reference, to round-off rather than bitwise (the summation order changes). The cost is a
+second implementation of the term builders, kept equal to the array code by that test.
+
+**Debugging compile time.** Put every compile under a time limit (`timeout --signal=KILL`;
+SIGTERM does not stop a Julia process inside the MLIR passes). Then:
+- *Where the time goes:* `Reactant.Profiler.@timed_compile f(args...)` (the options of
+  `@compile`) returns the program and the times of tracing, MLIR passes and XLA compile; plain
+  `@time` does not separate them. The first trace in a process is mostly Julia compilation of
+  the traced code (about 140 s for a template family at 40 nodes, independent of the sizes); a
+  second trace of the same program takes seconds.
+- *Unrolling:* `@code_hlo optimize = false f(args...)` prints the raw module. Its op count should
+  not grow with T or the number of sites; a program with traced loops has `stablehlo.while`.
+  Plain Julia `for`/`if` over traced data is unrolled or takes the trace-time branch; `@trace for`
+  takes only integer or float ranges, both branches of `@trace if` must have the same types.
+  Reactant also takes `all(f, v)` and `any(f, v)` over a `Vector` of traced arrays as traced
+  reductions (a `TracedRNumber{Bool}` in an `if`): use a plain loop (`allnothing`, `stk`).
+- *Constants:* untracked arrays and scalars become compile-time constants. Index tables go in as
+  `Reactant.to_rarray` arguments (the device tables are), scalars with `track_numbers = true`;
+  the compile option `max_constant_threshold` errors on a large embedded constant. Grep the
+  printout for large `dense<` constants and the sizes of gathers and scatters.
+- *Which pass:* compile with `optimize = :none` to see whether the passes are the cost; the
+  private options `disable_slice_to_batch_passes`, `disable_scatter_gather_optimization_passes`,
+  `disable_loop_raising_passes`, `disable_licm_optimization_passes`, `excluded_passes = […]` and
+  `inline` narrow it down (diagnosis only, not for production).
+- *Dumps:* `Reactant.MLIR.IR.DUMP_MLIR_ALWAYS[] = true` with `DUMP_MLIR_DIR[]`,
+  `JULIA_DEBUG=Reactant`, `XLA_FLAGS=--xla_dump_to=<dir>`.
+- *Kernels:* a KernelAbstractions `@kernel` launched inside the compiled function (CUDA.jl
+  loaded, also on the CPU) and `raise = true` lower it to HLO for the CPU backend; not every kernel
+  is raisable.
+
+`device/scripts/compile_probe.jl` does the first two for one family, with a site count and a
+coarser year (`setup40(; levels = [(10, h), (40, h)])`, T = 8760/h), so a size dependence shows
+between two values of T.
+
+**Reactant constraints met so far.** A varargs `cat(xs...)` of traced arrays is inferred by
+Reactant's interpreter at a cost about quadratic in the operand count (minutes at a few hundred
+operands; the first `:slong` compile at T = 1460 ran for more than 40 minutes at 15 GB): stack
+with `catn` (one `Ops.concatenate` of a vector) or a broadcast, and keep per-slot results stacked
+(`SlotChanges`). `all(f, v)` and `any(f, v)` over a `Vector` of traced arrays are traced
+reductions: use plain loops. Inside `@trace for`, every captured scalar becomes
 traced, so structs captured by a loop are type-parametric in their scalars and static flags
 are passed as `Val`; a traced loop index used for indexing needs `@allowscalar`; traced
 ranges (`v[q:q]`) fail on Reactant 0.2.304; `abs(a*b)` of two distinct block arguments is

@@ -31,8 +31,8 @@ concrete next steps. Update it at the end of every work session.
   walls are now the reservoirs' zero discharge at the end steps. Next: campaign H10 (prepared,
   self-contained; after D1: stage 1 LP, stage 2 the six runs, docs/campaigns.md); a direction
   whose power change is spread over several steps where the reservoir discharges (selection
-  must not depend on v); the device port of `slong`/`slevel`, of the storage pairs and of the
-  nominal storage requirement (`soc_qadj`) for `:tsoc` and `:sblk`.
+  must not depend on v). The device has `slong`/`slevel`, the storage pairs and `soc_qadj`
+  (device.md §7).
 
 **Decisions taken:**
 - PyPSA is upstream (user, 2026-11-04): the PyPSA reference is PyPSA's own `optimize`/`optimize_mga`
@@ -69,9 +69,9 @@ concrete next steps. Update it at the end of every work session.
   waits on background compile and timing scripts; few compiles broke.)
 - Fine-level weather moves: not needed any more (the weather moves on the host by a
   prior-reversible pCN process); marked "not planned" in device.md and moves/README.md.
-- Remaining device families: the localized transport moves `tcut`/`acut` (Haar atoms: per-site
-  line lists, sparse templates), learned dispatch shapes (`adshape`), block aggregates
-  (cell–class groups), the re-routing templates (`xpair`, `xloc(c)`), `slong`/`slevel`.
+- All device families are built (storage pairs last); open from the review: the guard rate of
+  the slope-jump cap (M3), the trace-time globals into the plan (M4), a level family for
+  `slevel` without generator columns (L2).
 - Next device restructuring steps (ledger E28): the slot-point sort of the slope-jump form (a
   payload sort per balance slot, now one of the larger kernels), the per-column evaluation at the
   slot points (columns × slot points), the dense form of the plain families (unchanged).
@@ -83,8 +83,7 @@ concrete next steps. Update it at the end of every work session.
   so FAMILIES_FAST adapts η_w to a weaker kernel); the compile cost of the full set in the replica
   driver is to be measured. The probe slot costs 1/M of the batch: its GPU cost and that of
   `SYNC=0` come from H5.
-- Hand-written fused kernels: feasibility noted in the device agent's report; not started.
-- `:cellpairu1`: compile with the stacked builders to be measured; still out of the run set.
+- Hand-written fused kernels: a planned option in device.md §7; not started.
 - Device form of the replica sampler: the CPU reference is `src/replicas.jl` (weather process
   with explicit noise, `langevin_update`, `follow_capacities!`; architecture.md §2); it replaces
   the Metropolis capacity pass and the planned `kop` port and per-carrier scales.
@@ -145,6 +144,36 @@ concrete next steps. Update it at the end of every work session.
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 
 ## Log
+
+### 2026-11-05 (device: storage pairs, site redraws, the compile pass)
+
+- Storage pairs on the device (`device/src/storagepair.jl`: `:sxpair`, `:sxpairn`, `:sxlong`,
+  `:sxlongn`): ball templates, leak and `sx_qloss` compensation, footprint rounds over the step
+  window τ−2 … τ+1 (a conflict between sites two steps apart in one time class, found by
+  `check_conflicts`); equal to the CPU with mock uniforms (`test_comp.jl` O; the CPU walk there
+  extended to 2000 nats, since its 40-nat stop truncated 11 % of these lines).
+- Host sources and redraws (`device/src/sources.jl`): `set_sources!` in `device_setup`;
+  `redraw_tables` between device calls for every family with host-drawn choices (sparse sites,
+  storage pairs, `slong` instants and lengths, block offsets and profiles, dispatch shapes,
+  `spair` partners, cell carriers), in the plan's shapes; plan and redraws restart-seeded;
+  `test_redraw.jl`. Both drivers redraw at every host checkpoint (`replica_redraw!` in the replica
+  driver); review finding H1.
+- Compile pass (Reactant CPU backend against arrays, `test_reactant_fams.jl` A and B): every family
+  equal to round-off. Broke and fixed: `:xlocc`, `:dshp{L}` (`all(f, ::Vector)` of traced arrays
+  is a traced reduction); `:slong`/`:slongL`/`:sxlong` (varargs `cat` over O(T) operands: more
+  than 40 min and 15 GB at T = 1460, now 12 s; `catn`, stacked `SlotChanges`, review H2).
+  `device/scripts/compile_probe.jl` and a "Debugging compile time" paragraph in device.md §7.
+  `:cellpairu1` now compiles in about 25 s (3.8 GB) and is in `families = :all`.
+- Compiled replica check (`test_replica_compiled.jl`, my families in groups): equal to the arrays to
+  ≤ 1e-10 per group; all 16 families in one sweep differ at a few sites (2.6e-2): round-off grows
+  over the rounds of a long sweep until a draw changes (each family and each group alone is
+  equal). The compiled short run of the replica driver (with the site redraws) passes.
+- Compiled Langevin section (`test_langevin_dev.jl`) passes on the merged code; the device smoke
+  run through `hpc/run.sh` (`device_smoke.toml`, CPU backend): SIGTERM after the first step gave
+  the snapshot, exit 75, status `checkpointed`; the same run id resumed (restart 1, step 8/12)
+  and finished with exit 0.
+- Open from the review (device.md §7): the slope-jump cap from the initial state and its guard
+  rate (M3), trace-time globals into the plan (M4), a separate level family for `slevel` (L2).
 
 ### 2026-11-05 (device review fixes: residual rebuild, Float32, replica driver)
 

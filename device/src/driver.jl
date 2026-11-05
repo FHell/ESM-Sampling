@@ -101,13 +101,12 @@ const BLOCK_SCHED = BLOCK_LENGTHS
 Operation families of a device run: the plain families, then the compensated families (`:spair0`,
 `:spair`; LINEAR `:tsocL`/`:tpotL` when the model needs requirement tracking (line losses, lossy
 links), else share-preserving `:tsoc`/`:tpot`), the storage blocks of `BLOCK_SCHED` (`:sblkL…` or
-`:sblk…` likewise), the level-bucketed cell templates of `ci` without `:cellpairu1` (its compile
-needs ≈ 10 GB, docs/system/device.md §3) and the dense angle directions (`:tdir` or `:tdirL`, and
+`:sblk…` likewise), the level-bucketed cell templates of `ci` and the dense angle directions (`:tdir` or `:tdirL`, and
 `:tdir0`; they have sites only with a direction source, `TDIR_SOURCE`).
 """
 function device_families(M::DeviceModel, ci)
     tr = tracking(M)
-    cells = ci === nothing ? () : Tuple(f for f in cell_families(ci) if f != pairsym(1, true))
+    cells = ci === nothing ? () : Tuple(cell_families(ci))
     return (FAMILIES_FAST..., :spair0, :spair, (tr ? (:tsocL, :tpotL) : (:tsoc, :tpot))...,
             (blksym(L, tr) for L in BLOCK_SCHED)..., cells..., (tr ? :tdirL : :tdir), :tdir0)
 end
@@ -222,10 +221,12 @@ function device_setup(cfg::ML.Config; families=FAMILIES_FAST, budget=DENSE_BUDGE
     wsh = load_shares(P, chains)
     LM = ML.LocalModel(P, L)
     HA = adapt ? host_adapt(P, LM, ix, chains, L) : (TDIR_SOURCE[] = nothing; nothing)
+    set_sources!(P, LM, ix; HA=HA)                  # sparse atoms, cell–class groups, storage pairs (sources.jl)
     fams = families === :all ? device_families(M, cell_info(P, LM, ix)) : families
     # `only`: plan only these families (and the plain and :spair families, whose split rules read the list)
     only === nothing || (fams = Tuple(f for f in fams if f in only || f in FAMILIES_FAST || f in (:spair0, :spair)))
     pl = plan(M, S, P.βv; cls=proxy_class(S.dnet, wsh), families=fams, cells=cell_info(P, LM, ix), budget=budget, jump=jump,
+              rng=MersenneTwister(ML.restart_seed(cfg, restarts) + 303),     # host choices of the schedule (redrawn later)
               backend=cfg.device_backend)
     T, N = M.T, M.N
     Ug, Us, Ul = length(ix.gidx), length(ix.sidx), length(M.kcap)
@@ -319,6 +320,7 @@ function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, 
     sync(x) = (Reactant.synchronize(x); x)
     stopped = false
     hr = MersenneTwister(ML.restart_seed(cfg, rr) + 101)    # host draws of the refreshed directions (re-seeded after a resume)
+    sr = MersenneTwister(ML.restart_seed(cfg, rr) + 202)   # host draws of the redrawn sites (restart-seeded)
     for it in it0+1:nwarm+nprod
         if merged                                   # "operation" then holds sweeps and capacity pass
             tim["operation"] += @elapsed begin
@@ -366,6 +368,8 @@ function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, 
                 tabs = merge(tabs, R(new[2]))       # same shapes: no recompilation
             end
         end
+        rd, _, _ = redraw_tables(pl, M, sr)           # new random sites (sources.jl): same shapes, an upload
+        isempty(rd) || (tabs = merge(tabs, R(rd)))
         if refit                                    # the target changed: re-pack the bias aggregates
             chains .= [ML.evaluate!(P, x) for x in chains]    # in place: `packb` reads this vector
             BD, BS, gitem, sitem, ritem = packb()

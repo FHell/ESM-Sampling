@@ -293,6 +293,22 @@ function site_cols(fam::Symbol, tp::Topo, site, D::Int)
     return site_cols(Val(fam), tp, site, D)                    # phase-3 families (comp.jl)
 end
 
+"""
+Commitment flags of the generator columns of a family whose sites are redrawn: in the per-slot
+layout (column j holds generator j mod G of its node) every column whose generator index has a
+committed unit at some node, else every column when the model has a committed unit.
+"""
+function uc_cols_any(tp::Topo, M::DeviceModel, gq)
+    G = gmax(tp)
+    gidx = Dict(q => g for n in 1:tp.N for (g, q) in enumerate(tp.nodegens[n]))
+    nc = size(gq, 2)
+    if nc % G == 0 && all(gq[b, j, r] == 0 || gidx[gq[b, j, r]] == mod1(j, G) for b in axes(gq, 1), j in 1:nc, r in axes(gq, 3))
+        ucg = [any(n -> length(tp.nodegens[n]) >= g && M.guc[tp.nodegens[n][g]] > 0, 1:tp.N) for g in 1:G]
+        return [ucg[mod1(j, G)] for j in 1:nc]
+    end
+    return fill(any(>(0), M.guc), nc)
+end
+
 "Padded line count of family f: the largest degree of its θ sites (all θ tables use the global maximum otherwise)."
 family_degree(f::Symbol, tp::Topo, rounds) =
     istheta(f) ? maximum((length(tp.nodelines[site[1]]) for r in rounds for site in r); init=1) : maximum(length.(tp.nodelines); init=1)
@@ -301,10 +317,9 @@ family_degree(f::Symbol, tp::Topo, rounds) =
 Host index table of a family: NamedTuple of (B, R) Int arrays (θ per-line fields (B, D, R)),
 0 = padding, plus `on` (B, R) ∈ {0, 1}.
 """
-function host_table(fam::Symbol, tp::Topo, rounds; D=maximum(length.(tp.nodelines); init=1))
-    R = length(rounds)
-    B = maximum(length.(rounds); init=1)
-    proto = site_cols(fam, tp, rounds[1][1], D)
+function host_table(fam::Symbol, tp::Topo, rounds; D=maximum(length.(tp.nodelines); init=1),
+                    R=length(rounds), B=maximum(length.(rounds); init=1))     # R, B: a fixed shape (`redraw_tables`)
+    proto = site_cols(fam, tp, first(first(r) for r in rounds if !isempty(r)), D)
     tab = Dict{Symbol,Array}()
     for (nm, v) in pairs(proto)                          # Int index columns; Float data (directions) as Float64
         tab[nm] = v isa Vector ? zeros(eltype(v), B, length(v), R) : zeros(typeof(v), B, R)
@@ -782,6 +797,7 @@ function plan(M::DeviceModel, S::DeviceState, β; κmin=1.0, families=FAMILIES, 
     for f in fams
         delete!(UC_COLS, f)
         haskey(ht[f], :gq) && (UC_COLS[f] = [any(q -> q > 0 && M.guc[q] > 0, ht[f].gq[:, j, :]) for j in 1:size(ht[f].gq, 2)])
+        haskey(ht[f], :gq) && redrawn_sites(f) && (UC_COLS[f] = uc_cols_any(tp, M, ht[f].gq))     # sites redrawn later (sources.jl)
     end
     for f in fams                                         # memory cap: even chunks of at most b sites
         (f in FAMILIES || f in FAMILIES_FAST) && continue # plain: ≤ 40 points × 7 columns per site, far below

@@ -199,7 +199,7 @@ function build_block(st, cp, sp, tab, r, k, ::Val{L}, ::Val{lin}, fam::Symbol=bl
     zw = 0.0 .* w[:, :, :, 1:1]
     wa1 = cat(zw, w; dims=4)                                  # w_0 … w_L
     wb1 = cat(w, zw; dims=4)                                  # w_1 … w_{L+1}
-    rep(x) = cat(fill(x, U)...; dims=4)                       # the profile for every unit
+    rep(x) = catn(fill(x, U), 4)                              # the profile for every unit
     perstep(x) = x[:, :, :, repeat(1:U; inner=L + 1)]         # a per-unit field at the U(L+1) SoC columns
     um = perstep(uon)
     wa, wb = rep(wa1) .* um, rep(wb1) .* um
@@ -264,14 +264,14 @@ function commit_block(st, tab, r, t, dr, aux, tb)
     t4 = c4(t)
     iw = [(u - 1) * (L + 2) + j for u in 1:U for j in 2:L+1]   # instants b0+1 … b0+L of every unit (w_0 = 0)
     uw = um[:, :, :, [(u - 1) * (L + 1) + 1 for u in 1:U for _ in 1:L]]
-    e = scadd4(st.e, tab.ce[:, iw, r], t4 .* cat(fill(w, U)...; dims=4) .* uw)
+    e = scadd4(st.e, tab.ce[:, iw, r], t4 .* catn(fill(w, U), 4) .* uw)
     nslot = U * (L + 1)
     Δ = unitΔ(x, tb, t, slotmap(G, nslot), !lin)
     ω = scadd4(st.ω, gs, Δ)
     uc = st.uc
     if ucq !== nothing
         cols = [((c - 1) ÷ G) * (L + 1) * G + j * G + (c - 1) % G + 1 for j in 0:L for c in uj]
-        uc = scadd4(st.uc, gs[:, cols], Δ[:, :, :, cols] .* cat(fill(ucq, L + 1)...; dims=4))
+        uc = scadd4(st.uc, gs[:, cols], Δ[:, :, :, cols] .* catn(fill(ucq, L + 1), 4))
     end
     rr = scadd4(st.r, tab.cr[:, :, r], msk(dr4(dr), c4(on .+ 0.0 .* t) .* um))
     return FlatState(st.θ, ω, uc, e, st.u, rr)

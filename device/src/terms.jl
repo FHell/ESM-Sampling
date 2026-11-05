@@ -167,6 +167,31 @@ end
 # argument moves (its slope is not the literal 0.0 of the builder).
 # ---------------------------------------------------------------------------
 
+"""
+Concatenate the arrays of the vector xs along dimension d. Traced arrays go to one
+`Reactant.Ops.concatenate` (a vector argument): the varargs `cat(xs...)` is inferred by Reactant's
+interpreter at a cost that grows about quadratically with the operand count (minutes at a few
+hundred operands). Plain arrays use `cat`.
+"""
+function catn(xs::AbstractVector, d::Int)
+    traced = true
+    for x in xs
+        x isa Reactant.TracedRArray || (traced = false)
+    end
+    (traced && !isempty(xs)) || return cat(xs...; dims=d)
+    nd = d                                                     # `cat` semantics: trailing singleton dimensions
+    for x in xs
+        nd = max(nd, ndims(x))
+    end
+    ys = [ndims(x) == nd ? x : rs(x, size(x)..., ntuple(_ -> 1, nd - ndims(x))...) for x in xs]   # rs: materialized
+    length(ys) == 1 && return ys[1]
+    sz(y) = ntuple(i -> i == d ? 0 : size(y, i), nd)
+    for y in ys
+        sz(y) == sz(ys[1]) || return cat(xs...; dims=d)        # sizes differ off the axis: Base's error path
+    end
+    return Reactant.Ops.concatenate(ys, d)
+end
+
 "Whether a builder value is the static zero (the literal 0.0): such a slope does not move."
 isstatic0(x) = x === 0.0 || x === 0       # a plain Julia zero, by egality (traced scalars and Reactant's overlays never match)
 "Stack a vector of (C|1, B|1, 1) fields (or scalars) into (C, B, 1, n); nothing if all are static zeros."
@@ -175,7 +200,7 @@ function stk(v, z)
     for x in v
         isstatic0(x) || (allz = false)
     end
-    return allz ? nothing : cat([x .+ z for x in v]...; dims=4)
+    return allz ? nothing : catn([x .+ z for x in v], 4)
 end
 mvflags(v) = Bool[!isstatic0(x) for x in v]
 "Moving-term count of an argument x0 + a t + ak φ_kid: 0, 1 (monotone), or 2 (both parts)."
@@ -635,12 +660,21 @@ end
     return log1p(-um * (-expm1(xn))) / (-gs)
 end
 
-"Balance-slot changes at the drawn t: a vector of (C, B, 1) arrays (for the commit)."
+"""
+Balance-slot changes at the drawn t (for the commit): `dr[j]` is slot j's (C, B, 1) change, `dr4(dr)`
+the stacked (C, B, 1, R) array. Kept stacked: R slices concatenated again would be a splat of R
+arguments, which takes Reactant minutes to trace at R ≈ T (`:slong`, `:sxlong`).
+"""
+struct SlotChanges{A}
+    X::A                                                       # (C, B, 1, R)
+end
+Base.getindex(d::SlotChanges, j::Int) = rs(d.X[:, :, :, j:j], size(d.X, 1), size(d.X, 2), 1)
+Base.length(d::SlotChanges) = size(d.X, 4)
+Base.isempty(d::SlotChanges) = size(d.X, 4) == 0
 function slot_changes(tb::TermBatch, k::Consts, t)
     inj = eval_terms(tb, k, t; sec=false)[3]
     inj === nothing && return Any[]
-    C, B = size(t, 1), size(t, 2)
-    return Any[rs(inj[:, :, :, j:j], C, B, 1) for j in 1:size(inj, 4)]
+    return SlotChanges(inj)
 end
 
 "Diagnostics: the largest number of sign changes of any secondary quantity per site (C, B, 1)."

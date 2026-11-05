@@ -249,11 +249,11 @@ function uc4s(st, cp, sp, z4, q, ucq, sets, T2::Bool)
     islin(s) = !T2 || get(s, :lin, false)                # a set with linear slopes (in T2: e.g. the pair units of `sparse.jl`)
     pick(s, f, lin) = (s[f] === nothing || islin(s) != lin) ? nothing : s[f]
     slope(f, lin) = all(pick(s, f, lin) === nothing for s in sets) ? nothing :
-                    cat((pick(s, f, lin) === nothing ? zx : s[f] for s in sets)...; dims=4)
+                    catn([pick(s, f, lin) === nothing ? zx : s[f] for s in sets], 4)
     cnt(f) = vcat((fill(s[f] === nothing ? 0 : 1, nU) for s in sets)...)
     kid(f, kf) = vcat((pick(s, f, false) === nothing ? zeros(Int, nU) : s[kf] for s in sets)...)
     common = (y0=G4(st.ω, cols(:cy)), u0=G4(st.uc, cols(:cu)), u10=G4(st.uc, cols(:cu1)), κ=G4(cp.κg, qq), w=G4(cp.wg, qq),
-              gmin=S4(sp.gmin, qq), su=S4(sp.su, qq), nl=S4(sp.nl, qq), on=cat(fill(ucq, ns)...; dims=4),
+              gmin=S4(sp.gmin, qq), su=S4(sp.su, qq), nl=S4(sp.nl, qq), on=catn(fill(ucq, ns), 4),
               cy=cnt(:y), cu=cnt(:u), cu1=cnt(:u1))
     T2 && return suc(z4, ns * nU; common..., ay=slope(:y, true), au=slope(:u, true), au1=slope(:u1, true),
                      aky=slope(:y, false), kidy=kid(:y, :ky), aku=slope(:u, false), kidu=kid(:u, :ku),
@@ -344,6 +344,7 @@ build(::Val{:tsocL}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r, k
 build(::Val{:tsoc}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r, k::Consts) = build_tsoc(st, cp, sp, tab, r, k, Val(true))
 
 "The balance-slot changes of a commit (a vector of (C, B, 1)) as (C, B, 1, R)."
+dr4(dr::SlotChanges) = dr.X
 dr4(dr) = (x = cat(dr...; dims=3); rs(x, size(x, 1), size(x, 2), 1, size(x, 3)))
 
 "Change of the unit columns at the drawn t: x t (LINEAR) or x φ_kid(t) (T2), (C, B, 1, n)."

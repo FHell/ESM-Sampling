@@ -29,6 +29,9 @@ function compcfg(name)
 end
 cfg = compcfg("programs")
 
+# The host sources of the drawn sites (sparse atoms, cell–class groups, storage pairs) are set by
+# the replica set-up (`set_sources!`); the dense angle families have no direction source here.
+
 # ---------------------------------------------------------------- inputs: a replica run on arrays after 3 steps
 RD = D.replica_device_setup(cfg; families=FAMS, compile=false)
 for it in 1:3
@@ -89,8 +92,18 @@ end
 function compile_check(k)
     a = map(Reactant.to_rarray, deepcopy(args[k]))
     tc = @elapsed f = D.ftcompile(() -> @compile fns[k](a...))
-    d = maxrel(f(a...), outs[k])
+    o = f(a...)
+    d = maxrel(o, outs[k])
     @printf("  %s: compile %.0f s, max relative |compiled − arrays| %.2e\n", k, tc, d)
+    if d > 1e-9 && o isa D.FlatState                 # where: entries beyond 1e-9 per field, rows, first columns
+        for fld in fieldnames(typeof(o))
+            x, y = Array(getfield(o, fld)), getfield(outs[k], fld)
+            bad = findall(abs.(x .- y) ./ max.(1.0, abs.(y)) .> 1e-9)
+            isempty(bad) && continue
+            println("    $fld: $(length(bad)) of $(length(y)) entries, rows $(sort(unique(first.(Tuple.(bad))))), columns ",
+                    sort(unique(last.(Tuple.(bad))))[1:min(end, 12)])
+        end
+    end
     return tc, d
 end
 "dot_general precisions in the HLO of a Float32 one-hot contraction (`tmul`) traced through `ftcompile` and without it."

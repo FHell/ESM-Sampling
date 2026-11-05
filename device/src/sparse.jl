@@ -197,6 +197,14 @@ function build_sparse(st, cp, sp, tab, r, k, ::Val{rule}, ::Val{pair}, fam::Symb
     return tb, (a4, d, xall, ucq, uj, G, Ns, np, rule)
 end
 
+"All entries `nothing` (a plain loop: under tracing Reactant takes `all(f, ::Vector)` of traced arrays as a traced reduction)."
+function allnothing(vs)
+    for v in vs
+        v === nothing || return false
+    end
+    return true
+end
+
 "Concatenate stacked commitment terms along the term axis (fields `nothing` as zeros)."
 function uc_concat(us)
     length(us) == 1 && return us[1]
@@ -205,11 +213,11 @@ function uc_concat(us)
         vs = [u[f] for u in us]
         if f in (:kidy, :kidu, :kidu1, :cy, :cu, :cu1)
             out[f] = reduce(vcat, vs)
-        elseif all(v -> v === nothing, vs)
+        elseif allnothing(vs)
             out[f] = nothing
         else
             ref = first(v for v in vs if v !== nothing)
-            out[f] = cat((v === nothing ? 0.0 .* us[j].y0 : v for (j, v) in enumerate(vs))...; dims=4)
+            out[f] = catn([v === nothing ? 0.0 .* us[j].y0 : v for (j, v) in enumerate(vs)], 4)
         end
     end
     return NamedTuple{keys(us[1])}(Tuple(out[f] for f in keys(us[1])))
