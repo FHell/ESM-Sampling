@@ -68,6 +68,11 @@ line and per campaign, to compare the LP baselines (H2, H2b) with the sampler (H
 what fair share charges) and the consumed CPU hours, summed over all attempts including
 preempted ones (attempts killed without an end record: from `sacct` by job id), plus energy.
 
+**Exploratory (not to be merged now):** a Fable agent prototypes one move family as a fused
+kernel (its choice of family and tool, e.g. KernelAbstractions.jl inside the Reactant program) on
+its own branch, with a development note `docs/fused_kernel_exploration.md` there; it does not
+touch main or the running work and does not hold up the campaigns.
+
 **Open decisions with the user:** the CO₂ treatment and a common weather source for the H2b
 comparison (`validation.md` §2.7); retiring the bias code (conditions in this file's to-dos;
 the device capacity side no longer needs `bias_dev.jl` once the replica driver is the device
