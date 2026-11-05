@@ -52,11 +52,15 @@ h5py). `quantity_names` names the rows.
 | `post/bias_used`, `post/bias_refit` | $\hat b$ in use and the refitted $\tilde b$ at every production sample (the log weights are their difference) |
 
 **Device runs** (appended by `run_device`): `device_profile/<part>` (seconds per host
-checkpoint (`mh`) or per step (`replicas`) of every timed part) and
+checkpoint (`mh`) or per step (`replicas`) of every timed part, `rebuild` the residual rebuild) and
 `device_profile/compile_<program>` (compile seconds); Metropolis driver: `run/restarts`,
-`run/resumed_at_checkpoint` (host checkpoint of the last resume, −1: none); replica driver: the
-outputs of the CPU replica driver (`replicas/*`, `run/*`; the replica records at the host
-checkpoints only) and `replicas/record_every` (= `device_sweeps`).
+`run/resumed_at_checkpoint` (host checkpoint of the last resume, −1: none) and
+`device/residual_drift` (chain × host checkpoint: max |r_cache − r_rebuilt| in MW before the rebuild,
+[device.md](device.md) §2); replica driver: the outputs of the CPU replica driver (`replicas/*`,
+`run/*`; the replica records at the host checkpoints only; the probes those of the device probe,
+`replicas/<c>/probe/it` with the step of the copy, [device.md](device.md) §6.2),
+`replicas/<c>/residual_drift` (replica × host checkpoint, as above), `replicas/record_every`
+(= `device_sweeps`) and `replicas/probe_slots` (probe slots per chain on the device, 0 or 1).
 
 **CPU driver only** (`write_run_outputs`, appended to the same file):
 
@@ -126,6 +130,7 @@ every write. Vectors are the coefficient vectors of the state at its level (the 
 | `co2/price_trace` | the CO₂ price trace of the fine warmup so far |
 | `sampler/sigma_scale`, `sampler/gibbs/{wv,wz,wk}` | level-0 phase: carrier-scaling step sizes and slice widths |
 | `device/driver` | device runs of the Metropolis driver (`device_sampler = "mh"`): `"mh"`; `it` counts host checkpoints |
+| `device/residual_drift` | the same runs: the residual drift so far (chain × host checkpoint), continued after a resume |
 
 **Replica driver** (`write_replica_snapshot`, also of the device replica driver, so either
 driver resumes from the other's snapshots; `read_snapshot` of the chains driver refuses it):

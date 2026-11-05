@@ -212,7 +212,7 @@ fine-weather keys are not used.
 |---|---|---|
 | `device_backend` | `"gpu"` | Reactant backend, `"gpu"` or `"cpu"` |
 | `device_sweeps` | 10 | `mh`: operation sweeps per device call (one capacity pass and one host checkpoint after each); `replicas`: replica steps per host checkpoint (monitored quantities, replica records and snapshot boundary; `mlda_warmup` and `nsamples` must be multiples of it) |
-| `device_sampler` | `"mh"` | capacity sampler of the device driver: `"mh"` (Metropolis capacity pass with the bias, [device.md](device.md) §5.1) or `"replicas"` (the replica–Langevin sampler with the batch on the device, §5.2, §6.2; its settings are the keys of the CPU sampler: `replicas`, `replica_*`, `langevin_*`, `tilt_*` above) |
+| `device_sampler` | `"mh"` | capacity sampler of the device driver: `"mh"` (Metropolis capacity pass with the bias, [device.md](device.md) §5.1) or `"replicas"` (the replica–Langevin sampler with the batch on the device, §5.2, §6.2; its settings are the keys of the CPU sampler: `replicas`, `replica_*`, `langevin_*`, `tilt_*` above; the lag probe runs in a probe slot on the device, `replica_probe_len` and `replica_probe_tail` rounded up to whole steps of `replica_inner` sweeps) |
 | `kmove_nprop` | 2 | Metropolis proposals per unit and capacity pass |
 | `kmove_sigma` | 0.3 | scaling-move proposal scale (log capacity) |
 | `kpeak_sigma` | 0.05 | peak-set proposal scale, fraction of the unit's start capacity (at least 100 MW) |

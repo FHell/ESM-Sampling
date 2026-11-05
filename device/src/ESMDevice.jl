@@ -26,6 +26,17 @@ export DeviceModel, DeviceIndex, DeviceState, pack, to_device, to_host!, rebuild
 const FT = Float64
 "Device inputs in the module's float type (identity in the Float64 build)."
 ftconv(x) = x
+"Float type of the host-side bookkeeping of the drivers (Float64 in both builds: the name is not mapped by `ft32`)."
+const HostFloat = Float64
+"""
+    ftcompile(f)
+
+Run `f` (a function that compiles device programs, `() -> @compile …`) under the compile settings
+of the module's float type: identity in the Float64 build; in ESMDevice.F32 with
+`dot_general_precision = HIGHEST`, so that the one-hot contractions (`tmul`, `tmulT`) run in full
+Float32 and not in TF32 on GPUs.
+"""
+ftcompile(f) = f()
 
 include("core.jl")
 
@@ -65,7 +76,7 @@ using Printf
 using Random
 using Reactant
 using Reactant: @trace
-import ..ESMDevice: ft32
+import ..ESMDevice: ft32, HostFloat
 const ML = ESMSampling
 const FT = Float32
 "Float32 copy of a device input: Float64 numbers and arrays converted, structs of this module rebuilt."
@@ -74,6 +85,8 @@ ftzeros(d...) = zeros(Float32, d...)
 ftones(T::Type, d...) = ones(T, d...)
 ftones(d...) = ones(Float32, d...)
 ftconv(x::Float64) = Float32(x)
+"Compiles under `dot_general_precision = HIGHEST` (no TF32 for the Float32 contractions; ESMDevice.ftcompile)."
+ftcompile(f) = Reactant.with_config(f; dot_general_precision=Reactant.PrecisionConfig.HIGHEST)
 ftconv(x::AbstractArray{Float64}) = Float32.(x)
 ftconv(x::Union{Tuple,NamedTuple}) = map(ftconv, x)
 ftconv(x::AbstractArray{<:Union{Tuple,NamedTuple}}) = map(ftconv, x)

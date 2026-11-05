@@ -38,7 +38,7 @@ function lgv_params(P::ML.Problem, M::DeviceModel, ix::DeviceIndex; κs, ηw)
     ηc = eltype(ηw) <: Real ? [ηw] : ηw
     pick(v, kf) = [f > 0 ? Float64(v[f]) : 0.0 for f in kf]
     pickc(kf) = reduce(vcat, [reshape(pick(η, kf), 1, :) for η in ηc])
-    hi(kf, idx) = [f > 0 ? E.kspecs[f].hi[i] : 1.0 for (f, (_, i)) in zip(kf, idx)]
+    hi(kf, idx) = [f > 0 ? Float64(E.kspecs[f].hi[i]) : 1.0 for (f, (_, i)) in zip(kf, idx)]    # one float type (F32: Float32)
     nz(v) = isempty(v) ? zeros(1) : v
     nzm(A) = size(A, 2) == 0 ? zeros(size(A, 1), 1) : A
     return LgvParams(nz(pick(κs, gk)), nzm(pickc(gk)), nz(hi(gk, ix.gidx)),
@@ -226,7 +226,9 @@ end
 The Langevin step of the shared capacities of every chain and the dispatch following it in every
 replica. `acc` holds the replicas' scores (`score_acc`), `W` (C,) the replica weights (they sum to
 1 over the replicas of a chain: 1/M_active, the gate, the tilt), ξ the noise per chain and unit
-(C/M, ·). dims = (C, T, N, U_g, U_s, U_l, M). The capacity-dependent chain parameters are recomputed
+(C/M, ·). dims = (C, T, N, U_g, U_s, U_l, M[, nf]): M slots per chain, of which the last nf (default 0) are
+frozen (the probe copies of the replica driver: weight 0 in W, their capacities, utilizations,
+residual and net load kept). The capacity-dependent chain parameters are recomputed
 (with the proxy class of the new net load). `diag`: the weighted scores s̄ and forces per chain and
 the number of clipped drifts (nclip, per chain).
 """
@@ -243,8 +245,19 @@ function lgv_pass(st::FlatState, kg, ks, RS, dnet, cren, capren, KP, RP, LP::Lgv
     kg1, ncg = lgv_w(kgc, sg, fg, LP.κg, LP.ηg, LP.hg, ξg; rr, clip, κmin, box)
     ks1, ncs = lgv_w(ksc, ss, fs, LP.κs, LP.ηs, LP.hs, ξs; rr, clip, κmin, box)
     kr1, ncr = lgv_w(krc, sr, fr, LP.κr, LP.ηr, LP.hr, ξr; rr, clip, κmin, box)
-    ω, uc, kg, ks, RS, r, dnet, cren, capren = lgv_commit(KP, RP, ω, uc, e, kg, ks, r, rep_bcast(kg1, vm), rep_bcast(ks1, vm),
-                                                          rep_bcast(kr1, vm), RS, dnet, cren, capren, rgroups, sgroups; κmin)
+    out = lgv_commit(KP, RP, ω, uc, e, kg, ks, r, rep_bcast(kg1, vm), rep_bcast(ks1, vm), rep_bcast(kr1, vm), RS, dnet, cren,
+                     capren, rgroups, sgroups; κmin)
+    nf = length(dims) >= 8 ? dims[8] : 0
+    if nf > 0              # frozen slots (the last nf of every chain's M: the probe copies) keep k and their operation
+        fz = [mod1(c, M) > M - nf for c in 1:C]               # static
+        keep(new, old) = ifelse.(reshape(fz, (C, ntuple(_ -> 1, ndims(old) - 1)...)), old, new)
+        o0 = (ω, uc, kg, ks, RS.kr, r, dnet, cren, capren)
+        o1 = (out[1], out[2], out[3], out[4], out[5].kr, out[6], out[7], out[8], out[9])
+        ω, uc, kg, ks, kr, r, dnet, cren, capren = map(keep, o1, o0)
+        RS = RenState(kr, out[5].A)
+    else
+        ω, uc, kg, ks, RS, r, dnet, cren, capren = out
+    end
     m2(x) = reshape(x, C, :) .+ 0.0
     st2 = FlatState(st.θ, m2(ω), m2(uc), st.e, st.u, m2(r))
     cp = chain_params_dev(KP, kg, ks, proxy_class(dnet, wsh), Val(C))

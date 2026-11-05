@@ -280,7 +280,8 @@ file, exit code 75 and `ESM_IGNORE_SIGTERM` (`device/scripts/run_device.jl`); th
 driver writes the chains layout plus a group `device/`, the replica driver the layout of the CPU
 replica driver (so either replica driver resumes from the other's snapshot). The boundaries are
 the host checkpoints (every `device_sweeps` operation sweeps or replica steps), so the grace time
-must cover one of them plus the write. On resume the device arrays and programs are rebuilt
+must cover one of them plus the write (the replica driver's lag probes run on the device, inside the
+steps). On resume the device arrays and programs are rebuilt
 from the saved states (the compile is repeated: 2–6 minutes) and the streams are re-seeded. Tested locally on 2026-11-04 through
 `hpc/run.sh` in `device` mode on the CPU backend (`hpc/configs/device_smoke.toml`, the
 simulated layout of §5).
