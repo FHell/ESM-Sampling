@@ -144,10 +144,9 @@ kernel (its choice of family and tool, e.g. KernelAbstractions.jl inside the Rea
 its own branch, with a development note `docs/fused_kernel_exploration.md` there; it does not
 touch main or the running work and does not hold up the campaigns.
 
-**Open decisions with the user:** the CO₂ treatment and a common weather source for the H2b
-comparison (`validation.md` §2.7); retiring the bias code (conditions in this file's to-dos;
-the device capacity side no longer needs `bias_dev.jl` once the replica driver is the device
-default).
+**Open decisions with the user:** none. Decided 2026-11-05 (see Decisions taken): z0 blocks
+on by default; the bias goes to the archive as soon as possible; CO₂ at the cap's dual on
+both sides; weather first PyPSA's 2013 series, later several PyPSA-Eur years.
 
 ## Open to-dos
 
@@ -160,8 +159,8 @@ default).
   rechecked); from its results the burst size and gate defaults, then 256 nodes
   daily and the comparison with H2. Open: gas overbuilt in the prototype (a gas step of its own or
   a Rao–Blackwellised score), the size of the gate's weather dependence, seasonal storage after a
-  burst. Then retire the bias code (ĝ, ĥ, tables, lift, refits, trust region, post-correction,
-  level-0 warmup, `device/src/bias_dev.jl`) and `kscale`/`kpeak`/`kop` as moves of the α = 0
+  burst. Archive the bias code as soon as possible (user, 2026-11-05; not waiting for H4: ĝ, ĥ,
+  tables, lift, refits, trust region, post-correction, level-0 warmup, `device/src/bias_dev.jl`) and `kscale`/`kpeak`/`kop` as moves of the α = 0
   density, and make `sampler = "replicas"` the default.
 - An explicit, controllable tilt of the weather toward expensive years (stress tests): built in
   `src/replicas.jl` as replica weights exp(λΦ) in the capacity drift (`tilt_lambda`, Φ the
@@ -179,6 +178,22 @@ default).
   (device.md §7).
 
 **Decisions taken:**
+- CO₂ in the sampler–PyPSA comparison (user, 2026-11-05): PyPSA solves with the build's cap;
+  both sides then run at a fixed price equal to the cap's dual (`co2_price`; the device takes
+  it from the host's energy model, so no device feature is needed; `co2_cap` tuning stays
+  CPU-only). To do: the comparison configs at the dual instead of 150 €/t, once H2b's cap
+  run has its dual (`co2_price_eur_per_t` in its summary).
+- Weather in the comparison (user, 2026-11-05): first one year, PyPSA's own 2013 series
+  (`model256_pypsa.h5`), the sampler at fixed weather against the MGA envelopes; later several
+  PyPSA-Eur weather years (one network per year from ERA5 cutouts, our weather model fitted to
+  their imported series; validation.md §2.4) as a data-preparation campaign of its own.
+  Ledger rows H11 (one year, fixed weather) and H12 (several years, with the new data step D5).
+- z0 block moves stay on by default (`fine_weather_blocks = 1`), also for `chains40` and
+  `complete40` (user, 2026-11-05).
+- The learned bias goes to the archive as soon as possible, unless there is a very concrete
+  reason to keep a part of it (user, 2026-11-05); it no longer waits for H4. No campaign
+  config uses it (H4, H5: `use_bias = false`). Do it after the device branch is merged (it
+  touches `device/src/kmove.jl`, `driver.jl`, `bias_dev.jl`).
 - Reactant stays at 0.2.304 for now (user, 2026-11-05; 0.2.305 of 2026-11-03 has fixes near our trace issues: vararg rewrite in `call_with_reactant`, mixed-type `ifelse`, LLVM leaks in compilation). Binaries that Julia packages install normally (JLL artifacts) are allowed (CLAUDE.md).
 - `families = :all` includes every device family, the newer ones too (user, 2026-11-05).
 - CPU hours are part of every campaign's results, to compare LP baselines and sampler (user, 2026-11-05).
@@ -200,11 +215,7 @@ default).
   changes `tsoc` and the storage plateaus, so the device comparisons of the share-preserving
   `:tsoc`/`:sblk` fail until the device adds it.
 
-**Decisions waiting for the user:**
-- z0 block moves are on by default (`fine_weather_blocks = 1`), a behaviour change for
-  `chains40` and `complete40`.
-- If any of the learned bias is kept: the bias safeguard choices (exact log J term, trust
-  region on by default, θ_u₂ ≤ 0); `complete40.toml` has `warmup0` below `bias_start`.
+**Decisions waiting for the user:** none open.
 
 **Device port:**
 - Plan (user, 2026-11-04): implement all missing families on plain arrays against the CPU
