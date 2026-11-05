@@ -14,7 +14,7 @@
 # moving lines, the leak nodes; the same-node families have the one node), line ends per slot (as
 # `sparse.jl`), G compensation columns per slot and step, the two units' SoC terms (the end steps,
 # and for `:sxlong` every other step of the cycle with its own balance slot per unit node). The
-# sites come from a host source (`SX_SOURCE`, `sx_source`): A uniformly among the units with at least
+# sites come from a host source (the plan's `tp.ctx.sx`, `sx_source`): A uniformly among the units with at least
 # the pair hours, B uniformly among the eligible units of A's partner slots (the CPU draws B
 # ∝ min(k_A, k_B), a function of k; the device's choice is state-independent too), packed into rounds
 # of disjoint node sets (per step window τ−2 … τ+1 for `:sxpair`, over the whole cycle for `:sxlong`). T2 only (models
@@ -23,15 +23,15 @@
 "family → (interval, same node)"
 const SX_FAMILIES = Dict(:sxpair => (false, false), :sxpairn => (false, true), :sxlong => (true, false), :sxlongn => (true, true))
 const SX_NS = 16
+"Rounds of `:sxlong`, `:sxlongn` per sweep (the default of a plan's `tp.ctx.sx_moves`)."
 const SX_MOVES = Ref(8)
-"Host source: (fam, τ or 0, rng) → (sA, sB, nodes, d, gleak) or nothing (`sx_source`)."
+"Host source: (fam, τ or 0, rng) → (sA, sB, nodes, d, gleak) or nothing (`sx_source`); the default a plan made without `sources` copies."
 const SX_SOURCE = Ref{Any}(nothing)
 
 sx_ns(fam, tp) = SX_FAMILIES[fam][2] ? 1 : min(SX_NS, tp.N)
 
 function sx_rounds(fam::Symbol, tp::Topo, M::DeviceModel, cls, rng)
-    TDIR_TOPO[] = tp
-    src = SX_SOURCE[]
+    src = tp.ctx.sx
     src === nothing && return Vector{Vector{Tuple}}()
     tracking(M) && error(":$fam needs a model without line losses and lossy links")
     long, _ = SX_FAMILIES[fam]
@@ -43,7 +43,7 @@ function sx_rounds(fam::Symbol, tp::Topo, M::DeviceModel, cls, rng)
             sites = Tuple[]
             used = Set{Tuple{Int,Int}}()       # (node, step): a site at τ writes τ−1, τ and reads τ−2 … τ+1
             for τ in c
-                for _ in 1:SPARSE_PACK[]
+                for _ in 1:tp.ctx.sparse_pack
                     sp = src(fam, τ, rng)
                     sp === nothing && continue
                     keys = [(n, mod1(τ + o, T)) for n in sp[3] for o in -2:1]
@@ -54,7 +54,7 @@ function sx_rounds(fam::Symbol, tp::Topo, M::DeviceModel, cls, rng)
             push!(rounds, sites)
         end
     else
-        for _ in 1:SX_MOVES[]
+        for _ in 1:tp.ctx.sx_moves
             sites = Tuple[]; used = Set{Int}()
             for _ in 1:2tp.N
                 sp = src(fam, 0, rng)
@@ -110,7 +110,7 @@ for (f, (long, same)) in SX_FAMILIES
     @eval begin
         family_rounds(::Val{$(QuoteNode(f))}, tp::Topo, M::DeviceModel, cls, rng) = sx_rounds($(QuoteNode(f)), tp, M, cls, rng)
         site_cols(::Val{$(QuoteNode(f))}, tp::Topo, site, D::Int) = sx_cols($(QuoteNode(f)), tp, site)
-        device_extra(::Val{$(QuoteNode(f))}, ht) = (gon=Float64.(ht.gq .> 0),)
+        device_extra(::Val{$(QuoteNode(f))}, ht, tp) = (gon=Float64.(ht.gq .> 0),)
         build(::Val{$(QuoteNode(f))}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r, k::Consts) =
             build_sx(st, cp, sp, tab, r, k, Val($long), Val($same), $(QuoteNode(f)))
         commit_tb(::Val{$(QuoteNode(f))}, st, tab, r, t, dr, aux, tb) = commit_sx(st, tab, r, t, dr, aux, tb)
@@ -192,7 +192,7 @@ function build_sx(st, cp, sp, tab, r, k, ::Val{long}, ::Val{same}, fam::Symbol) 
     x = ifelse.(dq.act[:, :, :, sl] .& v, ω ./ ifelse.(dq.act[:, :, :, sl], dq.P[:, :, :, sl], 1.0), 0.0)
     gen = gen4(st, cp, sp, z4, q, gc, sl; ak=x, kid=sl)
     nG = Ns * G
-    uj = [j for j in 1:2nG if ucon(fam, j)]
+    uj = [j for j in 1:2nG if ucon(tab, j)]
     uc, ucq = nothing, nothing
     if !isempty(uj)
         ucq = ucflags(sp, q, uj, gon)

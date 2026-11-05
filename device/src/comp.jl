@@ -34,7 +34,7 @@ function family_rounds(::Val{fam}, tp::Topo, M::DeviceModel, cls, rng) where {fa
     if fam == :spair || fam == :spair0
         # with :spair0 in the list: :spair0 takes the pairs of units without fleet commitment (no
         # commitment terms), :spair the pairs with at least one committable unit
-        split = fam == :spair0 || :spair0 in SCHED_FAMILIES[]
+        split = fam == :spair0 || :spair0 in tp.ctx.families
         ucq(q) = M.guc[q] > 0
         for j in 1:Sm, c in cls
             sites = Tuple[]
@@ -105,12 +105,12 @@ function site_cols(::Val{fam}, tp::Topo, site, D::Int) where {fam}
     error("unknown family $fam")
 end
 
-device_extra(::Val{:tsoc}, ht) = (gon=Float64.(ht.gq .> 0),)
-device_extra(::Val{:tsocL}, ht) = (gon=Float64.(ht.gq .> 0),)
-device_extra(::Val{:tpot}, ht) = (gon=Float64.(ht.gq .> 0), lon=Float64.(ht.ln .> 0))
-device_extra(::Val{:tpotL}, ht) = (gon=Float64.(ht.gq .> 0), lon=Float64.(ht.ln .> 0))
-device_extra(::Val{:spair}, ht) = (samef=Float64.(ht.same),)
-device_extra(::Val{:spair0}, ht) = (samef=Float64.(ht.same),)
+device_extra(::Val{:tsoc}, ht, tp) = (gon=Float64.(ht.gq .> 0),)
+device_extra(::Val{:tsocL}, ht, tp) = (gon=Float64.(ht.gq .> 0),)
+device_extra(::Val{:tpot}, ht, tp) = (gon=Float64.(ht.gq .> 0), lon=Float64.(ht.ln .> 0))
+device_extra(::Val{:tpotL}, ht, tp) = (gon=Float64.(ht.gq .> 0), lon=Float64.(ht.ln .> 0))
+device_extra(::Val{:spair}, ht, tp) = (samef=Float64.(ht.same),)
+device_extra(::Val{:spair0}, ht, tp) = (samef=Float64.(ht.same),)
 
 let socf = [(:ce, :e, true), (:cem, :e, false), (:ce1, :e, false), (:crm, :r, true), (:cr, :r, true)],
     genf = [(:gcm, :ω, true), (:gcm, :uc, false), (:gc, :ω, true), (:gc, :uc, true), (:gc1, :uc, false)],
@@ -326,7 +326,7 @@ function build_tsoc(st, cp, sp, tab, r, k, ::Val{T2}, fam::Symbol=T2 ? :tsoc : :
         kk = nothing
         gen = gen4(st, cp, sp, z4, qq, cg, sl; a=x)
     end
-    uj = [j for j in 1:G if ucon(fam, j)]                    # committable unit columns (static)
+    uj = [j for j in 1:G if ucon(tab, j)]                    # committable unit columns (static)
     uc, ucq = nothing, nothing
     if !isempty(uj)
         ucq = ucflags(sp, q, uj, gon)
@@ -399,7 +399,7 @@ function build_tpot(st, cp, sp, tab, r, k, ::Val{T2}, fam::Symbol=T2 ? :tpot : :
         kk = nothing
         gen = gen4(st, cp, sp, z4, q, gc, sl; a=x)
     end
-    uj = [j for j in 1:(D+1)*G if ucon(fam, j)]
+    uj = [j for j in 1:(D+1)*G if ucon(tab, j)]
     uc, ucq = nothing, nothing
     if !isempty(uj)
         ucq = ucflags(sp, q, uj, gon)

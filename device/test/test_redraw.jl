@@ -26,7 +26,8 @@ pl = D.plan(M, S, P.βv; families=fams, cls=cls, cells=ci, rng=MersenneTwister(1
     @test drop1 <= 0.01 * nsite
     for f in keys(rd1)
         @test keys(rd1[f]) == keys(pl.dev[f])
-        @test all(size(getfield(rd1[f], x)) == size(getfield(pl.dev[f], x)) for x in keys(rd1[f]))   # plan shapes
+        @test all(size(getfield(rd1[f], x)) == size(getfield(pl.dev[f], x)) for x in keys(rd1[f]) if getfield(rd1[f], x) isa AbstractArray)   # plan shapes
+        @test D.fammeta(rd1[f]) == pl.meta[f]                                                         # the plan's static data (form, cap, columns)
         @test D.check_conflicts(f, h1[f])[1] && D.check_conflicts(f, h2[f])[1]                        # conflict-free
         @test any(getfield(rd1[f], x) != getfield(rd2[f], x) for x in keys(rd1[f]))                   # a new draw
         @test all(getfield(rd1[f], x) == getfield(rd1b[f], x) for x in keys(rd1[f]))                  # reproducible
@@ -37,4 +38,18 @@ pl = D.plan(M, S, P.βv; families=fams, cls=cls, cells=ci, rng=MersenneTwister(1
         @printf("  %-10s %6d sites (plan %6d), %5d of %5d moved in round 1\n", f, Int(sum(tab.on)), Int(sum(pl.host[f].on)),
                 count(!=(0.0), t), length(t))
     end
+end
+
+# The plan holds its static data (device.md §7, M4): a second plan with other defaults, another
+# family list (the :spair split) and other schedule options does not change the first plan's redraws.
+@testset "two plans in one process" begin
+    rdA, _, _ = D.redraw_tables(pl, M, MersenneTwister(5))
+    D.SPARSE_SOURCE[] = nothing; D.SX_SOURCE[] = nothing; D.BLOCK_GROUPS[] = nothing     # other module defaults
+    pl2 = D.plan(M, S, P.βv; families=(:spair0, :spair, :slong), cls=cls, rng=MersenneTwister(12), slong_moves=2)
+    rdB, _, _ = D.redraw_tables(pl, M, MersenneTwister(5))
+    @test keys(rdA) == keys(rdB)
+    @test all(rdA[f] == rdB[f] for f in keys(rdA))
+    @test length(pl2.sched[:slong]) * 16 == length(pl.sched[:slong])                   # 2 against 32 plateaus per unit
+    @test !(:sxpair in pl2.fams) && pl2.tp.ctx.sx === nothing && pl.tp.ctx.sx !== nothing
+    D.set_sources!(P, LM, ix)
 end

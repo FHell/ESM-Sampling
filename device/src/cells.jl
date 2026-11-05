@@ -48,7 +48,12 @@ function level_rounds(ci::CellInfo; cell_power=1.0, base=1)
     return max.(1, round.(Int, base .* w ./ minimum(w)))
 end
 
-const CELLINFO = Ref{Any}(nothing)      # set by `plan(…; cells=cell_info(…))` for the schedule
+"The cell structure of a plan (`plan(…; cells=cell_info(…))`, in its schedule context)."
+function cellinfo(tp::Topo)
+    ci = tp.ctx.cells
+    ci === nothing && error("cell families need the cell structure: plan(…; cells=cell_info(P, LM, ix))")
+    return ci
+end
 
 """
 Rounds of the cell family `base` (:cell or :cellpair) at the levels `qs`. `uc`: nothing (any
@@ -56,7 +61,7 @@ carriers), false (carriers without commitment only), true (:cell: a committable 
 at least one of the two committable).
 """
 function cell_rounds(base::Symbol, qs, tp::Topo, cls, rng; uc=nothing)
-    ci = CELLINFO[]
+    ci = cellinfo(tp)
     rounds = Vector{Vector{Tuple}}()
     lr = level_rounds(ci)
     isuc(g) = ci.ucg[g]
@@ -76,14 +81,13 @@ function cell_rounds(base::Symbol, qs, tp::Topo, cls, rng; uc=nothing)
     end
     return rounds
 end
-family_rounds(::Val{:cell}, tp::Topo, M::DeviceModel, cls, rng) = cell_rounds(:cell, eachindex(CELLINFO[].nodes), tp, cls, rng)
-family_rounds(::Val{:cellpair}, tp::Topo, M::DeviceModel, cls, rng) = cell_rounds(:cellpair, eachindex(CELLINFO[].nodes), tp, cls, rng)
+family_rounds(::Val{:cell}, tp::Topo, M::DeviceModel, cls, rng) = cell_rounds(:cell, eachindex(cellinfo(tp).nodes), tp, cls, rng)
+family_rounds(::Val{:cellpair}, tp::Topo, M::DeviceModel, cls, rng) = cell_rounds(:cellpair, eachindex(cellinfo(tp).nodes), tp, cls, rng)
 
 ncmax(ci::CellInfo) = maximum(length(n) for lv in ci.nodes for n in lv; init=1)
 ncmax(ci::CellInfo, q::Int) = maximum(length.(ci.nodes[q]); init=1)
-"Node slots of a site: the largest cell of its level in the level buckets (`cell2`, …), of all levels in `:cell`."
-const CELL_BUCKETED = Ref(false)
-ncsite(ci, q) = CELL_BUCKETED[] ? ncmax(ci, q) : ncmax(ci)
+"Node slots of a site: the largest cell of its level in the level buckets (`cell2`, …, `bucketed`), of all levels in `:cell`."
+ncsite(ci, q, bucketed::Bool) = bucketed ? ncmax(ci, q) : ncmax(ci)
 
 "Columns of carrier g's unit at every node slot of the cell (0 where the carrier has no unit there)."
 function cellcols(ci::CellInfo, T, q, k, g, τ, Nc)
@@ -92,22 +96,24 @@ function cellcols(ci::CellInfo, T, q, k, g, τ, Nc)
     return padv(us, Nc), c(τ - 1), c(τ), c(τ + 1)
 end
 
-function site_cols(::Val{:cell}, tp::Topo, site, D::Int)
-    ci = CELLINFO[]; T = tp.T; Nc = ncsite(ci, site[1])
+site_cols(::Val{:cell}, tp::Topo, site, D::Int) = cell_cols(tp, site, false)
+site_cols(::Val{:cellpair}, tp::Topo, site, D::Int) = cellpair_cols(tp, site, false)
+function cell_cols(tp::Topo, site, bucketed::Bool)
+    ci = cellinfo(tp); T = tp.T; Nc = ncsite(ci, site[1], bucketed)
     q, k, g, τ = site
     ua, cam, ca, ca1 = cellcols(ci, T, q, k, g, τ, Nc)
     return (ua=ua, cwam=cam, cwa=ca, cwa1=ca1, crn=padv([colτ(T, τ, n) for n in ci.nodes[q][k]], Nc))
 end
-function site_cols(::Val{:cellpair}, tp::Topo, site, D::Int)
-    ci = CELLINFO[]; T = tp.T; Nc = ncsite(ci, site[1])
+function cellpair_cols(tp::Topo, site, bucketed::Bool)
+    ci = cellinfo(tp); T = tp.T; Nc = ncsite(ci, site[1], bucketed)
     q, k, g1, g2, τ = site
     ua, cam, ca, ca1 = cellcols(ci, T, q, k, g1, τ, Nc)
     ub, cbm, cb, cb1 = cellcols(ci, T, q, k, g2, τ, Nc)
     return (ua=ua, cwam=cam, cwa=ca, cwa1=ca1, ub=ub, cwbm=cbm, cwb=cb, cwb1=cb1,
             crn=padv([colτ(T, τ, n) for n in ci.nodes[q][k]], Nc))
 end
-device_extra(::Val{:cell}, ht) = (aon=Float64.(ht.ua .> 0), non=Float64.(ht.crn .> 0))
-device_extra(::Val{:cellpair}, ht) = (aon=Float64.(ht.ua .> 0), bon=Float64.(ht.ub .> 0), non=Float64.(ht.crn .> 0))
+device_extra(::Val{:cell}, ht, tp) = (aon=Float64.(ht.ua .> 0), non=Float64.(ht.crn .> 0))
+device_extra(::Val{:cellpair}, ht, tp) = (aon=Float64.(ht.ua .> 0), bon=Float64.(ht.ub .> 0), non=Float64.(ht.crn .> 0))
 
 let fa = [(:cwa, :ω, true), (:cwa, :uc, true), (:cwam, :ω, false), (:cwam, :uc, false), (:cwa1, :uc, false)],
     fb = [(:cwb, :ω, true), (:cwb, :uc, true), (:cwbm, :ω, false), (:cwbm, :uc, false), (:cwb1, :uc, false)]
@@ -188,9 +194,9 @@ pairsym(q, uc=false) = Symbol(uc ? :cellpairu : :cellpair, q)
 for q in 1:CELL_LEVELS, uc in (false, true), (nm, base) in ((cellsym(q, uc), :cell), (pairsym(q, uc), :cellpair))
     @eval begin
         family_rounds(::Val{$(QuoteNode(nm))}, tp::Topo, M::DeviceModel, cls, rng) =
-            (CELL_BUCKETED[] = true; cell_rounds($(QuoteNode(base)), ($q,), tp, cls, rng; uc=$uc))
-        site_cols(::Val{$(QuoteNode(nm))}, tp::Topo, site, D::Int) = (CELL_BUCKETED[] = true; site_cols(Val($(QuoteNode(base))), tp, site, D))
-        device_extra(::Val{$(QuoteNode(nm))}, ht) = device_extra(Val($(QuoteNode(base))), ht)
+            cell_rounds($(QuoteNode(base)), ($q,), tp, cls, rng; uc=$uc)
+        site_cols(::Val{$(QuoteNode(nm))}, tp::Topo, site, D::Int) = $(base == :cell ? :cell_cols : :cellpair_cols)(tp, site, true)
+        device_extra(::Val{$(QuoteNode(nm))}, ht, tp) = device_extra(Val($(QuoteNode(base))), ht, tp)
         build(::Val{$(QuoteNode(nm))}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r, k::Consts) =
             $(base == :cell ? :build_cell : :build_cellpair)(st, cp, sp, tab, r, k, Val($uc))
         commit(::Val{$(QuoteNode(nm))}, st::FlatState, tab, r, t, dr, aux) = commit_cells(st, tab, r, t, dr, aux)

@@ -11,8 +11,8 @@
 #      moved replicas' load and availability are uploaded (their rows only) and the device sets
 #      their net load, shifts the residual and re-initialises the dispatch compensated
 #      (`weather_rows`);
-#   2. `replica_inner` operation sweeps of every row (`run_sweeps`), the scores accumulated
-#      after each (`score_acc`) and downloaded;
+#   2. `replica_inner` operation sweeps of every row (`run_sweeps_g`, with the guard counter), the
+#      scores accumulated after each (`score_acc`) and downloaded;
 #   3. on the host: the gate of every replica on its relaxation indicator (`update_gate!`), the
 #      in-flight windows of the probe, the drift weights with the tilt (`drift_weights`);
 #   4. the Langevin step of the shared capacities on the weighted replica scores and the dispatch
@@ -23,8 +23,9 @@
 #      sweeps its equilibrated score gives the gap, and in the warmup the step adaptation
 #      (`adapt_step!`).
 # A host checkpoint every `device_sweeps` steps: the residual cache rebuilt (`rebuild_flat`), the
-# download, the replicas' `State`s, the monitored quantities and the replica records, and the
-# snapshot boundary (`write_replica_snapshot`, the CPU driver's layout). `compile = false` runs the
+# download, the replicas' `State`s, the monitored quantities and the replica records (with the
+# guard counts of the interval per chain), and the snapshot boundary (`write_replica_snapshot`, the
+# CPU driver's layout). `compile = false` runs the
 # same driver on plain Julia arrays.
 
 "Columns of the device unit blocks for every node of every k field: (block 1 dispatchable | 2 storage | 3 renewable, column)."
@@ -79,10 +80,10 @@ weather_rows(st, kg, ks, RS, dnet, cren, KP, RP, D0, cren0, A, pos, chg, wsh, dv
 Device programs of the replica driver: Reactant-compiled (`compile = true`, under `ftcompile`) or
 the plain functions on Arrays. `args` holds the arguments of every program to compile (`pc`, the
 row copy, only with probe slots). Returns (programs as a NamedTuple sw, sa, lg, wu, pc; compile
-seconds).
+seconds). `sw` is the operation sweep with the guard counter: (st, g) → (st, g) (`run_sweeps_g`).
 """
 function replica_programs(fv::Val, dims::Val, ph::Val, comp::Val, kw, args; compile::Bool)
-    sw(st, cp, sp, k, tabs, ns, rng) = run_sweeps(st, cp, sp, k, tabs, ns, rng, fv)
+    sw(st, g, cp, sp, k, tabs, ns, rng) = run_sweeps_g(st, g, cp, sp, k, tabs, ns, rng, fv)
     sa(st, kg, ks, RS, KP, RP, acc, wt) = score_acc(st, kg, ks, RS, KP, RP, acc, wt, dims, ph; βv=kw.βv, βk=kw.βk)
     lg(st, kg, ks, RS, dn, cr, cap, KP, RP, LP, acc, W, rng, wsh, rg, sg) =
         lgv_pass_rng(st, kg, ks, RS, dn, cr, cap, KP, RP, LP, acc, W, rng, wsh, rg, sg, dims;
@@ -209,10 +210,12 @@ function replica_device_setup(cfg::ML.Config; families=FAMILIES_FAST, budget=DEN
     M, ix = pack(P, L)
     S = to_device(P, M, ix, slots)
     wsh = load_shares(P, slots)
-    fams = families === :all ? device_families(M, cell_info(P, LM, ix)) : families
-    set_sources!(P, LM, ix)                                             # host sources of the drawn sites (sources.jl)
-    pl = plan(M, S, P.βv; cls=proxy_class(S.dnet, wsh), families=fams, cells=cell_info(P, LM, ix), budget=budget, jump=jump,
-              backend=cfg.device_backend, rng=MersenneTwister(ML.restart_seed(cfg, rr) + 303))
+    ci = cell_info(P, LM, ix)
+    fams = families === :all ? device_families(M, ci; dshapes=false) : families    # no host adaptation: no learned dispatch shapes
+    src = host_sources(P, LM, ix; chains=C)                             # host sources of the drawn sites (sources.jl)
+    pl = plan(M, S, P.βv; cls=proxy_class(S.dnet, wsh), families=fams, cells=ci, budget=budget, jump=jump,
+              backend=cfg.device_backend, rng=MersenneTwister(ML.restart_seed(cfg, rr) + 303), sources=src, tables=host_tables(nothing),
+              slong_moves=cfg.storage_long_moves, slong_hours=cfg.storage_long_hours)
     Ug, Us, Ul = length(ix.gidx), length(ix.sidx), length(M.kcap)
     nr = length(ren_units(P))
     dims = Val((C, M.T, M.N, Ug, Us, Ul, Mp, np))
@@ -230,6 +233,8 @@ function replica_device_setup(cfg::ML.Config; families=FAMILIES_FAST, budget=DEN
     dev[:rg], dev[:sg] = map(R, rg), map(R, sgp)
     dev[:wsh] = R(wsh)
     dev[:pl], dev[:up], dev[:srng] = pl, R, MersenneTwister(ML.restart_seed(cfg, rr) + 202)   # site redraws (sources.jl)
+    dev[:gz] = () -> R(guard_zeros(C, length(pl.fams)))                # guard counter of the operation sweeps, reset at every checkpoint
+    dev[:gc] = dev[:gz]()
     dev[:drng] = rngd(device_rng_seed(cfg, rr))                         # operation sweeps
     dev[:lrng] = rngd(device_rng_seed(cfg, rr) .+ UInt64[0, 1])        # Langevin noise
     dev[:R] = R
@@ -243,7 +248,7 @@ function replica_device_setup(cfg::ML.Config; families=FAMILIES_FAST, budget=DEN
     D0h, c0h, Ah = weather_arrays(P, M, slots[1:wb])
     kw = ftconv((; rr=P.βk / P.βv, P.βk, P.βv, clip=ctl.clip, κmin=ctl.κmin, box=ctl.box))    # scalars of the programs (F32: Float32)
     W0 = R(fill(1.0 / Mr, C))
-    args = (; sw=(dev[:st], dev[:cp], dev[:sp], dev[:kk], dev[:tabs], dev[:one], dev[:drng]),
+    args = (; sw=(dev[:st], dev[:gc], dev[:cp], dev[:sp], dev[:kk], dev[:tabs], dev[:one], dev[:drng]),
             sa=(dev[:st], dev[:kg], dev[:ks], dev[:RS], dev[:KP], dev[:RP], dev[:acc0], dev[:wt]),
             lg=(dev[:st], dev[:kg], dev[:ks], dev[:RS], dev[:dn], dev[:cr], dev[:cap], dev[:KP], dev[:RP], dev[:LP], dev[:acc0], W0,
                 dev[:lrng], dev[:wsh], dev[:rg], dev[:sg]),
@@ -263,7 +268,8 @@ function replica_device_setup(cfg::ML.Config; families=FAMILIES_FAST, budget=DEN
                        Dict(k => 0.0 for k in ("weather_host", "weather", "operation", "score", "gate", "langevin", "probe", "download",
                                                "rebuild", "host")), tc)
     if snap === nothing && cfg.replica_init_sweeps > 0         # the dispatch of the fresh weather at fixed k
-        dev[:st] = dev[:sw](dev[:st], dev[:cp], dev[:sp], dev[:kk], dev[:tabs], num(cfg.replica_init_sweeps), dev[:drng])
+        dev[:st], dev[:gc] = dev[:sw](dev[:st], dev[:gc], dev[:cp], dev[:sp], dev[:kk], dev[:tabs], num(cfg.replica_init_sweeps), dev[:drng])
+        dev[:gc] = dev[:gz]()                                  # the guard counts cover the steps of the run
         RD.fresh = false
     end
     return RD
@@ -271,6 +277,36 @@ end
 
 host(x) = x isa AbstractArray ? Array(x) : x
 sync!(x) = (x isa Reactant.ConcreteRArray && Reactant.synchronize(x); x)
+
+"""
+The guard counter of the replica batch since the last call (row, family, guard: root guard, cap), as
+host floats; the device counter is reset (`guard_zeros`).
+"""
+function replica_guards!(RD::ReplicaDevice)
+    G = HostFloat.(host(RD.dev[:gc]))
+    RD.dev[:gc] = RD.dev[:gz]()
+    return G
+end
+
+"""
+The guard records of a replica run (`rtr[c]["guard_root"]`, `"guard_cap"`: per chain and host
+checkpoint a vector over the families) as two arrays family × chain × checkpoint (`write_guards`);
+chains with fewer records (a resume from a snapshot without them) are padded with zeros at the start.
+"""
+function replica_guard_arrays(rtr, nf::Int)
+    n = maximum((length(get(d, "guard_root", ())) for d in rtr); init=0)
+    root, cap = zeros(HostFloat, nf, length(rtr), n), zeros(HostFloat, nf, length(rtr), n)
+    for (c, d) in enumerate(rtr)
+        for (key, A) in (("guard_root", root), ("guard_cap", cap))
+            v = get(d, key, Vector{Vector{HostFloat}}())
+            o = n - length(v)
+            for (j, x) in enumerate(v)
+                length(x) == nf && (A[:, c, o+j] .= x)
+            end
+        end
+    end
+    return root, cap
+end
 
 "Download the device state and write every replica's capacities and operation into its host `State` (the probe slots stay on the device)."
 function replica_download!(RD::ReplicaDevice)
@@ -363,7 +399,7 @@ function replica_device_operation!(RD::ReplicaDevice)
     ctl, dev, tim = RD.ctl, RD.dev, RD.tim
     acc = dev[:acc0]
     for _ in 1:ctl.inner
-        tim["operation"] += @elapsed (dev[:st] = dev[:sw](dev[:st], dev[:cp], dev[:sp], dev[:kk], dev[:tabs], dev[:one], dev[:drng]);
+        tim["operation"] += @elapsed ((dev[:st], dev[:gc]) = dev[:sw](dev[:st], dev[:gc], dev[:cp], dev[:sp], dev[:kk], dev[:tabs], dev[:one], dev[:drng]);
                                       RD.sync && sync!(dev[:st].r))
         tim["score"] += @elapsed (acc = dev[:sa](dev[:st], dev[:kg], dev[:ks], dev[:RS], dev[:KP], dev[:RP], acc, dev[:wt]);
                                   RD.sync && sync!(acc.sg))
@@ -543,12 +579,16 @@ function run_replicas_device(cfg::ML.Config; families=FAMILIES_FAST, budget=DENS
             RD.tim["download"] += @elapsed replica_download!(RD)
             RD.tim["host"] += @elapsed replica_redraw!(RD)         # new random sites, same shapes (sources.jl)
             ncl = host(RD.dev[:nclip])
+            G = replica_guards!(RD)                                # guard counts of the interval (row, family, guard)
             for c in 1:nch
                 push!(traces[c], ML.replica_monitor(P, RD.LM, sets[c]))
                 for (k, v) in ML.replica_record(P, sets[c], merge(recs[c], (; nclip=Int(ncl[c]))), RD.kref, time() - t0)
                     push!(get!(rtr[c], k, Vector{Vector{HostFloat}}()), v)
                 end
                 push!(get!(rtr[c], "residual_drift", Vector{Vector{HostFloat}}()), drift[slotrow(RD, c, 1):slotrow(RD, c, RD.Mr)])
+                rows = slotrow(RD, c, 1):slotrow(RD, c, RD.Mp)       # the chain's replicas and probe slot
+                push!(get!(rtr[c], "guard_root", Vector{Vector{HostFloat}}()), vec(sum(G[rows, :, 1]; dims=1)))
+                push!(get!(rtr[c], "guard_cap", Vector{Vector{HostFloat}}()), vec(sum(G[rows, :, 2]; dims=1)))
             end
             RD.tim["host"] += time() - th
             if (it ÷ spc) % max(1, (nwarm + nprod) ÷ spc ÷ 10) == 0 || it == nwarm + nprod
@@ -566,6 +606,9 @@ function run_replicas_device(cfg::ML.Config; families=FAMILIES_FAST, budget=DENS
         nst = nwarm + nprod - it0
         ML.logmsg(cfg, "device profile per step ($(ctl.inner) operation sweeps, $(nch * RD.Mr) replicas, $(RD.Mp - RD.Mr) probe slot(s) per chain): " *
                        join((@sprintf("%s %.3f s", k, RD.tim[k] / max(nst, 1)) for k in sort(collect(keys(RD.tim)))), ", "))
+        groot, gcap = replica_guard_arrays(rtr, length(RD.dev[:pl].fams))
+        rsw = size(groot, 3) * RD.nch * RD.Mp * ctl.inner * spc          # row-sweeps the records cover
+        guard_log(cfg, RD.dev[:pl].fams, moves_per_sweep(RD.dev[:pl]), groot, gcap, rsw)
         res = ML.chains_report(cfg, P, names, traces, RD.kinds, nothing, nwarm ÷ spc, nprod ÷ spc, t0)
         ML.write_replica_outputs(cfg, P, RD.info, ctl, rtr, ptr, RD.restarts, snap)
         ML.write_replica_summary(cfg, P, ctl, rtr, ptr, RD.kinds, nwarm ÷ spc, res.passed, time() - t0; probe_warm=nwarm)
@@ -578,6 +621,7 @@ function run_replicas_device(cfg::ML.Config; families=FAMILIES_FAST, budget=DENS
             end
             f["replicas/record_every"] = spc
             f["replicas/probe_slots"] = RD.Mp - RD.Mr
+            write_guards(f, RD.dev[:pl].fams, values(moves_per_sweep(RD.dev[:pl])), groot, gcap, rsw)
         end
         return (; res..., P, sets, RD, status=:finished, exitcode=0, restarts=RD.restarts)
     catch e

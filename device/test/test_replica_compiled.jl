@@ -10,15 +10,18 @@
 # Compiles only with ESM_DEVICE_COMPILE=1 (several minutes; CPU backend unless REACTANT_BACKEND
 # is set); without it, the array side alone runs as a check of the inputs:
 #   ESM_DEVICE_COMPILE=1 nice -n 19 julia --project=device -t 8 device/test/test_replica_compiled.jl
-# ESM_DEVICE_FAMILIES (comma-separated) sets the operation families (default: the plain ones).
-# The array side against the CPU is test_replica_driver.jl.
+# ESM_DEVICE_FAMILIES (comma-separated) sets the operation families (default: the plain ones; `all`:
+# `families = :all`, every device family of the replica driver). The operation check compares, per
+# family, the state and the guard counts (`run_rounds_g`: sites held at t = 0 by the root guard and the
+# slope-jump cap) exactly. The array side against the CPU is test_replica_driver.jl.
 using ESMDevice, ESMSampling, Random, Test, Printf, Reactant
 const ML = ESMSampling
 const D = ESMDevice
 
 const ROOT = joinpath(@__DIR__, "..", "..")
 const COMPILE = get(ENV, "ESM_DEVICE_COMPILE", "") == "1"
-const FAMS = Tuple(Symbol.(split(get(ENV, "ESM_DEVICE_FAMILIES", "gen0,gen,uc,pair0,pair,soc,link,theta3,theta5,theta"), ",")))
+const FAMENV = get(ENV, "ESM_DEVICE_FAMILIES", "gen0,gen,uc,pair0,pair,soc,link,theta3,theta5,theta")
+const FAMS = FAMENV == "all" ? :all : Tuple(Symbol.(split(FAMENV, ",")))
 function compcfg(name)
     cfg = ML.load_config(joinpath(ROOT, "hpc", "configs", "device_smoke.toml"))
     cfg.data = joinpath(ROOT, "data", "processed", "model.h5")
@@ -29,8 +32,8 @@ function compcfg(name)
 end
 cfg = compcfg("programs")
 
-# The host sources of the drawn sites (sparse atoms, cell–class groups, storage pairs) are set by
-# the replica set-up (`set_sources!`); the dense angle families have no direction source here.
+# The host sources of the drawn sites (sparse atoms, cell–class groups, storage pairs) are those of
+# the replica set-up (`host_sources`, in its plan); the dense angle families have no direction source here.
 
 # ---------------------------------------------------------------- inputs: a replica run on arrays after 3 steps
 RD = D.replica_device_setup(cfg; families=FAMS, compile=false)
@@ -39,7 +42,8 @@ for it in 1:3
 end
 dev, P = RD.dev, RD.P
 C, nch = RD.nch * RD.Mp, RD.nch
-fv = Val(Tuple(f for f in FAMS if haskey(dev[:tabs], f)))
+fv = Val(dev[:pl].fams)                                   # the families with sites (all of the plan with FAMS = :all)
+println("operation families ($(length(dev[:pl].fams))): ", join(dev[:pl].fams, ", "))
 dims, ph, comp = RD.dims, Val(P.E.measure == :physical), Val(RD.ctl.comp)
 @assert RD.Mp == RD.Mr + 1 && typeof(dims).parameters[1][8] == 1                            # with a probe slot per chain (frozen in lgv_pass)
 kw = (; rr=P.βk / P.βv, βk=P.βk, clip=RD.ctl.clip, κmin=RD.ctl.κmin, box=RD.ctl.box)
@@ -60,16 +64,17 @@ src = collect(1:C); src[[D.slotrow(RD, c, RD.Mp) for c in 1:nch]] .= [D.slotrow(
 # The operation sweep family by family in one program, the state after every family returned (a copy:
 # a traced loop rebinds the arrays it carries, so a later family's loop would overwrite an uncopied
 # one): a difference is then localised to the family whose loop first differs, with inputs that agree
-# to round-off, instead of showing up as the sum over a long sweep.
+# to round-off, instead of showing up as the sum over a long sweep. With every family's guard counts
+# (`run_rounds_g`, a fresh copy of the zero counter g0 per family), which must agree exactly.
 const OPFAMS = typeof(fv).parameters[1]
 cp_state(st) = D.FlatState((copy(getfield(st, k)) for k in fieldnames(D.FlatState))...)
-function op(st, cp, sp, k, tabs, U)
-    outs = Any[]
+function op(st, g0, cp, sp, k, tabs, U)
+    outs, gs = Any[], Any[]
     for f in OPFAMS
-        st = D.run_rounds(st, cp, sp, k, tabs, 1, nothing, U, Val((f,)))
-        push!(outs, cp_state(st))
+        st, g = D.run_rounds_g(st, copy(g0), cp, sp, k, tabs, 1, nothing, U, Val((f,)))
+        push!(outs, cp_state(st)); push!(gs, copy(g))
     end
-    return Tuple(outs)
+    return Tuple(outs), Tuple(gs)
 end
 sa(st, kg, ks, RS, KP, RP, acc, wt) = D.score_acc(st, kg, ks, RS, KP, RP, acc, wt, dims, ph; βv=P.βv, βk=P.βk)
 lg(st, kg, ks, RS, dn, cr, cap, KP, RP, LP, acc, W, ξg, ξs, ξr, wsh, rg, sg) =
@@ -78,7 +83,7 @@ wu(st, kg, ks, RS, dn, cr, KP, RP, D0, c0, A, pos, chg, wsh) = D.weather_rows(st
 pc(st, cp, kg, ks, RS, dn, cr, cap, src) = D.copy_rows(st, cp, kg, ks, RS, dn, cr, cap, src)
 rb(st, kg, ks, dn, cr, cap, M) = D.rebuild_flat(st, kg, ks, dn, cr, cap, M, D.rebuild_dims(C, RD.M, RD.ix))
 acc1 = sa(dev[:st], dev[:kg], dev[:ks], dev[:RS], dev[:KP], dev[:RP], dev[:acc0], 1.0)
-args = (; op=(dev[:st], dev[:cp], dev[:sp], dev[:kk], dev[:tabs], U),
+args = (; op=(dev[:st], zeros(C, 1, 2), dev[:cp], dev[:sp], dev[:kk], dev[:tabs], U),
         sa=(dev[:st], dev[:kg], dev[:ks], dev[:RS], dev[:KP], dev[:RP], dev[:acc0], 1.0),
         lg=(dev[:st], dev[:kg], dev[:ks], dev[:RS], dev[:dn], dev[:cr], dev[:cap], dev[:KP], dev[:RP], dev[:LP], acc1, W, ξ..., dev[:wsh],
             dev[:rg], dev[:sg]),
@@ -108,16 +113,20 @@ function compile_check(k)
     o = f(a...)
     d = maxrel(o, outs[k])
     @printf("  %s: compile %.0f s, max relative |compiled − arrays| %.2e\n", k, tc, d)
-    if k == :op                                       # per family: the state after each family's rounds
+    geq = true
+    if k == :op                                       # per family: the state after each family's rounds, its guard counts
         for (i, f) in enumerate(OPFAMS)
-            di = maxrel(o[i], outs[k][i])
-            @printf("    after %-8s %.2e%s\n", f, di, di > 1e-9 ? "  <- first beyond 1e-9" : "")
-            di > 1e-9 && (where_differs(o[i], outs[k][i]); break)
+            di = maxrel(o[1][i], outs[k][1][i])
+            gc_, ga = Array(o[2][i]), outs[k][2][i]
+            geq &= gc_ == ga
+            @printf("    after %-8s %.2e; guards (root, cap) arrays %s, compiled %s%s\n", f, di, string(Int.(vec(sum(ga; dims=(1, 2))))),
+                    string(Int.(vec(sum(gc_; dims=(1, 2))))), di > 1e-9 ? "  <- first beyond 1e-9" : gc_ != ga ? "  <- guard counts differ" : "")
+            di > 1e-9 && (where_differs(o[1][i], outs[k][1][i]); break)
         end
     elseif d > 1e-9 && o isa D.FlatState
         where_differs(o, outs[k])
     end
-    return tc, d
+    return tc, d, geq
 end
 "Where two states differ: entries beyond 1e-9 per field, rows, first columns."
 function where_differs(o, y0)
@@ -141,8 +150,9 @@ if COMPILE
     Reactant.set_default_backend(get(ENV, "REACTANT_BACKEND", "cpu"))
     @testset "replica programs compiled by Reactant = arrays" begin
         for k in keys(args)
-            tc, d = compile_check(k)
+            tc, d, geq = compile_check(k)
             @test d < 1e-9
+            @test geq                                     # the guard counts of every family (op) agree exactly
         end
     end
     @testset "Float32 build: contractions at HIGHEST precision" begin
@@ -169,6 +179,14 @@ if COMPILE
             pit = read(f["replicas/1/probe/it"])
             println("  probes (step, replica, adapted): ", [Int.(pit[:, j]) for j in axes(pit, 2)])
             @test size(pit, 2) >= 1 && any(pit[3, :] .== 1)
+            # the guard counts per host checkpoint (device/guard_*, replicas/<c>/guard_*)
+            gf, gr, gcp = read(f["device/guard_families"]), read(f["device/guard_root"]), read(f["device/guard_cap"])
+            nck = (cr.mlda_warmup + cr.nsamples) ÷ cr.device_sweeps
+            @test gf == string.(res.RD.dev[:pl].fams)
+            @test size(gr) == (length(gf), res.RD.nch, nck) && size(gcp) == size(gr)
+            @test size(read(f["replicas/1/guard_cap"])) == (length(gf), nck)
+            @test read(f["device/guard_row_sweeps"]) == nck * res.RD.nch * res.RD.Mp * res.RD.ctl.inner * cr.device_sweeps
+            println("  guards (root, cap) per family: ", join(("$x $(Int(sum(gr[i, :, :])))/$(Int(sum(gcp[i, :, :])))" for (i, x) in enumerate(gf)), ", "))
         end
         LPh = D.lgv_params(res.P, res.RD.M, res.RD.ix; κs=res.RD.ctl.κs, ηw=[R.ηw for R in res.sets])
         @test Array(res.RD.dev[:LP].ηg) == LPh.ηg                # the adapted steps uploaded

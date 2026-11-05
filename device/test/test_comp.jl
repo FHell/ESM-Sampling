@@ -72,7 +72,7 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
     end
     st0 = cpu_r_state(pl, LCs)
     rounds = NamedTuple{pl.fams}(Tuple(pl.sched[f][1:min(nround, end)] for f in pl.fams))
-    tabs = NamedTuple{pl.fams}(Tuple(D.device_table(f, D.host_table(f, pl.tp, rounds[f])) for f in pl.fams))
+    tabs = NamedTuple{pl.fams}(Tuple(D.device_table(pl, f, D.host_table(f, pl.tp, rounds[f])) for f in pl.fams))
     off = Ref(0)
     U = NamedTuple{pl.fams}(Tuple(begin
         B, R = size(tabs[f].on)
@@ -83,7 +83,7 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
                               bm = cpu_move(P, LM, LC, ix, f, site; jac=jac, learn=learnof(f, c), chain=c); (bm, jac))
     ok_conf = all(D.check_conflicts(f, D.host_table(f, pl.tp, pl.sched[f]))[1] for f in pl.fams)
     # exactness of the dense form with kinked and LINEAR entries: ≤ 2 sign changes per secondary quantity
-    maxroots = Dict(f => f in (:slong, :slongL, :sxlong, :sxlongn) ? NaN :         # (a dense diagnostic: too large for the long-range moves)
+    maxroots = Dict(f => f in (:slong, :slongL, :slevel, :sxlong, :sxlongn) ? NaN :         # (a dense diagnostic: too large for the long-range moves)
                          maximum(maximum(D.root_count(D.build(Val(f), st0, pl.cp, pl.sp, tabs[f], r, pl.k)[1], pl.k))
                                  for r in 1:size(tabs[f].on, 2)) for f in pl.fams)
     t0 = time()
@@ -165,7 +165,7 @@ if get(ENV, "CASE", "ABC") in ("O",)
     CPU_MAXNATS[] = 40.0
 end
 if get(ENV, "CASE", "ABC") in ("M",)
-    comp_case("M (no losses; long-range storage moves, T2)"; tracking_model=false, fams=(:slong,))
+    comp_case("M (no losses; long-range storage moves, T2, and the level move)"; tracking_model=false, fams=(:slong, :slevel))
 end
 if get(ENV, "CASE", "ABC") in ("N",)
     comp_case("N (all terms; long-range storage moves, LINEAR)"; tracking_model=true, fams=(:slongL,))

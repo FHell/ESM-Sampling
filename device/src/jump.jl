@@ -561,20 +561,23 @@ function jump_points(pts, jmp, nz0, cap::Int)
 end
 
 """
-    sample_jump(tb, k, u1, u2; K, cap) -> (t, over)
+    sample_jump(tb, k, u1, u2; K, cap) -> (t, over, ocap, oroot)
 
 Exact draw from ∝ exp(−βΔC(t)) in the slope-jump form (same points, uniforms and guard as
 `sample_dense`): t (C, B, 1) and the guard (C, B, 1). `cap` > 0 keeps that many sorted entries;
 a site with more real candidates stays at t = 0 (the count is a property of the line, so the
-guard keeps the kernel π-invariant).
+guard keeps the kernel π-invariant). The two guards separately: `ocap` the cap (`nothing` without
+a cap), `oroot` the root guard (more sign changes of a secondary quantity than kept).
 """
 function sample_jump(tb::TermBatch, k::Consts, u1, u2; K::Val=Val(4), cap::Int=0)
     pts, jmp, s0, over, nz0, s0abs = jump_parts(tb, k; K=K)
+    oroot = over
     q, J, cnt, J0abs = jump_points1(pts, jmp, nz0, cap)
-    cap > 0 && (over = over .| (elast(cnt) .> cap - 1))
+    ocap = cap > 0 ? elast(cnt) .> cap - 1 : nothing
+    ocap === nothing || (over = over .| ocap)
     pe, c = jump_values1(q, J, eone(s0), k.β, eone(s0abs), J0abs)
     t = elast(sample_core1(k, pe, c, eone(u1), eone(u2)))
-    return ifelse.(over, 0.0, t), over
+    return ifelse.(over, 0.0, t), over, ocap, oroot
 end
 
 """

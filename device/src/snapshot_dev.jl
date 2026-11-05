@@ -83,3 +83,31 @@ end
 
 "Seed of Reactant's RNG of a device run after `r` resumes (as `restart_seed`, a separate stream)."
 device_rng_seed(cfg::ML.Config, r::Int) = UInt64[ML.restart_seed(cfg, r, 0), 0x9e3779b9]
+
+"""
+The guard records of the Metropolis driver in a snapshot's `device/` entries: `guard_root`,
+`guard_cap` (family × chain × host checkpoint, `guard_arrays`), added to `extra` when there are any.
+"""
+function guard_extra!(extra::AbstractDict, guards, nf::Int)
+    isempty(guards) && return extra
+    root, cap = guard_arrays(guards, nf)
+    extra["guard_root"] = root
+    extra["guard_cap"] = cap
+    return extra
+end
+
+"""
+The guard records of a resumed Metropolis run (snapshot entries `device/guard_root`, `guard_cap`),
+one (chain, family, guard) array per host checkpoint, or none (no snapshot, no records, or another
+family count).
+"""
+function resume_guards(snap, nf::Int)
+    out = Array{HostFloat,3}[]
+    (snap === nothing || !haskey(snap.extra, "guard_root") || !haskey(snap.extra, "guard_cap")) && return out
+    Rt, Cp = snap.extra["guard_root"], snap.extra["guard_cap"]
+    (ndims(Rt) == 3 && size(Rt, 1) == nf && size(Cp) == size(Rt)) || return out
+    for j in 1:size(Rt, 3)
+        push!(out, cat(permutedims(HostFloat.(Rt[:, :, j])), permutedims(HostFloat.(Cp[:, :, j])); dims=3))
+    end
+    return out
+end

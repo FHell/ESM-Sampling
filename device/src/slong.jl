@@ -4,38 +4,53 @@
 # nominal requirement `soc_qadj`, or the learned rule); `slevel` raises every instant (L = T, no
 # compensation).
 #
-#   :slong   share-preserving (models without requirement tracking)
-#   :slongL  linear
+#   :slong   plateaus, share-preserving (models without requirement tracking)
+#   :slongL  plateaus, linear
+#   :slevel  the level move (any model: no compensation)
 #
-# A site holds every step of the cycle, in the order a, b, then the other steps from a+1 on: the SoC
-# term of each step (its instants raised by the 0/1 profile of the site, host data `wa`, `wb`), the
-# node's balance slot at each step (static slot k for the k-th column), and at the two end steps the
-# node's G compensation columns (slots 1, 2) with their commitment terms. The level move uses the
-# same template (slots 1, 2 at a and a+1, no compensation). The device draws L uniformly on 2 … T−1
-# (the CPU on 1 … T−1: L = 1 is the `tsoc` move), a uniformly on 1 … T, one level move per unit and
-# `SLONG_MOVES` plateaus, one storage slot per node and round, for the units with at least
-# `SLONG_HOURS` hours of storage (κ_s ≥ κ_min per chain). Interior steps cost nothing while their
-# instants stay in the box: their columns are exact zeros there, as the CPU's compact terms.
+# A plateau site holds every step of the cycle, in the order a, b, then the other steps from a+1 on:
+# the SoC term of each step (its instants raised by the 0/1 profile of the site, host data `wa`,
+# `wb`), the node's balance slot at each step (static slot k for the k-th column), and at the two end
+# steps the node's G compensation columns (slots 1, 2) with their commitment terms. A level site
+# holds the SoC terms and balance slots of every step only (steps 1 … T; every instant raised). The
+# device draws L uniformly on 2 … T−1 (the CPU on 1 … T−1: L = 1 is the `tsoc` move), a uniformly on
+# 1 … T, per unit and sweep one level move and `slong_moves` plateaus (the plan's `tp.ctx`, the CPU's
+# `storage_long_moves`), one storage slot per node and round, for the units with at least
+# `slong_hours` hours of storage (`storage_long_hours`; κ_s ≥ κ_min per chain). Interior steps cost
+# nothing while their instants stay in the box: their columns are exact zeros there, as the CPU's
+# compact terms.
 
+"Defaults of a plan's `slong_hours` and `slong_moves` (`plan`; the drivers pass the configuration's `storage_long_hours`, `storage_long_moves`)."
 const SLONG_HOURS = Ref(24.0)
-const SLONG_MOVES = Ref(4)
+const SLONG_MOVES = Ref(32)
+
+"The long-range storage units of every node (at least `tp.ctx.slong_hours` hours of storage)."
+slong_units(tp::Topo, M::DeviceModel) = [[s for s in tp.nodestor[n] if M.sh[s] >= tp.ctx.slong_hours] for n in 1:tp.N]
 
 function slong_rounds(fam::Symbol, tp::Topo, M::DeviceModel, rng)
     (fam == :slong && tracking(M)) && error(":slong needs a model without line losses and lossy links (use :slongL)")
     T = tp.T
     T >= 4 || return Vector{Vector{Tuple}}()
-    units = [[s for s in tp.nodestor[n] if M.sh[s] >= SLONG_HOURS[]] for n in 1:tp.N]
+    units = slong_units(tp, M)
     Sm = maximum(length.(units); init=0)
     rounds = Vector{Vector{Tuple}}()
-    for j in 1:Sm, mv in 0:SLONG_MOVES[]
+    for j in 1:Sm, _ in 1:tp.ctx.slong_moves
         sites = Tuple[]
         for n in 1:tp.N
             length(units[n]) >= j || continue
-            push!(sites, (units[n][j], rand(rng, 1:T), mv == 0 ? T : rand(rng, 2:T-1)))
+            push!(sites, (units[n][j], rand(rng, 1:T), rand(rng, 2:T-1)))
         end
         push!(rounds, sites)
     end
     return rounds
+end
+
+"Level rounds: the j-th long-range unit of every node, one site (s, 1, T) per unit (the start a plays no role at L = T)."
+function slevel_rounds(tp::Topo, M::DeviceModel)
+    T = tp.T
+    T >= 4 || return Vector{Vector{Tuple}}()
+    units = slong_units(tp, M)
+    return [Tuple[(units[n][j], 1, T) for n in 1:tp.N if length(units[n]) >= j] for j in 1:maximum(length.(units); init=0)]
 end
 
 "Relative step order of a site: a, b, then the other steps from a+1 on (cyclic); b = a+1 for the level move."
@@ -53,17 +68,25 @@ function slong_cols(tp::Topo, site)
     raised(τ) = L == T || mod(τ - a - 1, T) < L                # instant τ ∈ {a+1, …, a+L}
     gq, gcm, gc, gc1 = gencols(tp, n, steps[1], G)
     _, gcmb, gcb, gc1b = gencols(tp, n, steps[2], G)
-    return (s=s, lev=Float64(L == T), ce0=[colτ(T, τ, s) for τ in steps], ce1=[colτ(T, τ + 1, s) for τ in steps],
+    return (s=s, ce0=[colτ(T, τ, s) for τ in steps], ce1=[colτ(T, τ + 1, s) for τ in steps],
             wa=[Float64(raised(τ)) for τ in steps], wb=[Float64(raised(mod1(τ + 1, T))) for τ in steps],
             cr=[colτ(T, τ, n) for τ in steps], gq=vcat(gq, gq), gcm=vcat(gcm, gcmb), gc=vcat(gc, gcb), gc1=vcat(gc1, gc1b),
             cc=[colτ(T, steps[1], n), colτ(T, steps[2], n)])
+end
+
+"Columns of a level site (s, a, T): the instants and the node's balance slot at every step 1 … T."
+function slevel_cols(tp::Topo, site)
+    T = tp.T
+    s = site[1]
+    n = tp.snode[s]
+    return (s=s, ce0=[colτ(T, τ, s) for τ in 1:T], ce1=[colτ(T, τ + 1, s) for τ in 1:T], cr=[colτ(T, τ, n) for τ in 1:T])
 end
 
 for (f, lin) in ((:slong, false), (:slongL, true))
     @eval begin
         family_rounds(::Val{$(QuoteNode(f))}, tp::Topo, M::DeviceModel, cls, rng) = slong_rounds($(QuoteNode(f)), tp, M, rng)
         site_cols(::Val{$(QuoteNode(f))}, tp::Topo, site, D::Int) = slong_cols(tp, site)
-        device_extra(::Val{$(QuoteNode(f))}, ht) = (gon=Float64.(ht.gq .> 0),)
+        device_extra(::Val{$(QuoteNode(f))}, ht, tp) = (gon=Float64.(ht.gq .> 0),)
         build(::Val{$(QuoteNode(f))}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r, k::Consts) =
             build_slong(st, cp, sp, tab, r, k, Val($lin), $(QuoteNode(f)))
         commit_tb(::Val{$(QuoteNode(f))}, st, tab, r, t, dr, aux, tb) = commit_slong(st, tab, r, t, dr, aux, tb)
@@ -71,6 +94,12 @@ for (f, lin) in ((:slong, false), (:slongL, true))
     FOOT[f] = [(:ce0, :e, true), (:cr, :r, true), (:gc, :ω, true), (:gc, :uc, true), (:gcm, :ω, false), (:gcm, :uc, false),
                (:gc1, :uc, false)]
 end
+
+family_rounds(::Val{:slevel}, tp::Topo, M::DeviceModel, cls, rng) = slevel_rounds(tp, M)
+site_cols(::Val{:slevel}, tp::Topo, site, D::Int) = slevel_cols(tp, site)
+build(::Val{:slevel}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r, k::Consts) = build_slevel(st, cp, sp, tab, r, k)
+commit_tb(::Val{:slevel}, st, tab, r, t, dr, aux, tb) = commit_slevel(st, tab, r, t, dr, aux, tb)
+FOOT[:slevel] = [(:ce0, :e, true), (:cr, :r, true)]
 
 function build_slong(st, cp, sp, tab, r, k, ::Val{lin}, fam::Symbol) where {lin}
     on = m3(tab.on[:, r])
@@ -87,8 +116,7 @@ function build_slong(st, cp, sp, tab, r, k, ::Val{lin}, fam::Symbol) where {lin}
                k=rep(g3(cp.ks, s)), w=rep(g3(cp.ws, s)), h=rep(s3(sp.sh, s)), ηin=rep(s3(sp.sηin, s)), ηout=rep(s3(sp.sηout, s)),
                qt=rep(s3(sp.sqt, s)), mc=rep(s3(sp.smc, s)), slot=collect(1:T))
     r0 = G4(st.r, tab.cr[:, :, r])
-    lev = m3(tab.lev[:, r]) .> 0.0
-    comp = c4(okm .& .!lev)
+    comp = c4(okm)
     κs4 = c4(κs)
     dg = ifelse.(comp, cat(κs4, .-κs4; dims=4), 0.0)          # +κs at step a, −κs at step b
     q = tab.gq[:, :, r]
@@ -114,7 +142,7 @@ function build_slong(st, cp, sp, tab, r, k, ::Val{lin}, fam::Symbol) where {lin}
         kk = nothing
         gen = gen4(st, cp, sp, z4, q, gc, sl; a=x)
     end
-    uj = [j for j in 1:2G if ucon(fam, j)]
+    uj = [j for j in 1:2G if ucon(tab, j)]
     uc, ucq = nothing, nothing
     if !isempty(uj)
         ucq = ucflags(sp, q, uj, gon)
@@ -137,4 +165,34 @@ function commit_slong(st, tab, r, t, dr, aux, tb)
     uc = ucq === nothing ? st.uc : scadd4(st.uc, gc[:, uj], Δ[:, :, :, uj] .* ucq)
     rr = scadd4(st.r, tab.cr[:, :, r], msk(dr4(dr), m4 .+ 0.0 .* c4(t)))
     return FlatState(st.θ, ω, uc, e, st.u, rr)
+end
+
+"""
+Term batch of a level site: the SoC terms of every step with both instants raised (slopes 1 on a
+unit with κ_s ≥ κ_min, else 0) and the node's balance slot at every step; no compensation, no
+generator or commitment terms (the level move changes no power inside the box).
+"""
+function build_slevel(st, cp, sp, tab, r, k)
+    on = m3(tab.on[:, r])
+    s = tab.s[:, r]
+    κs = g3(cp.ks, s) .* s3(sp.sh, s) ./ k.Δt
+    okm = (on .> 0.0) .& (κs .>= k.κmin)
+    z = 0.0 .* κs
+    z4 = c4(z)
+    m4 = c4(ifelse.(okm, 1.0, 0.0))
+    T = size(tab.ce0, 2)
+    rep(x) = c4(x) .+ zeros(1, 1, 1, T)                          # a broadcast: a splat of T arguments takes minutes to trace
+    w = m4 .+ zeros(1, 1, 1, T)                                  # every instant raised (0 on a masked site)
+    soc = ssoc(z4, T; e0=G4(st.e, tab.ce0[:, :, r]), ae=w, e10=G4(st.e, tab.ce1[:, :, r]), ae1=w,
+               k=rep(g3(cp.ks, s)), w=rep(g3(cp.ws, s)), h=rep(s3(sp.sh, s)), ηin=rep(s3(sp.sηin, s)), ηout=rep(s3(sp.sηout, s)),
+               qt=rep(s3(sp.sqt, s)), mc=rep(s3(sp.smc, s)), slot=collect(1:T))
+    tb = TermBatchS(z; soc=soc, r0=G4(st.r, tab.cr[:, :, r]))
+    return tb, (w, m4)
+end
+
+function commit_slevel(st, tab, r, t, dr, aux, tb)
+    w, m4 = aux
+    e = scadd4(st.e, tab.ce0[:, :, r], w .* c4(t))              # every instant once (the start instant of its step)
+    rr = scadd4(st.r, tab.cr[:, :, r], msk(dr4(dr), m4 .+ 0.0 .* c4(t)))
+    return FlatState(st.θ, st.ω, st.uc, e, st.u, rr)
 end

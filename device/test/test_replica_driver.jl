@@ -53,6 +53,11 @@ relnan(a, b) = (isnan.(a) == isnan.(b) || return Inf; f = .!isnan.(b); rel(a[f],
         @printf("  residual drift per checkpoint (chain 1): max %.2e MW\n", maximum(dr))
         @test size(dr) == (cd.replicas, (cd.mlda_warmup + cd.nsamples) ÷ cd.device_sweeps) && all(isfinite, dr) && maximum(dr) < 1e-6
         @test read(f["replicas/probe_slots"]) == 1 && haskey(f, "device_profile/rebuild")
+        nck = (cd.mlda_warmup + cd.nsamples) ÷ cd.device_sweeps      # guard counts per family, chain and host checkpoint
+        @test read(f["device/guard_families"]) == ["gen0", "soc"]
+        @test size(read(f["device/guard_root"])) == (2, length(rd.sets), nck) && size(read(f["device/guard_cap"])) == (2, length(rd.sets), nck)
+        @test size(read(f["replicas/1/guard_root"])) == (2, nck) && all(isfinite, read(f["device/guard_root"]))
+        @test read(f["device/guard_sites"]) == collect(values(D.moves_per_sweep(rd.RD.dev[:pl])))
     end
 end
 

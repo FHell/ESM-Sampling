@@ -94,21 +94,43 @@ function sweep_program(st::FlatState, cp, sp, k, tabs, ns, rng, fv::Val, kparts.
     return capacity_pass(st, kparts..., dims; σ, βk, βv, physical)
 end
 
+"`sweep_program` with the guard counter g of the operation sweeps (`run_sweeps_g`): the outputs of `capacity_pass`, then g."
+function sweep_program_g(st::FlatState, g, cp, sp, k, tabs, ns, rng, fv::Val, kparts...; dims, σ, βk, βv, physical)
+    st, g = run_sweeps_g(st, g, cp, sp, k, tabs, ns, rng, fv)
+    return (capacity_pass(st, kparts..., dims; σ, βk, βv, physical)..., g)
+end
+
 "Block lengths of a device run (`device_families`): all of `BLOCK_LENGTHS` (slope-jump form, `plan`)."
 const BLOCK_SCHED = BLOCK_LENGTHS
 
 """
-Operation families of a device run: the plain families, then the compensated families (`:spair0`,
-`:spair`; LINEAR `:tsocL`/`:tpotL` when the model needs requirement tracking (line losses, lossy
-links), else share-preserving `:tsoc`/`:tpot`), the storage blocks of `BLOCK_SCHED` (`:sblkL…` or
-`:sblk…` likewise), the level-bucketed cell templates of `ci` and the dense angle directions (`:tdir` or `:tdirL`, and
-`:tdir0`; they have sites only with a direction source, `TDIR_SOURCE`).
+    device_families(M, ci; dshapes=false) -> Tuple
+
+Operation families of a device run (`families = :all`): every device family that the model admits
+(LINEAR variants where it needs requirement tracking, i.e. line losses or lossy links):
+* the plain families (`FAMILIES_FAST`);
+* the compensated families `:spair0`, `:spair`, `:tsoc`/`:tsocL`, `:tpot`/`:tpotL`;
+* the storage blocks of `BLOCK_SCHED`, one unit (`:sblk…` or `:sblkL…`) and the cell–class
+  aggregates (`:sblkg…` or `:sblkgL…`);
+* the level-bucketed cell templates of `ci`;
+* the dense angle directions `:tdir`/`:tdirL` and `:tdir0` (sites only with a direction source:
+  the host adaptation of the Metropolis driver);
+* the sparse angle directions and local re-routings: `:tcut`, `:tcutw` (`:tcutL`, `:tcutLw`), `:xloc`,
+  `:xlocc` (not with tracking: share-preserving only), `:xpair`;
+* with `dshapes` (learned dispatch shapes: the host adaptation) the dispatch shapes `:dshp{L}`;
+* the long-range storage moves `:slong`/`:slongL` and the level move `:slevel`;
+* the storage pairs `:sxpair`, `:sxpairn`, `:sxlong`, `:sxlongn` (share-preserving only: not with tracking).
+A family without sites (no source, no long-range units, …) is dropped by `plan`.
 """
-function device_families(M::DeviceModel, ci)
+function device_families(M::DeviceModel, ci; dshapes::Bool=false)
     tr = tracking(M)
     cells = ci === nothing ? () : Tuple(cell_families(ci))
+    sparse = tr ? (:tcutL, :tcutLw, :xloc, :xpair) : (:tcut, :tcutw, :xloc, :xlocc, :xpair)
+    dsh = dshapes ? Tuple(dshsym(L) for L in DSHAPE_LENGTHS) : ()
+    sx = tr ? () : (:sxpair, :sxpairn, :sxlong, :sxlongn)
     return (FAMILIES_FAST..., :spair0, :spair, (tr ? (:tsocL, :tpotL) : (:tsoc, :tpot))...,
-            (blksym(L, tr) for L in BLOCK_SCHED)..., cells..., (tr ? :tdirL : :tdir), :tdir0)
+            (blksym(L, tr) for L in BLOCK_SCHED)..., (blkgsym(L, tr) for L in BLOCK_SCHED)..., cells...,
+            (tr ? :tdirL : :tdir), :tdir0, sparse..., dsh..., (tr ? :slongL : :slong), :slevel, sx...)
 end
 
 """
@@ -122,17 +144,17 @@ mutable struct HostAdapt
     FFs::Any
     qof::Dict{Tuple{Int,Int},Int}
     nupd::Int
+    tdir::Any                       # direction source of the dense angle families (`tdir_source`, for `host_sources`)
 end
 
+"""
+The host adaptation of a run (before its plan): `AdaptiveModes`, the chains' frames and the direction
+source of the dense angle families; the learned profile tables go to the plan through `host_tables`.
+"""
 function host_adapt(P::ML.Problem, LM, ix::DeviceIndex, chains, ℓ::Int)
     AM = ML.AdaptiveModes(P, ℓ; K=8, lengths=collect(BLOCK_LENGTHS))
     FFs = P.E.flow === nothing ? nothing : [ML.FlowFrames(P, ℓ, s) for s in chains]
-    TDIR_CHAINS[] = length(chains)
-    TDIR_SOURCE[] = tdir_source(P, LM; FFs=FFs, AM=AM)
-    for L in BLOCK_LENGTHS
-        set_learned_profiles!(L, AM)
-    end
-    return HostAdapt(AM, FFs, Dict(ix.gidx[q] => q for q in eachindex(ix.gidx)), 0)
+    return HostAdapt(AM, FFs, Dict(ix.gidx[q] => q for q in eachindex(ix.gidx)), 0, tdir_source(P, LM; FFs=FFs, AM=AM))
 end
 
 "Learned response coefficients into the static parameters (β1 deficit, β2 surplus class per unit)."
@@ -167,13 +189,17 @@ function adapt_step!(H::HostAdapt, P::ML.Problem, LM, pl, chains, cls, rng)
     (upd || H.FFs !== nothing) || return nothing
     upd && (H.nupd += 1)
     sp = learned_β!(deepcopy(pl.sp), H, P)
+    ctx = pl.tp.ctx                                 # the plan's profile tables, updated in place (same shapes)
     for L in BLOCK_LENGTHS
-        set_learned_profiles!(L, AM)
+        ctx.profiles[L] = learned_profile_table(L, AM)
+    end
+    for L in DSHAPE_LENGTHS
+        ctx.dshapes[L] = learned_dshape_table(L, AM)
     end
     new = Pair{Symbol,Any}[]
     for f in pl.fams
         f in TDIR_FAMILIES && continue
-        startswith(string(f), "sblk") && push!(new, f => device_table(f, pl.host[f]))
+        (startswith(string(f), "sblk") || startswith(string(f), "dshp")) && push!(new, f => device_table(pl, f, pl.host[f]))
     end
     return sp, merge((; new...), tdir_refresh(pl, rng))
 end
@@ -220,14 +246,16 @@ function device_setup(cfg::ML.Config; families=FAMILIES_FAST, budget=DENSE_BUDGE
     S = to_device(P, M, ix, chains)
     wsh = load_shares(P, chains)
     LM = ML.LocalModel(P, L)
-    HA = adapt ? host_adapt(P, LM, ix, chains, L) : (TDIR_SOURCE[] = nothing; nothing)
-    set_sources!(P, LM, ix; HA=HA)                  # sparse atoms, cell–class groups, storage pairs (sources.jl)
-    fams = families === :all ? device_families(M, cell_info(P, LM, ix)) : families
+    HA = adapt ? host_adapt(P, LM, ix, chains, L) : nothing
+    src = host_sources(P, LM, ix; HA=HA, chains=K)  # sparse atoms, cell–class groups, storage pairs, dense angle directions (sources.jl)
+    ci = cell_info(P, LM, ix)
+    fams = families === :all ? device_families(M, ci; dshapes=adapt) : families      # dispatch shapes: learned by the adaptation
     # `only`: plan only these families (and the plain and :spair families, whose split rules read the list)
     only === nothing || (fams = Tuple(f for f in fams if f in only || f in FAMILIES_FAST || f in (:spair0, :spair)))
-    pl = plan(M, S, P.βv; cls=proxy_class(S.dnet, wsh), families=fams, cells=cell_info(P, LM, ix), budget=budget, jump=jump,
+    pl = plan(M, S, P.βv; cls=proxy_class(S.dnet, wsh), families=fams, cells=ci, budget=budget, jump=jump,
               rng=MersenneTwister(ML.restart_seed(cfg, restarts) + 303),     # host choices of the schedule (redrawn later)
-              backend=cfg.device_backend)
+              backend=cfg.device_backend, sources=src, tables=host_tables(HA),
+              slong_moves=cfg.storage_long_moves, slong_hours=cfg.storage_long_hours)
     T, N = M.T, M.N
     Ug, Us, Ul = length(ix.gidx), length(ix.sidx), length(M.kcap)
     dims = Val((K, T, N, Ug, Us, Ul, max(1, round(Int, 0.05 * T))))    # last: peak-set size (q = 0.05, as the CPU)
@@ -255,6 +283,8 @@ function device_setup(cfg::ML.Config; families=FAMILIES_FAST, budget=DENSE_BUDGE
     drng = Reactant.ReactantRNG(R(device_rng_seed(cfg, restarts)))      # re-seeded after a resume (snapshot_dev.jl)
     fv = Val(pl.fams)
     sw(st, cp, sp, k, tabs, ns, rng) = run_sweeps(st, cp, sp, k, tabs, ns, rng, fv)
+    swg(st, g, cp, sp, k, tabs, ns, rng) = run_sweeps_g(st, g, cp, sp, k, tabs, ns, rng, fv)    # with the guard counter (the driver)
+    gz() = R(guard_zeros(K, length(pl.fams)))
     hr = MersenneTwister(ML.restart_seed(cfg, restarts) + 99)
     draws() = (R(randn(hr, K, length(units), nprop)), R(rand(hr, K, length(units), nprop)),
                R(randn(hr, K, length(gq), nprop)), R(rand(hr, K, length(gq), nprop)),
@@ -265,10 +295,12 @@ function device_setup(cfg::ML.Config; families=FAMILIES_FAST, budget=DENSE_BUDGE
     kp(args...) = capacity_pass(args..., dims; σ=σ_, βk=βk_, βv=βv_, physical=ph_)
     fp(st, cp, sp, k, tabs, ns, rng, kparts...) = sweep_program(st, cp, sp, k, tabs, ns, rng, fv, kparts...;
                                                                  dims=dims, σ=σ_, βk=βk_, βv=βv_, physical=ph_)
+    fpg(st, g, cp, sp, k, tabs, ns, rng, kparts...) = sweep_program_g(st, g, cp, sp, k, tabs, ns, rng, fv, kparts...;
+                                                                      dims=dims, σ=σ_, βk=βk_, βv=βv_, physical=ph_)
     kargs(st, kg, ks, dn, crd, cap, Z, U, Zp, Up, BD, BS, RS, Zr, Ur) =
         (st, kg, ks, dn, crd, cap, KPd, Z, U, Zp, Up, gqd, sqd, σkd, wshd, BD, BS, gid, sid, RPd, RS, Zr, Ur, rqd, rid)
-    return (; P, info, K, kinds, chains, snap, restarts, M, ix, S, pl, LM, units, usebias, packb, R, sw, kp, fp, kargs, draws, HA, wsh,
-            st, cp, sp, kk, tabs, kgd, ksd, dn, crd, cap, BDd, BSd, RSd, drng, Z, U, Zp, Up, Zr, Ur,
+    return (; P, info, K, kinds, chains, snap, restarts, M, ix, S, pl, LM, units, usebias, packb, R, sw, swg, gz, kp, fp, fpg, kargs, draws,
+            HA, wsh, st, cp, sp, kk, tabs, kgd, ksd, dn, crd, cap, BDd, BSd, RSd, drng, Z, U, Zp, Up, Zr, Ur,
             nsd=Reactant.ConcreteRNumber(cfg.device_sweeps))
 end
 
@@ -290,23 +322,26 @@ function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, 
     snap, rr = D.snap, D.restarts
     Ck.restarts = rr
     snap === nothing || ML.logmsg(cfg, "resuming from snapshot $(cfg.checkpoint) (restart $rr, written ", snap.where_, ")")
-    (; P, K, kinds, chains, M, ix, S, LM, usebias, packb, R, sw, kp, fp, kargs, draws, nsd, HA, pl, wsh) = D
+    (; P, K, kinds, chains, M, ix, S, LM, usebias, packb, R, swg, gz, kp, fpg, kargs, draws, nsd, HA, pl, wsh) = D
     (; st, cp, sp, kk, tabs, kgd, ksd, dn, crd, cap, BDd, BSd, RSd, drng, Z, U, Zp, Up, Zr, Ur) = D
     kpart(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur) =
         kargs(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)[2:end]
+    nf = length(pl.fams)
+    gd = gz()                                       # guard counter of the operation sweeps (`run_sweeps_g`), reset at every checkpoint
     if merged                                       # one program per checkpoint: sweeps, then the capacity pass
-        tc1 = @elapsed ffp = ftcompile(() -> @compile fp(st, cp, sp, kk, tabs, nsd, drng, kpart(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)...))
+        tc1 = @elapsed ffp = ftcompile(() -> @compile fpg(st, gd, cp, sp, kk, tabs, nsd, drng, kpart(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)...))
         tc2 = 0.0
         ML.logmsg(cfg, @sprintf("device (%s): compiled one program (operation sweeps + capacity pass, %.0f s); %d chains",
                                 cfg.device_backend, tc1, K))
     else
-        tc1 = @elapsed fsw = ftcompile(() -> @compile sw(st, cp, sp, kk, tabs, nsd, drng))
+        tc1 = @elapsed fsw = ftcompile(() -> @compile swg(st, gd, cp, sp, kk, tabs, nsd, drng))
         tc2 = @elapsed fkp = ftcompile(() -> @compile kp(kargs(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)...))
         ML.logmsg(cfg, @sprintf("device (%s): compiled the operation sweeps (%.0f s) and the capacity pass (%.0f s); %d chains",
                                 cfg.device_backend, tc1, tc2, K))
     end
     rb, tc3 = rebuild_program(M, rebuild_dims(K, M, ix), R, (st, kgd, ksd, dn, crd, cap); compile=true)   # residual.jl
     drift = resume_drift(snap)                      # max |r_cache − r_rebuilt| per chain and checkpoint
+    guards = resume_guards(snap, nf)                # guard counts (chain, family, guard) per checkpoint
     # ---- loop
     nwarm, nprod = cfg.mlda_warmup, cfg.nsamples
     online = usebias && cfg.bias_online
@@ -324,13 +359,13 @@ function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, 
     for it in it0+1:nwarm+nprod
         if merged                                   # "operation" then holds sweeps and capacity pass
             tim["operation"] += @elapsed begin
-                st, kgd, ksd, cp, BSn, RSd, dn, crd, cap = ffp(st, cp, sp, kk, tabs, nsd, drng,
-                                                               kpart(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)...)
+                st, kgd, ksd, cp, BSn, RSd, dn, crd, cap, gd = ffp(st, gd, cp, sp, kk, tabs, nsd, drng,
+                                                                   kpart(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)...)
                 sync(st.r); sync(kgd)
             end
             tim["draws"] += @elapsed (Z, U, Zp, Up, Zr, Ur = draws())
         else
-            tim["operation"] += @elapsed (st = fsw(st, cp, sp, kk, tabs, nsd, drng); sync(st.r))
+            tim["operation"] += @elapsed ((st, gd) = fsw(st, gd, cp, sp, kk, tabs, nsd, drng); sync(st.r))
             tim["draws"] += @elapsed (Z, U, Zp, Up, Zr, Ur = draws())
             tim["capacity"] += @elapsed begin
                 st, kgd, ksd, cp, BSn, RSd, dn, crd, cap = fkp(kargs(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)...)
@@ -348,6 +383,8 @@ function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, 
             unflat!(Sh, st)
             Sh.kg .= Array(kgd); Sh.ks .= Array(ksd)
             krh = Array(RSd.kr)
+            push!(guards, HostFloat.(Array(gd)))    # the guard counts of this checkpoint's sweeps, then a fresh counter
+            gd = gz()
         end
         refit = false
         for c in 1:K
@@ -376,7 +413,7 @@ function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, 
             BDd, BSd = R(BD), R(BS)                 # new values, same shapes: no recompile
         end
         tim["host"] += time() - th0
-        if device_boundary!(Ck, cfg, P, it, () -> (; states=chains, kinds, traces), () -> Dict{String,Any}("driver" => "mh", "residual_drift" => drift_matrix(drift)))
+        if device_boundary!(Ck, cfg, P, it, () -> (; states=chains, kinds, traces), () -> guard_extra!(Dict{String,Any}("driver" => "mh", "residual_drift" => drift_matrix(drift)), guards, nf))
             stopped = true
             break
         end
@@ -392,6 +429,8 @@ function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, 
     ML.logmsg(cfg, "device profile per call (" * string(cfg.device_sweeps) * " operation sweeps, " * string(K) * " chains): " *
                    join((@sprintf("%s %.3f s", k, tim[k] / ncall) for k in ("operation", "capacity", "rebuild", "draws", "download", "host")), ", "))
     isempty(drift) || ML.logmsg(cfg, @sprintf("residual cache drift before the rebuilds: max %.3g MW", maximum(maximum, drift)))
+    groot, gcap = guard_arrays(guards, nf)
+    guard_log(cfg, pl.fams, moves_per_sweep(pl), groot, gcap, length(guards) * K * cfg.device_sweeps)
     res = ML.chains_report(cfg, P, names, traces, kinds, PB, nwarm, nprod, t0)
     ML.HDF5.h5open(cfg.out, "r+") do f
         for (k, v) in tim
@@ -399,6 +438,7 @@ function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, 
         end
         f["device_profile/compile_operation"] = tc1; f["device_profile/compile_capacity"] = tc2; f["device_profile/compile_rebuild"] = tc3
         f["device/residual_drift"] = drift_matrix(drift)
+        write_guards(f, pl.fams, values(moves_per_sweep(pl)), groot, gcap, length(guards) * K * cfg.device_sweeps)
         f["run/restarts"] = rr
         f["run/resumed_at_checkpoint"] = snap === nothing ? -1 : snap.it
     end

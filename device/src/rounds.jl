@@ -125,7 +125,10 @@ end
 # host-side graph tables, time classes, colourings
 # ---------------------------------------------------------------------------
 
-"Topology of the device model (host)."
+"""
+Topology of the device model (host) and the schedule context of the plan it belongs to (`ctx`,
+`sched_ctx`): everything the schedule, the host tables and the redraws read besides the topology.
+"""
 struct Topo
     N::Int; T::Int
     gnode::Vector{Int}; snode::Vector{Int}
@@ -133,9 +136,10 @@ struct Topo
     ebus0::Vector{Int}; ebus1::Vector{Int}          # lines
     nodegens::Vector{Vector{Int}}; nodestor::Vector{Vector{Int}}
     nodelines::Vector{Vector{Int}}; nbrs::Vector{Vector{Int}}
+    ctx::Any
 end
 
-function topo(M::DeviceModel)
+function topo(M::DeviceModel; ctx=sched_ctx())
     N, T = M.N, M.T
     rowarg(A) = [findfirst(!=(0.0), A[i, :]) for i in 1:size(A, 1)]
     gnode, snode = rowarg(M.G), rowarg(M.S)
@@ -147,8 +151,41 @@ function topo(M::DeviceModel)
     nodestor = [findall(==(n), snode) for n in 1:N]
     nodelines = [[e for e in 1:nl if eb0[e] == n || eb1[e] == n] for n in 1:N]
     nbrs = [sort(unique([eb0[e] == n ? eb1[e] : eb0[e] for e in nodelines[n]])) for n in 1:N]
-    return Topo(N, T, gnode, snode, lb0, lb1, eb0, eb1, nodegens, nodestor, nodelines, nbrs)
+    return Topo(N, T, gnode, snode, lb0, lb1, eb0, eb1, nodegens, nodestor, nodelines, nbrs, ctx)
 end
+
+"""
+    sched_ctx(; families, cells, sources, tables, slong_moves, slong_hours, sx_moves, sparse_pack) -> NamedTuple
+
+Schedule context of a plan (the field `ctx` of its `Topo`), read by the schedule, the host tables
+and the redraws of that plan only:
+* `families`: the family list of the schedule (the split rules of `:gen`/`:gen0`, `:spair`/`:spair0`);
+* `cells`: the cell structure of the partition levels (`cell_info`; the cell families);
+* the host sources of the drawn sites (`sources`, a NamedTuple; missing entries from the defaults
+  `set_sources!`, `SPARSE_SOURCE`, `BLOCK_GROUPS`, `SX_SOURCE`, `TDIR_SOURCE`, `TDIR_CHAINS`):
+  `sparse`, `groups`, `sx`, `tdir` (the dense angle directions) and `chains` (their chain count);
+* the profile tables (`tables`: `profiles` L → (W, seasons) of the storage blocks, `dshapes` L →
+  (Φ, seasons) of the dispatch shapes, `dpairs`; missing entries copied from the defaults
+  `set_profiles!`, `set_dshapes!`): mutable Dicts, which the host adaptation updates in place;
+* schedule options: `slong_moves` plateaus per unit and sweep of `:slong` (the CPU's
+  `storage_long_moves`), `slong_hours` (`storage_long_hours`), `sx_moves` rounds of `:sxlong`,
+  `sparse_pack` sites drawn per step and round of the sparse families and `:sxpair`.
+The module-level defaults are read only here (at plan time); a plan never reads them later.
+"""
+function sched_ctx(; families=(), cells=nothing, sources=nothing, tables=nothing, slong_moves::Int=SLONG_MOVES[],
+                   slong_hours::Real=SLONG_HOURS[], sx_moves::Int=SX_MOVES[], sparse_pack::Int=SPARSE_PACK[])
+    src = sources === nothing ? default_sources() : merge(default_sources(), sources)
+    tb = tables === nothing ? default_tables() : merge(default_tables(), tables)
+    return (families=Tuple(families), cells=cells, sparse=src.sparse, groups=src.groups, sx=src.sx, tdir=src.tdir, chains=src.chains,
+            profiles=tb.profiles, dshapes=tb.dshapes, dpairs=tb.dpairs, slong_moves=slong_moves, slong_hours=Float64(slong_hours),
+            sx_moves=sx_moves, sparse_pack=sparse_pack)
+end
+
+"The module-level default host sources (`set_sources!`, or set by a test), read by `sched_ctx` at plan time."
+default_sources() = (sparse=SPARSE_SOURCE[], groups=BLOCK_GROUPS[], sx=SX_SOURCE[], tdir=TDIR_SOURCE[], chains=TDIR_CHAINS[])
+"Copies of the module-level default profile tables (`set_profiles!`, `set_dshapes!`), read by `sched_ctx` at plan time."
+default_tables() = (profiles=Dict{Int,Any}(L => profile_entry(L) for L in BLOCK_LENGTHS),
+                    dshapes=Dict{Int,Any}(L => dshape_entry(L) for L in DSHAPE_LENGTHS), dpairs=DSHAPE_PAIRS[])
 
 "Time classes: odd and even steps, three classes when T is odd (as `local_sweep!`)."
 tclasses(T) = T == 1 ? [[1]] : isodd(T) ? [collect(1:2:T-1), collect(2:2:T-1), [T]] : [collect(1:2:T), collect(2:2:T)]
@@ -184,13 +221,11 @@ end
 
 chunks(v, b) = [v[i:min(i + b - 1, end)] for i in 1:b:length(v)]
 
-"The family list of the schedule being built (split families such as `:spair`/`:spair0` read it)."
-const SCHED_FAMILIES = Ref{Tuple}(())
-
 """
     schedule(tp; families, bmax) -> Dict(family => rounds)
 
-Rounds of every family; a round is a vector of sites (tuples, see the family list above).
+Rounds of every family; a round is a vector of sites (tuples, see the family list above). The split
+rules of the phase-3 families (`:spair`/`:spair0`) read the family list of the plan (`tp.ctx.families`).
 """
 function schedule(tp::Topo, M::DeviceModel; families=FAMILIES, bmax=Dict{Symbol,Int}(), bdefault=1 << 15, rng=MersenneTwister(1))
     T = tp.T
@@ -200,7 +235,6 @@ function schedule(tp::Topo, M::DeviceModel; families=FAMILIES, bmax=Dict{Symbol,
     S = Dict{Symbol,Vector{Vector{Tuple}}}()
     G = maximum(length.(tp.nodegens); init=0)
     Sm = maximum(length.(tp.nodestor); init=0)
-    SCHED_FAMILIES[] = Tuple(families)                         # family_rounds of split families read it (:spair0)
     for fam in families
         rounds = Vector{Vector{Tuple}}()
         hasuc(q) = M.guc[q] > 0
@@ -335,13 +369,41 @@ function host_table(fam::Symbol, tp::Topo, rounds; D=maximum(length.(tp.nodeline
     return merge(NamedTuple{Tuple(keys(proto))}(Tuple(tab[k] for k in keys(proto))), (on=on,))
 end
 
-"Device table: padding → index 1 (zero changes there); for :theta the per-line mask `lon`."
-function device_table(fam::Symbol, ht)
+"""
+    device_table(fam, ht, tp=nothing; meta=nothing)
+    device_table(pl, f, ht)
+
+Device table of a host table: padding → index 1 (zero changes there); for :theta the per-line mask
+`lon`; the family's extra fields (`device_extra`: masks, the profile tables of the plan's context
+`tp.ctx`, or the module defaults without `tp`); and the static data of the family (`meta`, `plan`:
+committable columns, line-sampler form and cap, line slots), carried as `meta = Val(meta)` so that a
+compiled program depends only on its arguments. Without `meta` (and with `tp`) the defaults of
+`default_meta`. The second form uses the plan's context and meta (redraws, refreshes, tests).
+"""
+function device_table(fam::Symbol, ht, tp=nothing; meta=nothing)
     nt = NamedTuple{keys(ht)}(Tuple(k == :on || !(eltype(v) <: Integer) ? copy(v) : max.(v, 1) for (k, v) in pairs(ht)))
     istheta(fam) && (nt = merge(nt, (lon=Float64.(ht.ln .> 0),)))
-    return merge(nt, device_extra(Val(fam), ht))
+    nt = merge(nt, device_extra(Val(fam), ht, tp))
+    m = meta === nothing ? (tp === nothing ? nothing : default_meta(fam, tp)) : meta
+    return m === nothing ? nt : merge(nt, (meta=Val(m),))
 end
-device_extra(::Val, ht) = NamedTuple()
+device_table(pl::NamedTuple, f::Symbol, ht) = device_table(f, ht, pl.tp; meta=pl.meta[f])
+device_extra(::Val, ht, tp) = NamedTuple()
+
+"""
+Static data of a family's device tables (`plan`; the type parameter of the field `meta`):
+`uc` the committable unit columns (bit j of the words `ucbits` for column j of the unit table `gq`;
+`nothing`: every column), `jump` the slope-jump form, `cap` the entries kept in it (0: all), `lines` the line
+slots of the dense angle families (N, bus0 and bus1 of every line; `nothing` for the others).
+"""
+const META0 = (uc=nothing, jump=false, cap=0, lines=nothing)
+metaval(::Val{m}) where {m} = m
+"The static data of a device table (`META0` for a table without them)."
+fammeta(tab) = haskey(tab, :meta) ? metaval(tab.meta) : META0
+"Line slots of a topology (the static data of the dense angle families)."
+line_meta(tp::Topo) = (N=tp.N, e0=Tuple(tp.ebus0), e1=Tuple(tp.ebus1))
+"Static data of family f before `plan` sets them: every unit column, the dense form, the line slots."
+default_meta(f::Symbol, tp::Topo) = merge(META0, (lines=f in TDIR_FAMILIES ? line_meta(tp) : nothing,))
 
 # read/write footprints by table field: (field, array, writes?)
 const FOOT = Dict(
@@ -629,45 +691,62 @@ pin(x) = x
 pin(x::Reactant.TracedRArray) = Reactant.Ops.optimization_barrier(x)[1]
 
 """
-Families drawn in the slope-jump form (`sample_jump`); the others use the dense form. A static
-choice per family, made by `plan` (`jump = :auto`): the slope-jump form where the dense form's
-points × columns per site are at least `JUMP_RATIO` × the slope-jump entries (the slope-jump form
+The line-sampler form of a family is a static choice made by `plan` and kept in its tables
+(`fammeta(tab).jump`): the slope-jump form (`sample_jump`) where the dense form's points × columns
+per site are at least `JUMP_RATIO` × the slope-jump entries (`jump = :auto`; the slope-jump form
 pays a payload sort of its entries; the plain families stay dense).
 """
-const JUMP_FAMILIES = Set{Symbol}()
 const JUMP_RATIO = Dict("cpu" => 4.0, "gpu" => 10.0)      # per backend (GPU: the payload sort costs more)
-jumpform(::Val{f}) where {f} = f in JUMP_FAMILIES
+"Whether family f of plan pl is drawn in the slope-jump form."
+jumpform(pl::NamedTuple, f::Symbol) = pl.meta[f].jump
+"Entries kept per site in the slope-jump form of family f of plan pl (0: all)."
+jumpcap(pl::NamedTuple, f::Symbol) = pl.meta[f].cap
 """
-Committable unit columns of family f (set by `plan` from its schedule): column j of the unit table
-`gq` holds a unit with fleet commitment at some site. The commitment terms of the other columns are
-identically zero and are left out (static). Missing family: all columns.
+Committable unit columns of a family (static data of its table, set by `plan` from its schedule):
+column j of the unit table `gq` holds a unit with fleet commitment at some site. The commitment
+terms of the other columns are identically zero and are left out. No data: every column.
 """
-const UC_COLS = Dict{Symbol,Vector{Bool}}()
-ucon(f::Symbol, j::Int) = (v = get(UC_COLS, f, nothing); v === nothing || v[j])
-"Entries kept per site in the slope-jump form of family f (set by `plan`; 0: all)."
-const JUMP_CAP = Dict{Symbol,Int}()
-jumpcap(::Val{f}) where {f} = get(JUMP_CAP, f, 0)
+ucon(tab, j::Int) = (u = fammeta(tab).uc; u === nothing || (u[(j-1)>>6+1] >> ((j - 1) & 63)) & 0x1 == 0x1)
+"Flags as a tuple of 64-bit words (bit j of the table: column j), a compact type parameter for long column lists."
+ucbits(v::AbstractVector{Bool}) = Tuple(foldl((w, b) -> w | (UInt64(v[b]) << (b - 1 - 64(c - 1))), (64(c-1)+1):min(64c, length(v)); init=UInt64(0))
+                                        for c in 1:cld(length(v), 64))
 
-"Line draw of family f: (t, guard) from the slope-jump or the dense form (the same draw to round-off)."
-function line_draw(f::Val, tb::TermBatch, k::Consts, u1, u2)
-    jumpform(f) && return sample_jump(tb, k, u1, u2; K=nroots(f), cap=jumpcap(f))
+"""
+    line_draw(f, tb, k, u1, u2, meta=META0) -> (t, guard, cap guard, root guard)
+
+Line draw of family f in the form of its static data `meta` (`fammeta` of its table): the
+slope-jump form with its cap or the dense form (the same draw to round-off). `guard` holds every
+site kept at t = 0 by a guard; the cap guard (real candidates beyond the cap; `nothing` without a
+cap) and the root guard (a secondary quantity with more sign changes than kept) separately.
+"""
+function line_draw(f::Val, tb::TermBatch, k::Consts, u1, u2, m=META0)
+    m.jump && return sample_jump(tb, k, u1, u2; K=nroots(f), cap=m.cap)
     pts, over = dense_points(tb, k, u1 .* 0.0; K=nroots(f))
-    return ifelse.(over, 0.0, sample_points(tb, k, pts, u1, u2)), over
+    return ifelse.(over, 0.0, sample_points(tb, k, pts, u1, u2)), over, nothing, over
 end
 
 "The sorted points of a line draw of family f (diagnostics: the dense points or the slope-jump entries)."
-function line_points(f::Val, tb::TermBatch, k::Consts)
-    jumpform(f) || return dense_points(tb, k, tb.st.z .* 0.0; K=nroots(f))[1]
+function line_points(f::Val, tb::TermBatch, k::Consts, m=META0)
+    m.jump || return dense_points(tb, k, tb.st.z .* 0.0; K=nroots(f))[1]
     pts, jmp, _, _, nz0 = jump_parts(tb, k; K=nroots(f))
     return jump_points(pts, jmp, nz0, 0)[1]
 end
 
 """
-Cap of the slope-jump entries of family f: 1.25 × the largest real-candidate count of the first,
-middle and last round's sites + 8 (0: no cap, when that is not below the entries). Sites above it
-stay at t = 0 (exact guard; the rate is reported by the tests).
+Margin of the slope-jump cap over the largest real-candidate count of the probed initial sites:
+(factor, offset). The count depends on the state (roots appear and vanish, the vintage kink, the
+commitment quantities; later states of a run exceeded the initial counts by up to 27 %), and a
+site beyond the cap stays at t = 0 for good, so the margin is generous; the drivers count the
+guarded sites (`run_sweeps_g`). The cap only shortens the entries after the payload sort.
 """
-function jump_cap(f::Symbol, tab, st, cp, sp, k)
+const JUMP_MARGIN = (1.5, 16)
+
+"""
+Cap of the slope-jump entries of family f: `margin[1]` × the largest real-candidate count of the
+first, middle and last round's sites + `margin[2]` (0: no cap, when that is not below the entries).
+Sites above it stay at t = 0 (exact guard; the rate is counted by the drivers and the tests).
+"""
+function jump_cap(f::Symbol, tab, st, cp, sp, k; margin=JUMP_MARGIN)
     R = size(tab.on, 2)
     cmax, N = 0.0, 0
     for r in unique([1, cld(R, 2), R])
@@ -676,7 +755,7 @@ function jump_cap(f::Symbol, tab, st, cp, sp, k)
         on = sub.on[:, r] .> 0
         any(on) && (cmax = max(cmax, maximum(cnt[:, on])))
     end
-    cap = ceil(Int, 1.25 * cmax) + 8
+    cap = ceil(Int, margin[1] * cmax) + margin[2]
     return cap >= N ? 0 : cap
 end
 
@@ -695,23 +774,25 @@ function probe_rows(tab, r, n)
     return NamedTuple{keys(tab)}(Tuple(x isa AbstractArray && size(x, 1) == B ? copy(selectdim(x, 1, rows)) : x for x in values(tab)))
 end
 
-"Elements per site of the largest tensor of a round of family f (`dense_size`, `jump_size`)."
-function round_elements(f::Val, tb::TermBatch, k::Consts)
-    jumpform(f) && return jump_size(tb, k; K=nroots(f))[2]
+"Elements per site of the largest tensor of a round of family f (`dense_size`, or `jump_size` in the slope-jump form)."
+function round_elements(f::Val, tb::TermBatch, k::Consts, usej::Bool=false)
+    usej && return jump_size(tb, k; K=nroots(f))[2]
     np, nc = dense_size(tb, k; K=nroots(f))
     return np * nc
 end
 
 """
-One round: term batch, exact line draws, Jacobian step (T2 families), commit. u: (C, B, 3)
-uniforms (u1 segment, u2 offset, u3 Jacobian). Returns (state, t).
+One round: term batch, exact line draws in the family's form (`fammeta(tab)`), Jacobian step (T2
+families), commit. u: (C, B, 3) uniforms (u1 segment, u2 offset, u3 Jacobian). Returns (state, t,
+guards), guards = (root guard, cap guard or `nothing`), (C, B, 1) each: the sites the guards kept at
+t = 0 (`run_rounds_g` counts them).
 """
 function do_round(f::Val, st::FlatState, cp, sp, k::Consts, tab, r, u)
     tb, aux = build(f, st, cp, sp, tab, r, k)
-    t, _ = line_draw(f, tb, k, u[:, :, 1:1], u[:, :, 2:2])
+    t, _, ocap, oroot = line_draw(f, tb, k, u[:, :, 1:1], u[:, :, 2:2], fammeta(tab))
     t = pin(jac_accept(tb, t, u[:, :, 3:3]))
     dr = slot_changes(tb, k, t)
-    return commit_tb(f, st, tab, r, t, dr, aux, tb), t
+    return commit_tb(f, st, tab, r, t, dr, aux, tb), t, (oroot, ocap)
 end
 
 # ---------------------------------------------------------------------------
@@ -767,6 +848,126 @@ end
 moves_per_sweep(pl) = NamedTuple{pl.fams}(Tuple(Int(sum(pl.host[f].on)) for f in pl.fams))
 
 # ---------------------------------------------------------------------------
+# the device loop with guard counts (the drivers)
+# ---------------------------------------------------------------------------
+
+"""
+Guard counter of the loop (`run_sweeps_g`): zeros (C, nf, 2) in the module's float type; entry
+(c, i, 1) counts the sites of row c and family i held at t = 0 by the root guard, (c, i, 2) those
+held by the slope-jump cap (real candidates beyond `cap`). Exact as long as a count stays below
+2^24 (Float32) between two resets; the drivers read and reset it at every host checkpoint.
+"""
+guard_zeros(C::Int, nf::Int) = zeros(C, nf, 2)
+
+"Sites per row of a guard mask (C, B, 1): (C, 1, 1)."
+guard_sites(x) = sum(ifelse.(x, 1.0, 0.0); dims=(2, 3))
+
+"The counter g (C, nf, 2) plus the guards (root, cap or `nothing`) of one round of family i of nf."
+function add_guards(g, gd, ::Val{i}, ::Val{nf}) where {i,nf}
+    oroot, ocap = gd
+    e = reshape(Float64.((1:nf) .== i), 1, nf, 1)
+    z = 0.0 .* e
+    g = g .+ guard_sites(oroot) .* cat(e, z; dims=3)
+    ocap === nothing || (g = g .+ guard_sites(ocap) .* cat(z, e; dims=3))
+    return g
+end
+
+"""
+    run_rounds_g(st, g, cp, sp, k, tabs, nsweeps, rng, U, Val(fams)) -> (st, g)
+
+`run_rounds` with the guard counter g (C, nf, 2) carried through the device loops (`guard_zeros`,
+nf = the number of families of `fams`): every round adds the sites its guards kept at t = 0, per
+row, family and guard (root guard, slope-jump cap). The draws are those of `run_rounds`.
+"""
+function run_rounds_g(st::FlatState, gcnt, cp, sp, k::Consts, tabs, nsweeps::Int, rng, U, ::Val{fams}) where {fams}
+    θ, ω, uc, e, u, r = st.θ, st.ω, st.uc, st.e, st.u, st.r
+    g = gcnt
+    C = size(θ, 1)
+    vn = Val(length(fams))
+    for s in 1:nsweeps
+        for (i, f) in enumerate(fams)
+            tab = tabs[f]
+            B, R = size(tab.on)
+            dims = Val((C, B, 3))
+            Uf = U === nothing ? nothing : U[f]
+            off = (s - 1) * R
+            vf = Val(f)
+            vi = Val(i)
+            @trace for j in 1:R
+                uj = Uf === nothing ? draw_u(rng, dims) : Uf[:, :, :, j+off]
+                st2, _, gd = do_round(vf, FlatState(θ, ω, uc, e, u, r), cp, sp, k, tab, j, uj)
+                θ, ω, uc, e, u, r = st2.θ, st2.ω, st2.uc, st2.e, st2.u, st2.r
+                g = add_guards(g, gd, vi, vn)
+            end
+        end
+    end
+    return FlatState(θ, ω, uc, e, u, r), g
+end
+
+"""
+    run_sweeps_g(st, g, cp, sp, k, tabs, ns, rng, Val(fams)) -> (st, g)
+
+`run_sweeps` with the guard counter (`run_rounds_g`): the program of the drivers, which read the
+counter at every host checkpoint and reset it (`guard_zeros`).
+"""
+function run_sweeps_g(st::FlatState, gcnt, cp, sp, k::Consts, tabs, ns, rng, fv::Val{fams}) where {fams}
+    θ, ω, uc, e, u, r = st.θ, st.ω, st.uc, st.e, st.u, st.r
+    g = gcnt
+    @trace for s in 1:ns
+        st2, g2 = run_rounds_g(FlatState(θ, ω, uc, e, u, r), g, cp, sp, k, tabs, 1, rng, nothing, fv)
+        θ, ω, uc, e, u, r = st2.θ, st2.ω, st2.uc, st2.e, st2.u, st2.r
+        g = g2
+    end
+    return FlatState(θ, ω, uc, e, u, r), g
+end
+
+"""
+Guard records of the host checkpoints: per checkpoint the counter (rows, nf, 2) reduced to the
+records' rows (chains), as two arrays (nf, rows, checkpoints): the root-guard and the cap counts.
+"""
+function guard_arrays(recs::AbstractVector, nf::Int)
+    n = length(recs)
+    nr = n == 0 ? 0 : size(recs[1], 1)
+    root, cap = zeros(HostFloat, nf, nr, n), zeros(HostFloat, nf, nr, n)
+    for (j, G) in enumerate(recs)
+        root[:, :, j] .= permutedims(G[:, :, 1]); cap[:, :, j] .= permutedims(G[:, :, 2])
+    end
+    return root, cap
+end
+
+"Log line of the guard counts of a run: per family with guarded sites its totals and the rate of the cap guard per line move."
+function guard_log(cfg, fams, sites, root, cap, row_sweeps)
+    parts = String[]
+    for (i, f) in enumerate(fams)
+        nr, nc = sum(root[i, :, :]; init=0.0), sum(cap[i, :, :]; init=0.0)
+        (nr > 0 || nc > 0) || continue
+        n = row_sweeps * sites[i]
+        push!(parts, @sprintf("%s root %d, cap %d (%.2g of the moves)", f, round(Int, nr), round(Int, nc), n > 0 ? nc / n : 0.0))
+    end
+    ML.logmsg(cfg, isempty(parts) ? "guards: no site held at t = 0 by a guard" : "guards (sites held at t = 0): " * join(parts, "; "))
+    return nothing
+end
+
+"""
+    write_guards(f, fams, sites, root, cap, row_sweeps)
+
+The guard counts of a device run into the open HDF5 file f (docs/system/data.md §3):
+`device/guard_families`, `device/guard_sites` (real sites per row and sweep of the plan),
+`device/guard_root`, `device/guard_cap` (family × chain × host checkpoint: sites held at t = 0 by
+the root guard and by the slope-jump cap in the interval up to that checkpoint, summed over the
+chain's rows) and `device/guard_row_sweeps` (rows × sweeps the counts cover: the denominator of a
+rate together with `guard_sites`).
+"""
+function write_guards(f, fams, sites, root, cap, row_sweeps)
+    f["device/guard_families"] = [string(x) for x in fams]
+    f["device/guard_sites"] = collect(Int, sites)
+    f["device/guard_root"] = root
+    f["device/guard_cap"] = cap
+    f["device/guard_row_sweeps"] = HostFloat(row_sweeps)
+    return nothing
+end
+
+# ---------------------------------------------------------------------------
 # setup helper
 # ---------------------------------------------------------------------------
 
@@ -780,29 +981,43 @@ split); the probe (rounds built on host arrays) costs a few seconds of compilati
 const DENSE_BUDGET = Ref(2.0^28)
 
 """
+    plan(M, S, β; families, cells, sources, tables, slong_moves, slong_hours, jump, backend, cap_margin, …)
+
 Everything the device loop needs for model M and device state S (host Arrays). `jump` selects the
 line-sampler form of the compensated, cell and block families: `:auto` (`JUMP_RATIO`), `:none`
 (dense), `:all` (slope-jump) or a collection of families drawn in the slope-jump form.
+
+The plan holds all its static data itself (no module globals after plan time): the schedule
+context `tp.ctx` (`sched_ctx`: the family list, the cell structure `cells`, the host sources
+`sources`, the profile tables `tables`, the schedule options), read by its redraws; and per family
+`meta` (`META0`: committable columns, form, cap `jump_cap` with `cap_margin`, line slots), also
+carried by every device table (`device_table`), so a compiled program depends only on its
+arguments. Two plans in one process do not interfere.
 """
 function plan(M::DeviceModel, S::DeviceState, β; κmin=1.0, families=FAMILIES, bmax=Dict{Symbol,Int}(), bdefault=1 << 15,
               cpumap::Bool=false, cls=nothing, rng=MersenneTwister(1), cells=nothing, budget=DENSE_BUDGET[], jump=:auto,
-              backend::AbstractString="cpu")
-    tp = topo(M)
-    cells === nothing || (CELLINFO[] = cells)            # cell structure of the partition levels (cells.jl)
+              backend::AbstractString="cpu", sources=nothing, tables=nothing, slong_moves::Int=SLONG_MOVES[],
+              slong_hours::Real=SLONG_HOURS[], cap_margin=JUMP_MARGIN)
+    ctx = sched_ctx(; families=families, cells=cells, sources=sources, tables=tables, slong_moves=slong_moves, slong_hours=slong_hours)
+    tp = topo(M; ctx=ctx)
     sch = schedule(tp, M; families=families, bmax=bmax, bdefault=bdefault, rng=rng)
     fams = Tuple(f for f in families if haskey(sch, f) && !isempty(sch[f]))
     sp, cp, k, st = static_params(M), chain_params(M, S; cls=cls), consts(M, β; κmin=κmin, cpumap=cpumap), flat_state(M, S)
     C = size(st.θ, 1)
     ht = Dict(f => host_table(f, tp, sch[f]; D=family_degree(f, tp, sch[f])) for f in fams)
-    for f in fams
-        delete!(UC_COLS, f)
-        haskey(ht[f], :gq) && (UC_COLS[f] = [any(q -> q > 0 && M.guc[q] > 0, ht[f].gq[:, j, :]) for j in 1:size(ht[f].gq, 2)])
-        haskey(ht[f], :gq) && redrawn_sites(f) && (UC_COLS[f] = uc_cols_any(tp, M, ht[f].gq))     # sites redrawn later (sources.jl)
+    meta = Dict{Symbol,Any}()
+    for f in fams                                         # committable unit columns (static: `ucon`)
+        uc = nothing
+        if haskey(ht[f], :gq)
+            gq = ht[f].gq
+            uc = ucbits(redrawn_sites(f) ? uc_cols_any(tp, M, gq) :                        # sites redrawn later (sources.jl)
+                        [any(q -> q > 0 && M.guc[q] > 0, gq[:, j, :]) for j in 1:size(gq, 2)])
+        end
+        meta[f] = merge(default_meta(f, tp), (uc=uc,))
     end
     for f in fams                                         # memory cap: even chunks of at most b sites
         (f in FAMILIES || f in FAMILIES_FAST) && continue # plain: ≤ 40 points × 7 columns per site, far below
-        delete!(JUMP_CAP, f)
-        tab = device_table(f, ht[f])
+        tab = device_table(f, ht[f], tp; meta=meta[f])
         tb = build(Val(f), st, cp, sp, probe_rows(tab, 1, 64), 1, k)[1]     # shapes per site only
         usej = if jump === :auto
             np, nc = dense_size(tb, k; K=nroots(Val(f)))
@@ -810,16 +1025,17 @@ function plan(M::DeviceModel, S::DeviceState, β; κmin=1.0, families=FAMILIES, 
         else
             jump === :all || (jump !== :none && f in jump)
         end
-        usej ? push!(JUMP_FAMILIES, f) : delete!(JUMP_FAMILIES, f)
-        bf = budget / (8.0 * C * round_elements(Val(f), tb, k))
+        bf = budget / (8.0 * C * round_elements(Val(f), tb, k, usej))
         if size(tab.on, 1) > bf
             b = max(1, floor(Int, bf))
             sch[f] = [ch for r in sch[f] for ch in chunks(r, cld(length(r), cld(length(r), b)))]
             ht[f] = host_table(f, tp, sch[f]; D=family_degree(f, tp, sch[f]))
         end
-        jumpform(Val(f)) && (JUMP_CAP[f] = jump_cap(f, device_table(f, ht[f]), st, cp, sp, k))
+        cap = usej ? jump_cap(f, device_table(f, ht[f], tp; meta=meta[f]), st, cp, sp, k; margin=cap_margin) : 0
+        meta[f] = merge(meta[f], (jump=usej, cap=cap))
     end
+    metas = NamedTuple{fams}(Tuple(meta[f] for f in fams))
     hts = NamedTuple{fams}(Tuple(ht[f] for f in fams))
-    dts = NamedTuple{fams}(Tuple(device_table(f, hts[f]) for f in fams))
-    return (tp=tp, sched=sch, fams=fams, host=hts, dev=dts, sp=sp, cp=cp, k=k, st=st)
+    dts = NamedTuple{fams}(Tuple(device_table(f, hts[f], tp; meta=metas[f]) for f in fams))
+    return (tp=tp, sched=sch, fams=fams, host=hts, dev=dts, meta=metas, sp=sp, cp=cp, k=k, st=st)
 end

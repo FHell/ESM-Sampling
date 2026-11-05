@@ -6,7 +6,8 @@
 #      leaves its inputs unchanged; the same sweeps in the Float32 build, for its drift;
 #   B. (ESM_DEVICE_COMPILE=1) the rebuild compiled against the arrays; a short compiled run of the
 #      Metropolis driver, stopped by the stop file at the first checkpoint and resumed: the drift
-#      per chain and checkpoint in `device/residual_drift`, continued across the resume.
+#      per chain and checkpoint in `device/residual_drift`, continued across the resume, and the guard
+#      counts per family, chain and checkpoint (`device/guard_root`, `guard_cap`) likewise.
 #   ESM_DEVICE_COMPILE=1 nice -n 19 julia --project=device -t 8 device/test/test_residual.jl
 using ESMDevice, ESMSampling, Random, Test, Printf, Reactant
 const ML = ESMSampling
@@ -74,6 +75,7 @@ if COMPILE
         @test r1.exitcode == ML.EXIT_CHECKPOINTED
         sn = D.read_device_snapshot(cfg.checkpoint, cfg, r1.P)
         @test size(sn.extra["residual_drift"]) == (cfg.nchains, 1)
+        @test size(sn.extra["guard_root"], 2) == cfg.nchains && size(sn.extra["guard_root"], 3) == 1 && size(sn.extra["guard_cap"]) == size(sn.extra["guard_root"])
         r2 = D.run_device(cfg)
         @test r2.exitcode == 0 && r2.restarts == 1
         ML.HDF5.h5open(cfg.out) do f
@@ -82,6 +84,12 @@ if COMPILE
             @test size(dr) == (cfg.nchains, cfg.mlda_warmup + cfg.nsamples) && dr[:, 1] == sn.extra["residual_drift"][:, 1]
             @test all(isfinite, dr) && maximum(dr) < 1e-6
             @test haskey(f, "device_profile/rebuild") && haskey(f, "device_profile/compile_rebuild")
+            gf, gr, gc = read(f["device/guard_families"]), read(f["device/guard_root"]), read(f["device/guard_cap"])
+            nck = cfg.mlda_warmup + cfg.nsamples
+            @test size(gr) == (length(gf), cfg.nchains, nck) && size(gc) == size(gr)
+            @test gr[:, :, 1] == sn.extra["guard_root"][:, :, 1] && gc[:, :, 1] == sn.extra["guard_cap"][:, :, 1]
+            @test read(f["device/guard_row_sweeps"]) == nck * cfg.nchains * cfg.device_sweeps
+            println("  guards (root, cap) per family: ", join(("$x $(Int(sum(gr[i, :, :])))/$(Int(sum(gc[i, :, :])))" for (i, x) in enumerate(gf)), ", "))
         end
     end
 else

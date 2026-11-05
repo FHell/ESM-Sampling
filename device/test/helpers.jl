@@ -36,7 +36,7 @@ function cpu_move(P, LM, LC, ix, fam, site; κmin=1.0, jac=NTuple{5,Float64}[], 
         append!(bm.bps, wa.bps); append!(bm.bps, ws.bps)
         return bm
     end
-    if fam in (:slong, :slongL)                                # long-range plateau or level move (`prep_slong!`)
+    if fam in (:slong, :slongL, :slevel)                       # long-range plateau or level move (`prep_slong!`; :slevel: L = T)
         s, a, L = site
         si, i = ix.sidx[s]
         m = ML.SLong(ML.MoveWS(P), ML.MoveWS(P), ML.MoveWS(P), P, LM, LC)
@@ -172,7 +172,7 @@ ncolumns(tb) = sum(x -> x isa NamedTuple ? maximum((size(v, 4) for v in values(x
 
 "Device term batch of family `fam` for the given sites (one round), on the loop state st."
 function dev_tb(pl, fam, sites, st=pl.st)
-    ht = D.host_table(fam, pl.tp, [sites]); dt = D.device_table(fam, ht)
+    ht = D.host_table(fam, pl.tp, [sites]); dt = D.device_table(pl, fam, ht)      # with the plan's static data (form, columns)
     tb, aux = D.build(Val(fam), st, pl.cp, pl.sp, dt, 1, pl.k)
     return tb, dt, aux
 end
@@ -204,7 +204,7 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
         tb, _ = D.build(Val(f), st, pl.cp, pl.sp, tabs[f], r, pl.k)
         u = U[f][:, :, :, r]
         st2, tfin = D.do_round(Val(f), st, pl.cp, pl.sp, pl.k, tabs[f], r, u)
-        tpre, guard = D.line_draw(Val(f), tb, pl.k, u[:, :, 1:1], u[:, :, 2:2])     # the family's form (dense or slope-jump)
+        tpre, guard = D.line_draw(Val(f), tb, pl.k, u[:, :, 1:1], u[:, :, 2:2], D.fammeta(tabs[f]))     # the family's form (dense or slope-jump)
         sites = rounds[f][r]
         B = size(tabs[f].on, 1)
         tc = zeros(C, B); tcpre = zeros(C, B)
@@ -229,7 +229,7 @@ function mock_compare(pl, st0, LCs, ss, fams, rounds, tabs, U, cpumove; P, β)
         end
         # the CPU's points inside the CPU walk's range, the device's own kinks outside it (the CPU walk
         # stops 40 nats above the running minimum; the potential may fall again further out)
-        own = D.line_points(Val(f), tb, pl.k)
+        own = D.line_points(Val(f), tb, pl.k, D.fammeta(tabs[f]))
         merged = [begin
             lo, hi = extrema(pts[c, b]); o = own[c, b, :]
             vcat(pts[c, b], unique(o[(o .< lo) .| (o .> hi)]))

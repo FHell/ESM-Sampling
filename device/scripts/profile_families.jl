@@ -2,12 +2,13 @@
 #
 # Usage (from the repository root):
 #   nice -n 19 julia --project=device -t 4 device/scripts/profile_families.jl <config> [outdir]
-#   FAMILIES=fast (default: FAMILIES_FAST), plain (FAMILIES) or all (with the compensated and cell families); NSWEEPS (default 2) sweeps per call;
+#   FAMILIES=fast (default: FAMILIES_FAST), plain (FAMILIES) or all (every device family, `device_families`; the dense angle
+#   directions and the dispatch shapes only with ADAPT=1); NSWEEPS (default 2) sweeps per call;
 #   FAMS=gen,soc restricts the profile to these families; BUDGET_MB (default 256) the memory budget of a round
 #   (`DENSE_BUDGET`: rounds whose dense tensor exceeds it are split); JUMP = auto (default), none or all: the
 #   line-sampler form of the compensated, cell and block families (`plan(…; jump)`); FLOAT=32 profiles the
 #   Float32 build (`ESMDevice.F32`); ADAPT=1 sets up the host adaptation (direction sources of the dense
-#   angle families `:tdir…`, learned block profiles).
+#   angle families `:tdir…`, learned block profiles and dispatch shapes).
 #
 # For every family alone: rounds per sweep, sites per round, real line moves per chain and
 # sweep, compile time, run time per sweep and per line move, the five most expensive kernels.
@@ -35,7 +36,7 @@ io = open(joinpath(outdir, "report.txt"), "w")
 say(s) = (println(s); println(io, s); flush(io))
 say(@sprintf("per-family profile: %s, backend %s, %d chains, T = %d, N = %d, %d sweeps per call, jump = %s, %s",
              ARGS[1], cfg.device_backend, X.K, X.M.T, X.M.N, nsw, jump, D.FT))
-say("slope-jump form: " * join(sort([string(f) for f in pl.fams if D.jumpform(Val(f))]), ", "))
+say("slope-jump form: " * join(sort([string(f) * " (cap " * string(D.jumpcap(pl, f)) * ")" for f in pl.fams if D.jumpform(pl, f)]), ", "))
 say(@sprintf("%-10s %7s %8s %9s %9s %10s %10s", "family", "rounds", "sites", "moves", "compile", "s/sweep", "µs/move"))
 tot = 0.0
 for f in pl.fams

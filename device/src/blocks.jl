@@ -16,29 +16,33 @@
 # its own profile table (plateau and shapes as rows).
 
 const BLOCK_LENGTHS = (2, 4, 8, 16, 32)
-const PROFILES = Dict{Int,Matrix{Float64}}()       # L → (L+1, P) profile table; column 1 the plateau
-"L → season class of every profile column (0: any season; 1–4: DJF, MAM, JJA, SON of the block start)."
+"Module-level default profile tables, L → (L+1, P), column 1 the plateau (`set_profiles!`; a plan copies them, `sched_ctx`)."
+const PROFILES = Dict{Int,Matrix{Float64}}()
+"L → season class of every default profile column (0: any season; 1–4: DJF, MAM, JJA, SON of the block start)."
 const PROFILE_SEASON = Dict{Int,Vector{Int}}()
 
 """
-Profiles of length L: the plateau, then the shape columns `shapes` ((L+1) × S, zero ends), with the
-season class of each shape (`seasons`, 0: any). A site draws its profile among the columns of its
-block's season and those of any season (`block_rounds`).
+Profile table of length L, (W, seasons): the plateau, then the shape columns `shapes` ((L+1) × S,
+zero ends), with the season class of each shape (`seasons`, 0: any). A site draws its profile among
+the columns of its block's season and those of any season (`block_rounds`).
 """
+profile_table(L::Int, shapes=zeros(L + 1, 0); seasons=zeros(Int, size(shapes, 2))) =
+    (hcat(vcat(0.0, ones(L)), shapes), vcat(0, collect(Int, seasons)))
+
+"The default profiles of length L (`profile_table`); a plan made afterwards copies them (`sched_ctx`)."
 function set_profiles!(L::Int, shapes=zeros(L + 1, 0); seasons=zeros(Int, size(shapes, 2)))
-    plat = vcat(0.0, ones(L))
-    PROFILES[L] = hcat(plat, shapes)
-    PROFILE_SEASON[L] = vcat(0, seasons)
+    PROFILES[L], PROFILE_SEASON[L] = profile_table(L, shapes; seasons=seasons)
     return PROFILES[L]
 end
 
 """
 Learned storage shapes (CPU `AdaptiveModes.shapes[(:soc, L, season)]`, `adaptive_block_sweep!`) as
-profile columns of block length L: per season class `nper` columns (the learned shapes, or the
+the profile table of block length L: per season class `nper` columns (the learned shapes, or the
 plateau while none is learned), after the plateau and the fixed shapes `fixed`. The table keeps its
-shape when the shapes are relearned, so the device tables rebuilt after relearning (`device_table`) upload without recompilation.
+shape when the shapes are relearned, so the device tables rebuilt after relearning (`device_table`)
+upload without recompilation. Returns (W, seasons).
 """
-function set_learned_profiles!(L::Int, AM=nothing; fixed=zeros(L + 1, 0), nper::Int=2)
+function learned_profile_table(L::Int, AM=nothing; fixed=zeros(L + 1, 0), nper::Int=2)
     cols, seas = Any[fixed], Int[zeros(Int, size(fixed, 2))...]
     plat = vcat(0.0, ones(L))
     for cl in 1:4
@@ -48,11 +52,23 @@ function set_learned_profiles!(L::Int, AM=nothing; fixed=zeros(L + 1, 0), nper::
             push!(seas, cl)
         end
     end
-    return set_profiles!(L, hcat(cols...); seasons=seas)
+    return profile_table(L, hcat(cols...); seasons=seas)
 end
+"`learned_profile_table` as the default profiles of length L (`set_profiles!`)."
+function set_learned_profiles!(L::Int, AM=nothing; kw...)
+    PROFILES[L], PROFILE_SEASON[L] = learned_profile_table(L, AM; kw...)
+    return PROFILES[L]
+end
+"The default profile table of length L (the plateau if none is set)."
 profiles(L) = get(PROFILES, L) do
     set_profiles!(L)
 end
+"The default profile entry (W, seasons) of length L, a copy (`sched_ctx`)."
+profile_entry(L) = (copy(profiles(L)), copy(get(PROFILE_SEASON, L, zeros(Int, size(profiles(L), 2)))))
+"The profile table W of length L of a plan (`tp.ctx.profiles`), or the default without a plan."
+profiles(tp::Topo, L) = tp.ctx.profiles[L][1]
+"The season classes of the profile columns of length L of a plan."
+profile_seasons(tp::Topo, L) = tp.ctx.profiles[L][2]
 
 blksym(L, lin) = Symbol(lin ? :sblkL : :sblk, L)
 
@@ -63,8 +79,8 @@ function block_rounds(L::Int, tp::Topo, rng; offset=nothing, h=nothing)
     starts = collect(1+o:L:T-L-1)                            # steps b0 … b0+L and the commitment term at b0−1
     starts = filter(b -> b >= 2, starts)
     Sm = maximum(length.(tp.nodestor); init=0)
-    np = size(profiles(L), 2)
-    seas = get(PROFILE_SEASON, L, zeros(Int, np))
+    np = size(profiles(tp, L), 2)
+    seas = profile_seasons(tp, L)
     compat(b0) = h === nothing ? collect(1:np) : findall(s -> s == 0 || s == ML.season(b0, h), seas)
     rounds = Vector{Vector{Tuple}}()
     for j in 1:Sm, par in (1, 2)
@@ -114,11 +130,12 @@ end
 
 """
 Cell–class groups of the storage units for the aggregate block moves (`:sblkg{L}`): per cell the
-groups (device storage units of one class at the cell's nodes, at distinct nodes); set by the
-driver or a test (`block_groups`). Round j takes the j-th group of every cell.
+groups (device storage units of one class at the cell's nodes, at distinct nodes; `block_groups`).
+A plan holds its own (`tp.ctx.groups`, from `plan(…; sources)` or this default, set by
+`set_sources!` or a test). Round j takes the j-th group of every cell.
 """
 const BLOCK_GROUPS = Ref{Any}(nothing)
-block_umax() = maximum((length(g) for c in BLOCK_GROUPS[] for g in c); init=1)
+block_umax(groups) = maximum((length(g) for c in groups for g in c); init=1)
 
 "Cell–class groups of a problem (the CPU's `storage_ms_sweep!` groups: cell of the flow basis or partition level 2)."
 function block_groups(P::ML.Problem, ix::DeviceIndex)
@@ -136,10 +153,10 @@ function block_group_rounds(L::Int, tp::Topo, rng; h=nothing)
     T = tp.T
     o = rand(rng, 0:L-1)
     starts = filter(b -> b >= 2, collect(1+o:L:T-L-1))
-    np = size(profiles(L), 2)
-    seas = get(PROFILE_SEASON, L, zeros(Int, np))
+    np = size(profiles(tp, L), 2)
+    seas = profile_seasons(tp, L)
     compat(b0) = h === nothing ? collect(1:np) : findall(s -> s == 0 || s == ML.season(b0, h), seas)
-    gr = BLOCK_GROUPS[]
+    gr = tp.ctx.groups
     rounds = Vector{Vector{Tuple}}()
     for j in 1:maximum(length.(gr); init=0), par in (1, 2)
         sites = Tuple[]
@@ -158,13 +175,13 @@ blkgsym(L, lin) = Symbol(lin ? :sblkgL : :sblkg, L)
 for L in BLOCK_LENGTHS, lin in (false, true), grp in (false, true)
     nm = grp ? blkgsym(L, lin) : blksym(L, lin)
     rounds_ = grp ? :(block_group_rounds($L, tp, rng; h=round(Int, M.Δt))) : :(block_rounds($L, tp, rng; h=round(Int, M.Δt)))
-    cols_ = grp ? :(block_cols(tp, site, $L, block_umax())) : :(block_cols(tp, site, $L))
+    cols_ = grp ? :(block_cols(tp, site, $L, block_umax(tp.ctx.groups))) : :(block_cols(tp, site, $L))
     @eval begin
         family_rounds(::Val{$(QuoteNode(nm))}, tp::Topo, M::DeviceModel, cls, rng) =
             ($lin || !tracking(M) || error("block T2 needs a model without requirement tracking (use :sblkL…)");
-             ($grp && BLOCK_GROUPS[] === nothing) ? Vector{Vector{Tuple}}() : $rounds_)
+             ($grp && tp.ctx.groups === nothing) ? Vector{Vector{Tuple}}() : $rounds_)
         site_cols(::Val{$(QuoteNode(nm))}, tp::Topo, site, D::Int) = $cols_
-        device_extra(::Val{$(QuoteNode(nm))}, ht) = (gon=Float64.(ht.gq .> 0), W=copy(profiles($L)))
+        device_extra(::Val{$(QuoteNode(nm))}, ht, tp) = (gon=Float64.(ht.gq .> 0), W=copy(tp === nothing ? profiles($L) : profiles(tp, $L)))
         build(::Val{$(QuoteNode(nm))}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r, k::Consts) =
             build_block(st, cp, sp, tab, r, k, Val($L), Val($lin), $(QuoteNode(nm)))
         commit(::Val{$(QuoteNode(nm))}, st::FlatState, tab, r, t, dr, aux) = error("block commits use commit_tb")
@@ -239,7 +256,7 @@ function build_block(st, cp, sp, tab, r, k, ::Val{L}, ::Val{lin}, fam::Symbol=bl
         kk = nothing
         gen = gen4(st, cp, sp, z4, qs, gs, sl; a=x)
     end
-    uj = [c for c in 1:U*G if ucon(fam, c)]                   # committable compensation columns (unit node, unit slot)
+    uj = [c for c in 1:U*G if ucon(tab, c)]                   # committable compensation columns (unit node, unit slot)
     uc, ucq = nothing, nothing
     if !isempty(uj)
         ucq = ucflags(sp, q, uj, gon)

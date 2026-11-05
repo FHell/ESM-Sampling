@@ -2,8 +2,9 @@
 # the same rounds, the same uniforms, one compiled program per family; prints the compile time and the
 # largest relative difference of the loop state. 40 nodes × 6 h, all model terms (CASE=A, LINEAR
 # families) or without line losses and lossy links (CASE=B, share-preserving), 2 chains.
-#   FAMS=tsoc,tpot (default: every family of the case), NSITE (default 60) sites per round, NROUND (2),
-#   H (6: hours per step).
+#   FAMS=tsoc,tpot (default: a list of the families of the case), FAMS=all (the reference families `FAMILIES`
+#   and every family of `device_families` for the case, dispatch shapes included), NSITE (default 60) sites
+#   per round, NROUND (2), H (6: hours per step).
 # Run: cd device && nice -n 19 julia --project=. -t 4 test/test_reactant_fams.jl
 include("setup40.jl")
 using Test, Random
@@ -41,11 +42,14 @@ for L in D.DSHAPE_LENGTHS
     Φ = randn(MersenneTwister(100 + L), L, 3); Φ .-= sum(Φ; dims=1) ./ L
     D.set_dshapes!(L, Φ)
 end
-deffams = CASE == "A" ? (:spair, :tsocL, :tpotL, :sblkL2, :sblkL8, :sblkgL2, :tdirL, :tdir0, :tcutL, :tcutLw, :xloc, :xpair, :dshp4, :slongL) :
+deffams = CASE == "A" ? (:spair, :tsocL, :tpotL, :sblkL2, :sblkL8, :sblkgL2, :tdirL, :tdir0, :tcutL, :tcutLw, :xloc, :xpair, :dshp4, :slongL,
+                         :slevel) :
           (:gen0, :pair0, :soc, :link, :theta3, :theta5, :theta, :gen, :uc, :pair, :spair0, :spair, :tsoc, :tpot, :sblk2, :sblk4, :sblk8,
-           :sblk16, :sblk32, :sblkg2, :sblkg8, :tdir, :tdir0, :tcut, :tcutw, :xloc, :xlocc, :xpair, :dshp2, :dshp8, :slong,
+           :sblk16, :sblk32, :sblkg2, :sblkg8, :tdir, :tdir0, :tcut, :tcutw, :xloc, :xlocc, :xpair, :dshp2, :dshp8, :slong, :slevel,
            :sxpair, :sxpairn, :sxlong, :sxlongn, :cell1, :cellu1, :cell2, :cellu2, :cell3, :cellpairu2, :cellpairu3, :cellpairu1)
-fams = haskey(ENV, "FAMS") ? Tuple(Symbol.(split(ENV["FAMS"], ","))) : deffams
+allfams() = Tuple(unique((D.FAMILIES..., D.device_families(M, ci; dshapes=true)...)))     # FAMS=all: the full device kernel of the case
+fams = !haskey(ENV, "FAMS") ? deffams : ENV["FAMS"] == "all" ? allfams() : Tuple(Symbol.(split(ENV["FAMS"], ",")))
+println("case $CASE: ", length(fams), " families: ", join(fams, ", "))
 
 @testset "Reactant (CPU backend) = Julia arrays, case $CASE" begin
     for f in fams
@@ -53,7 +57,7 @@ fams = haskey(ENV, "FAMS") ? Tuple(Symbol.(split(ENV["FAMS"], ","))) : deffams
         pl = D.plan(M, S, P.βv; families=(f,), cls=cls, bmax=Dict(f => NSITE), cells=ci)
         f in pl.fams || (println("  $f: no sites"); continue)
         rounds = NamedTuple{(f,)}((pl.sched[f][1:min(NROUND, end)],))
-        tabs = NamedTuple{(f,)}((D.device_table(f, D.host_table(f, pl.tp, rounds[f])),))
+        tabs = NamedTuple{(f,)}((D.device_table(pl, f, D.host_table(f, pl.tp, rounds[f])),))
         B, R = size(tabs[f].on)
         U = NamedTuple{(f,)}((reshape(weyl(C * B * 3 * R, 0), C, B, 3, R),))
         fv = Val((f,))
@@ -69,7 +73,7 @@ fams = haskey(ENV, "FAMS") ? Tuple(Symbol.(split(ENV["FAMS"], ","))) : deffams
         end
         moved = count(stJ.ω .!= pl.st.ω) + count(stJ.θ .!= pl.st.θ) + count(stJ.e .!= pl.st.e)
         @printf("  %-10s %d rounds × %d sites: compile %5.0f s, max relative |reactant − julia| %.1e (%d entries moved), %s form\n",
-                f, R, B, tc, worst, moved, D.jumpform(Val(f)) ? "slope-jump" : "dense")
+                f, R, B, tc, worst, moved, D.jumpform(pl, f) ? "slope-jump (cap $(D.jumpcap(pl, f)))" : "dense")
         flush(stdout)
         @test worst <= 1e-10
         GC.gc()

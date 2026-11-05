@@ -9,32 +9,30 @@
 # A site is one step τ of a time class with, per chain, a node direction d (N) and the requirement
 # change g (N) per unit t of the nodes that compensate (g = 0 elsewhere), host data in the index table
 # (`dv`, `gv`, C·N per site): the directions depend on the chain's (k, x) (frames) and on the learned
-# modes only, so they are drawn on the host (`TDIR_SOURCE`), one per site and chain, and refreshed
+# modes only, so they are drawn on the host (the plan's source `tp.ctx.tdir`), one per site and chain, and refreshed
 # between device calls with the same table shapes (`tdir_refresh`). Terms of a site: every line (static bus slots), every node's balance slot,
 # G unit columns per node (and their commitment terms), one kink per node (T2).
 
 const TDIR_FAMILIES = (:tdir, :tdir0, :tdirL)
 tdir_rule(f::Symbol) = f == :tdir ? :T2 : f == :tdirL ? :L : :none
 
-"Topology of the plan being built (static line slots of the dense angle families)."
-const TDIR_TOPO = Ref{Any}(nothing)
-
 """
 Host source of the directions: (fam, τ, rng, c) → (d, g) of chain c (Vectors of length N) or
-`nothing` (the site stays: d = 0). Set by the driver (`tdir_source`) or a test before `plan`, with
-the chain count in `TDIR_CHAINS`; `nothing`: the families have no sites.
+`nothing` (the site stays: d = 0). A plan holds its own (`tp.ctx.tdir` with the chain count
+`tp.ctx.chains`, from `plan(…; sources)`: the driver's `tdir_source`); these are the defaults a plan
+made without them copies (set by a test); `nothing`: the families have no sites. The line slots of
+the template are static data of the tables (`fammeta(tab).lines`).
 """
 const TDIR_SOURCE = Ref{Any}(nothing)
 const TDIR_CHAINS = Ref(1)
 
 function tdir_rounds(fam::Symbol, tp::Topo, M::DeviceModel, cls, rng)
-    TDIR_TOPO[] = tp
-    src = TDIR_SOURCE[]
+    src = tp.ctx.tdir
     src === nothing && return Vector{Vector{Tuple}}()
     (fam == :tdir && tracking(M)) && error(":tdir needs a model without line losses and lossy links (use :tdirL or :tdir0)")
     rounds = Vector{Vector{Tuple}}()
     for c in cls
-        push!(rounds, Tuple[tdir_site(src, fam, τ, tp.N, TDIR_CHAINS[], rng) for τ in c])
+        push!(rounds, Tuple[tdir_site(src, fam, τ, tp.N, tp.ctx.chains, rng) for τ in c])
     end
     return rounds
 end
@@ -62,15 +60,16 @@ end
 for f in TDIR_FAMILIES
     @eval family_rounds(::Val{$(QuoteNode(f))}, tp::Topo, M::DeviceModel, cls, rng) = tdir_rounds($(QuoteNode(f)), tp, M, cls, rng)
     @eval site_cols(::Val{$(QuoteNode(f))}, tp::Topo, site, D::Int) = tdir_cols(tp, site)
-    @eval device_extra(::Val{$(QuoteNode(f))}, ht) = (gon=Float64.(ht.gq .> 0),)
+    @eval device_extra(::Val{$(QuoteNode(f))}, ht, tp) = (gon=Float64.(ht.gq .> 0),)
     FOOT[f] = [(:cθ, :θ, true), (:cθ, :r, true), (:gc, :ω, true), (:gc, :uc, true), (:gcm, :ω, false), (:gcm, :uc, false),
                (:gc1, :uc, false)]
 end
 
 function build_tdir(st, cp, sp, tab, r, k, ::Val{rule}, fam::Symbol) where {rule}
-    tp = TDIR_TOPO[]
-    N = tp.N
-    e0, e1 = tp.ebus0, tp.ebus1
+    lsl = fammeta(tab).lines                                    # static line slots (`plan`, `device_table`)
+    lsl === nothing && error(":$fam: its table has no line slots (device_table(f, ht, tp) or device_table(pl, f, ht))")
+    N = lsl.N
+    e0, e1 = collect(Int, lsl.e0), collect(Int, lsl.e1)
     nl = length(e0)
     on = m3(tab.on[:, r])
     cθ = tab.cθ[:, :, r]
@@ -109,7 +108,7 @@ function build_tdir(st, cp, sp, tab, r, k, ::Val{rule}, fam::Symbol) where {rule
             x = ifelse.(v, β .* gmc ./ ifelse.(v, κ, 1.0), 0.0)
             gen = gen4(st, cp, sp, z4, q, gc, sl; a=x)
         end
-        uj = [j for j in 1:N*G if ucon(fam, j)]
+        uj = [j for j in 1:N*G if ucon(tab, j)]
         if !isempty(uj)
             ucq = ucflags(sp, q, uj, gon)
             xu = x[:, :, :, uj]
@@ -224,15 +223,16 @@ end
 """
 New directions for the dense angle families of a plan (same sites per round, same table shapes: an
 upload without recompilation): the device tables of `pl.fams` ∩ `TDIR_FAMILIES` redrawn from the
-current `TDIR_SOURCE`. Returns a NamedTuple family → device table.
+plan's source (`pl.tp.ctx.tdir`, which reads the current frames and learned modes). Returns a
+NamedTuple family → device table.
 """
 function tdir_refresh(pl, rng)
     fs = Tuple(f for f in pl.fams if f in TDIR_FAMILIES)
-    src = TDIR_SOURCE[]
+    src = pl.tp.ctx.tdir
     out = Pair{Symbol,Any}[]
     for f in fs
-        rounds = [[tdir_site(src, f, site[1], pl.tp.N, TDIR_CHAINS[], rng) for site in r] for r in pl.sched[f]]
-        push!(out, f => device_table(f, host_table(f, pl.tp, rounds)))
+        rounds = [[tdir_site(src, f, site[1], pl.tp.N, pl.tp.ctx.chains, rng) for site in r] for r in pl.sched[f]]
+        push!(out, f => device_table(pl, f, host_table(f, pl.tp, rounds)))
     end
     return (; out...)
 end

@@ -9,19 +9,22 @@
 # step) and the commitment terms of the committable units at the L + 1 steps b0−1 … b0+L−1.
 
 const DSHAPE_LENGTHS = (2, 4, 8, 16, 32)
-"L → (L, P) table of dispatch shapes (columns), and their season classes (0: any)."
+"Module-level default tables of dispatch shapes, L → (L, P) (columns), and their season classes (0: any); a plan copies them (`sched_ctx`)."
 const DSHAPES = Dict{Int,Matrix{Float64}}()
 const DSHAPE_SEASON = Dict{Int,Vector{Int}}()
 dshsym(L) = Symbol(:dshp, L)
 
-"Dispatch shapes of length L: the columns of `Φ` (L × P), with their season classes."
+"The default dispatch shapes of length L: the columns of `Φ` (L × P), with their season classes."
 function set_dshapes!(L::Int, Φ::AbstractMatrix; seasons=zeros(Int, size(Φ, 2)))
     DSHAPES[L] = Matrix{Float64}(Φ)
     DSHAPE_SEASON[L] = collect(seasons)
     return DSHAPES[L]
 end
-"Learned dispatch shapes of AM (`AdaptiveModes.shapes[(:gen, L, season)]`), `nper` per season (zeros until learned)."
-function set_learned_dshapes!(L::Int, AM=nothing; nper::Int=2)
+"""
+Learned dispatch shapes of AM (`AdaptiveModes.shapes[(:gen, L, season)]`), `nper` per season (zeros
+until learned): the table (Φ, seasons) of length L, of a fixed shape (an upload when relearned).
+"""
+function learned_dshape_table(L::Int, AM=nothing; nper::Int=2)
     cols, seas = Any[], Int[]
     for cl in 1:4
         Φ = AM === nothing ? nothing : get(AM.shapes, (:gen, L, cl), nothing)
@@ -29,24 +32,34 @@ function set_learned_dshapes!(L::Int, AM=nothing; nper::Int=2)
             push!(cols, Φ !== nothing && j <= size(Φ, 2) ? Φ[:, j] : zeros(L)); push!(seas, cl)
         end
     end
-    return set_dshapes!(L, hcat(cols...); seasons=seas)
+    return (Matrix{Float64}(hcat(cols...)), seas)
 end
+"`learned_dshape_table` as the default dispatch shapes of length L."
+function set_learned_dshapes!(L::Int, AM=nothing; nper::Int=2)
+    Φ, seas = learned_dshape_table(L, AM; nper=nper)
+    return set_dshapes!(L, Φ; seasons=seas)
+end
+"The default dispatch shapes of length L (zeros until set)."
 dshapes(L) = get(DSHAPES, L) do
     set_learned_dshapes!(L)
 end
+"The default entry (Φ, seasons) of length L, a copy (`sched_ctx`)."
+dshape_entry(L) = (copy(dshapes(L)), copy(get(DSHAPE_SEASON, L, zeros(Int, size(dshapes(L), 2)))))
+"The dispatch shapes Φ of length L of a plan (`tp.ctx.dshapes`)."
+dshapes(tp::Topo, L) = tp.ctx.dshapes[L][1]
 
-"The generator-unit pairs of every node (device units, distinct)."
+"The default generator-unit pairs of every node (device units, distinct; `nothing`: every pair of a node's units)."
 const DSHAPE_PAIRS = Ref{Any}(nothing)
 
 function dshape_rounds(L::Int, tp::Topo, M::DeviceModel, rng)
     T = tp.T
     o = rand(rng, 0:L-1)
     starts = filter(b -> b >= 2 && b + L <= T, collect(1+o:L:T-L))
-    np = size(dshapes(L), 2)
-    seas = get(DSHAPE_SEASON, L, zeros(Int, np))
+    np = size(dshapes(tp, L), 2)
+    seas = tp.ctx.dshapes[L][2]
     h = round(Int, M.Δt)
     compat(b0) = findall(s -> s == 0 || s == ML.season(b0, h), seas)
-    prs = DSHAPE_PAIRS[] === nothing ? [[(a, b) for a in g for b in g if a != b] for g in tp.nodegens] : DSHAPE_PAIRS[]
+    prs = tp.ctx.dpairs === nothing ? [[(a, b) for a in g for b in g if a != b] for g in tp.nodegens] : tp.ctx.dpairs
     rounds = Vector{Vector{Tuple}}()
     for par in (1, 2)
         sites = Tuple[]
@@ -78,7 +91,7 @@ for L in DSHAPE_LENGTHS
     @eval begin
         family_rounds(::Val{$(QuoteNode(nm))}, tp::Topo, M::DeviceModel, cls, rng) = dshape_rounds($L, tp, M, rng)
         site_cols(::Val{$(QuoteNode(nm))}, tp::Topo, site, D::Int) = dshape_cols(tp, site, $L)
-        device_extra(::Val{$(QuoteNode(nm))}, ht) = (W=copy(dshapes($L)),)
+        device_extra(::Val{$(QuoteNode(nm))}, ht, tp) = (W=copy(tp === nothing ? dshapes($L) : dshapes(tp, $L)),)
         build(::Val{$(QuoteNode(nm))}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r, k::Consts) =
             build_dshape(st, cp, sp, tab, r, k, Val($L), $(QuoteNode(nm)))
         commit_tb(::Val{$(QuoteNode(nm))}, st, tab, r, t, dr, aux, tb) = commit_dshape(st, tab, r, t, dr, aux, tb)
@@ -104,7 +117,7 @@ function build_dshape(st, cp, sp, tab, r, k, ::Val{L}, fam::Symbol) where {L}
     x = cat(x1, x2; dims=4)
     gen = gen4(st, cp, sp, z4, qq, cws, vcat(1:L, 1:L); a=x)
     gq = tab.gq[:, :, r]                                         # (B, 2) for the committable flags
-    uj = [j for j in 1:2 if ucon(fam, j)]
+    uj = [j for j in 1:2 if ucon(tab, j)]
     uc, ucq = nothing, nothing
     if !isempty(uj)
         ucqs = [ucflags(sp, gq, [j], M4(ones(size(gq, 1), 2)) .> 0.0) for j in 1:2]

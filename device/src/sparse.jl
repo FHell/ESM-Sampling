@@ -27,13 +27,14 @@ const SPARSE_FAMILIES = Dict(:tcut => (:T2, false, :S), :tcutw => (:T2, false, :
                              :xpair => (:none, true, :W))
 "Node slots of the small sparse sites."
 const SPARSE_NS = 16
-"Sites drawn per step and round (first fit of disjoint node slots)."
+"Sites drawn per step and round (first fit of disjoint node slots; the default of a plan's `tp.ctx.sparse_pack`)."
 const SPARSE_PACK = Ref(8)
 
 """
 Host source of the sparse sites: (fam, τ, rng) → (nodes, d, g, pair) or `nothing`; `nodes` the node
 slots (pair families: the two units' nodes first), `d`, `g` per slot, `pair` = (q₁, q₂) device units or
-`nothing`. Set by the driver or a test before `plan` (`sparse_source`).
+`nothing` (`sparse_source`). A plan holds its own (`tp.ctx.sparse`, `plan(…; sources)`); this is the
+default a plan made without it copies (`set_sources!` or a test).
 """
 const SPARSE_SOURCE = Ref{Any}(nothing)
 
@@ -41,8 +42,7 @@ sparse_ns(fam::Symbol, tp::Topo) = SPARSE_FAMILIES[fam][3] === :S ? min(SPARSE_N
 sparse_dm(tp::Topo) = maximum(length.(tp.nodelines); init=1)
 
 function sparse_rounds(fam::Symbol, tp::Topo, M::DeviceModel, cls, rng)
-    TDIR_TOPO[] = tp
-    src = SPARSE_SOURCE[]
+    src = tp.ctx.sparse
     src === nothing && return Vector{Vector{Tuple}}()
     rule, pair, bucket = SPARSE_FAMILIES[fam]
     (rule === :T2 && tracking(M)) && error(":$fam needs a model without line losses and lossy links")
@@ -52,7 +52,7 @@ function sparse_rounds(fam::Symbol, tp::Topo, M::DeviceModel, cls, rng)
         sites = Tuple[]
         for τ in c
             used = Set{Int}()
-            for _ in 1:(bucket === :W ? 1 : SPARSE_PACK[])
+            for _ in 1:(bucket === :W ? 1 : tp.ctx.sparse_pack)
                 spec = src(fam, τ, rng)
                 (spec === nothing || length(spec[1]) > ns || any(in(used), spec[1])) && continue
                 union!(used, spec[1])
@@ -104,7 +104,7 @@ for (f, (rule, pair, _)) in SPARSE_FAMILIES
     @eval begin
         family_rounds(::Val{$(QuoteNode(f))}, tp::Topo, M::DeviceModel, cls, rng) = sparse_rounds($(QuoteNode(f)), tp, M, cls, rng)
         site_cols(::Val{$(QuoteNode(f))}, tp::Topo, site, D::Int) = sparse_cols($(QuoteNode(f)), tp, site)
-        device_extra(::Val{$(QuoteNode(f))}, ht) = (gon=Float64.(ht.gq .> 0), lon=Float64.(ht.ln .> 0))
+        device_extra(::Val{$(QuoteNode(f))}, ht, tp) = (gon=Float64.(ht.gq .> 0), lon=Float64.(ht.ln .> 0))
         build(::Val{$(QuoteNode(f))}, st::FlatState, cp::ChainParams, sp::StaticParams, tab, r, k::Consts) =
             build_sparse(st, cp, sp, tab, r, k, Val($(QuoteNode(rule))), Val($pair), $(QuoteNode(f)))
         commit_tb(::Val{$(QuoteNode(f))}, st, tab, r, t, dr, aux, tb) = commit_sparse(st, tab, r, t, dr, aux, tb)
@@ -176,7 +176,7 @@ function build_sparse(st, cp, sp, tab, r, k, ::Val{rule}, ::Val{pair}, fam::Symb
         gen = merge(gen, (mva=mva, mvk=mvk, cnt=Int.(mva) .+ Int.(mvk)))
     end
     nuse = rule === :none ? np : np + Ns * G
-    uj = [j for j in 1:nuse if ucon(fam, j)]
+    uj = [j for j in 1:nuse if ucon(tab, j)]
     uc, ucq = nothing, nothing
     if !isempty(uj)
         ucq = ucflags(sp, q, uj, gon)
