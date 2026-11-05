@@ -305,6 +305,15 @@ Langevin step with the dispatch following 38 ms, the weather upload with the com
 run set (§7 above); the host weather process is the largest part beside the sweeps. The H100
 numbers are campaign H5.
 
+**Float32 against FP64 on the development GPU** (RTX 3050 Ti laptop, 2026-11-05;
+`profile_families.jl`, `configs/device40_6h_gpu.toml`, 40 nodes × 6 h, 4 chains, `FAMS=gen0,soc,theta`,
+4 sweeps; Float32 at HIGHEST dot precision): `gen0` 0.047 → 0.0085 s/sweep, `soc` 0.271 → 0.054,
+`theta` 0.060 → 0.016, together 0.378 → 0.079 (4.8×); compile times equal (first family about
+120 s with the warm-up, then 13–19 s). Far below the card's 64:1 FP32:FP64 throughput ratio, so
+these kernels are partly bound by memory traffic and launches; on the H100 (FP64 at half the
+FP32 rate) a smaller gain is expected (campaign H5). Whether Float32 is accurate enough is not
+tested yet.
+
 **First H100 measurement** (campaign H0, PIK cluster, job 2902915, 2026-11-04; `profile_families.jl`
 with `FAMILIES=fast`, `configs/device40_6h_gpu.toml`: 40 nodes × 6 h, $T$ = 1460, 4 chains, FP64,
 the code of the term-axis/slope-jump version as on the laptop): the seven fast families together
