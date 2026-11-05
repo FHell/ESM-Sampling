@@ -50,14 +50,17 @@ small`, D2 `... pypsa256`), then D4 (`hpc/prepare_data.sh pypsa256ts`, PyPSA's o
 then H0b, H4, H10 (two stages), H2 and H2b, H5. Every job asks for a `--time` covering its
 estimate; nothing is resubmitted past a QOS limit; campaigns are self-contained.
 
-**Local.** The model files in `data/processed/` are still the old builds (wind calibration
-defect, `data_sources.md` §2); rebuild them with `scripts/prepare_data.py` (as in
-`hpc/prepare_data.sh small` and `pypsa256`; minutes each) once no agent is running, keeping the
-old ones in `data/processed/backup/`. The scratchpad builds of the last session are gone.
+**Local.** The model files in `data/processed/` were rebuilt with the fixed wind calibration
+(2026-11-05; every generator within 0.005 of its target); the old builds are in
+`data/processed/backup/pre_windfix/`. The CPU suite has not run on the new files yet (part of the
+final big test).
 Worktrees of finished agents under `.claude/worktrees/` (all merged) can be removed after a
 look at their untracked `results/`; also `.claude/worktrees/gpu-timing`.
 
-**Cost accounting (to do before comparing campaigns).** Each attempt's `run.toml` has the
+**Cost accounting: built (2026-11-05).** `stages.csv` per run (LP optimum, every MGA solve,
+burn-in, warmup, production …) and `campaigns/<id>/cost.csv` from `hpc/collect.sh`; the runbook
+for the cluster is `hpc/RUNBOOK.md`. Not yet tested (the final big test of the package).
+Earlier note:  Each attempt's `run.toml` has the
 allocated cores, `elapsed`, `total_cpu` (sacct), `max_rss` and the energy, and the LP summaries
 have their solve times and threads; nothing sums them. Wanted (user, 2026-11-05): CPU hours per
 line and per campaign, to compare the LP baselines (H2, H2b) with the sampler (H4, H5) — a

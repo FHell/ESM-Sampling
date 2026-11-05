@@ -170,3 +170,10 @@ times, memory), `capacity_pypsa.csv`, and with ε `mga_pypsa.csv`
 (`eps, target, sense, status, cost_eur, cost_rel_excess, total_MW, seconds`),
 `mga_capacity_pypsa.csv`, `summary_mga_pypsa.toml`. Groups: `onwind`, `solar`, `offwind`,
 `gas`, `battery`, `H2` as in [validation.md](validation.md) §2.7.
+
+## Run records of the cluster runs
+
+| file | content |
+|---|---|
+| `stages.csv` (run directory) | `attempt, stage, wall_s, cpu_s, cpus, threads, start, end`: wall and CPU seconds per stage and attempt ([hpc.md](hpc.md) §6) |
+| `campaigns/<id>/cost.csv` | `level` (campaign, run, stage, device), `run_id`, `stage`, `attempts`, `wall_h`, `alloc_core_h`, `cpu_h`, `gpu_h`, `energy_kwh`, `status`, `note` (`hpc/cost_table.jl`) |

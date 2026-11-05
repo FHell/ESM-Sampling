@@ -24,7 +24,7 @@ mkdir -p "$dest/runs"
 skipped=0
 for run in "$arch"/*/; do
     rid=$(basename "$run"); out="$dest/runs/$rid"; mkdir -p "$out"
-    for f in run.toml config.toml config.orig.toml; do [ -f "$run/$f" ] && cp "$run/$f" "$out/"; done
+    for f in run.toml config.toml config.orig.toml stages.csv summary_device.toml; do [ -f "$run/$f" ] && cp "$run/$f" "$out/"; done   # always: the run record and the cost inputs
     for g in "${globs[@]}"; do
         for f in "$run"/$g; do
             [ -f "$f" ] || continue
@@ -43,6 +43,12 @@ total=$(du -sm "$dest" | cut -f1)
 if [ "$total" -gt "$totmb" ]; then
     echo "collect: $dest is $total MB > $totmb MB; nothing committed (narrow the globs or raise ESM_COLLECT_TOTAL_MB)" >&2
     exit 1
+fi
+# the cost table (wall, allocated core-hours, CPU hours, GPU-hours, energy per run, stage and campaign)
+if esm_load_julia >/dev/null 2>&1; then
+    julia --startup-file=no "$here/cost_table.jl" "$dest" || echo "collect: cost table failed (see above); results collected without it" >&2
+else
+    echo "collect: no julia; cost table not written (run hpc/cost_table.jl $dest later)" >&2
 fi
 cd "$ESM_CODE"
 git add "campaigns/$id"

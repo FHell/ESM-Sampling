@@ -11,7 +11,9 @@ const ML = ESMSampling
 cfg = ML.load_config(ARGS[1])
 cfg.init = "lp"
 t0 = time()
+clock = ML.StageClock(dirname(cfg.out))    # stages.csv (hpc/cost_table.jl)
 P, s, info = ML.setup(cfg; rng=MersenneTwister(cfg.seed))
+ML.stage!(clock, "setup and reference LP")   # setup solves the LP (init = lp; cached)
 lp = info.lp
 E = P.E
 countries = sort(unique(E.sys.country))

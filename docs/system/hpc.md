@@ -222,6 +222,17 @@ the same run id, sent SIGTERM, reused the run directory (a second attempt in `ru
   local machine and the cluster; code goes up and results come back through git. A campaign
   does not pin a model file's hash; its run records carry the hash (`data_sha`), and the
   provenance file says how that file was built.
+- **Stage records** `stages.csv` in the run directory (`ESMSampling.StageClock`; the Python
+  scripts have their own): one row per stage and attempt with the wall and CPU seconds of the
+  process (all threads), the allocated cores and the threads. Stages: `setup`, `optimum` and one
+  per MGA solve (LP baselines, PyPSA), `burn-in`/`main` (H10), `setup`, `init replicas` or
+  `level-0 warmup …`, `warmup`, `production` (CPU drivers); a stop closes the current stage as
+  `… (stopped)`. `run.sh` exports the attempt number (`ESM_ATTEMPT`).
+- **Cost table** `campaigns/⟨id⟩/cost.csv`, written by `hpc/collect.sh` (`hpc/cost_table.jl`): per
+  campaign, run and stage the wall hours, allocated core-hours (cores × wall, what fair share
+  charges), consumed CPU hours, GPU-hours and energy, summed over all attempts (an attempt
+  without an end record is completed from `sacct -D`); device compiles from
+  `summary_device.toml`.
 - **Run record** `run.toml` (one `[[attempt]]` per job attempt) and **runs index** lines in
   `ledger/runs.jsonl` and `campaigns/⟨id⟩/runs.jsonl`, failed runs included.
 - **Campaign:** `hpc/new_campaign.sh ⟨id⟩ [⟨commit⟩]` makes the pinned worktree, prepares it, and
@@ -294,6 +305,9 @@ Snapshots are also outputs: a later experiment can start from them. They stay in
 directory and are not archived (their size grows with the model).
 
 ## 8. What runs in which order
+
+The step-by-step version for an agent on the cluster, with every command, dependency and check,
+is [hpc/RUNBOOK.md](../../hpc/RUNBOOK.md); this section is the overview.
 
 All commands on a login node in the clone, `cd /p/projects/coen/esm/ESM-Sampling`; logs in
 `/p/tmp/hellmann/esm/logs/`. Each step names what it needs; steps without a dependency

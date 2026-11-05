@@ -42,7 +42,9 @@ ci = start == "heuristic" ? 1 : 2                    # (the random stream of the
 outdir = dirname(abspath(cfg.out))
 mkpath(outdir)
 opmix_start(P, sL) = sL
+clock = ML.StageClock(outdir)                 # stages.csv: wall and CPU time per stage (hpc/cost_table.jl)
 t_setup = @elapsed include(joinpath(@__DIR__, "opmix_lib.jl"))
+ML.stage!(clock, "setup")
 
 # the run's progress: burn-in (E21 kernel, its own stream), then the main phase
 snapfile = joinpath(outdir, "opmix_snapshot.jls")
@@ -68,6 +70,7 @@ function boundary!(s, R, i)
         snapshot!(s, R)
         rm(stopfile; force=true)
         @printf("stopped in the %s phase at sweep %d (snapshot %s)\n", R[:phase], i, snapfile); flush(stdout)
+        ML.stage!(clock, R[:phase] == :burnin ? "burn-in (stopped)" : "main (stopped)")
         exit(75)
     end
     if time() - tsnap > 600
@@ -87,6 +90,7 @@ if R[:phase] == :burnin
                                 mean(R[:btime][end-49:end])); flush(stdout))
         boundary!(s, R, b)
     end
+    ML.stage!(clock, "burn-in")
     R[:phase] = :main
     R[:start_hash] = string(hash((s.k, s.v, s.z0)); base=16)
     @printf("%s start after %d burn-in sweeps: opex %.4e, state hash %s\n", start, nburn, s.parts.op, R[:start_hash]); flush(stdout)
@@ -104,6 +108,7 @@ for i in R[:i]+1:nsw
     end
     boundary!(s, R, i)
 end
+ML.stage!(clock, "main")
 serialize(joinpath(outdir, "opmix.jls"), rec)
 
 # --- summaries -------------------------------------------------------------------------------

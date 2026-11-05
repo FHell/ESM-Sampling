@@ -102,8 +102,11 @@ start). `hook(phase, it)` is called at every sweep boundary when snapshots are o
 """
 function run_chains(cfg::Config; hook=nothing)
     C = Checkpointer(cfg; hook=hook)
+    clock = StageClock(dirname(abspath(cfg.out)))      # stages.csv: wall and CPU time per stage (hpc/cost_table.jl)
+    phase = Ref("setup")
     rng = MersenneTwister(cfg.seed)
     P, sL, info = setup(cfg; rng=rng)
+    stage!(clock, "setup"); phase[] = "level-0 warmup"
     L = nlevels(P) - 1
     t0 = time()
     snap = read_snapshot(cfg.checkpoint, cfg, P)
@@ -185,6 +188,8 @@ function run_chains(cfg::Config; hook=nothing)
         logmsg(cfg, "$K chains (starts: $(join(kinds, ", "))), $nwarm warmup + $nprod sweeps each",
                it0 > 0 ? ", from sweep $it0" : "")
         it0 == 0 && boundary!(C, cfg, P, :fine, 0, fine_data; force=true)   # at least one snapshot after the level-0 warmup
+        stage!(clock, it0 == 0 ? "level-0 warmup and fine set-up" : "resume")
+        phase[] = it0 < nwarm ? "warmup" : "production"
         for it in it0+1:nwarm+nprod
             for c in 1:K
                 chains[c] = fine_local_step(rngs[c], P, chains[c], samplers[c])
@@ -219,8 +224,10 @@ function run_chains(cfg::Config; hook=nothing)
                 logmsg(cfg, @sprintf("  sweep %4d/%d  total per chain %s  [%.0fs]", it, nwarm + nprod,
                                      join((@sprintf("%.4e", x) for x in tot), " "), time() - t0))
             end
+            it == nwarm && (stage!(clock, "warmup"); phase[] = "production")
             it < nwarm + nprod && boundary!(C, cfg, P, :fine, it, fine_data)
         end
+        stage!(clock, "production")
         res = chains_report(cfg, P, names, traces, kinds, PB, nwarm, nprod, t0)
         write_run_outputs(cfg, P, info, samplers, pacc, raccs, online ? OB : nothing, μs)
         h5open(cfg.out, "r+") do f
@@ -230,6 +237,7 @@ function run_chains(cfg::Config; hook=nothing)
         return (; res..., P, chains, samplers, info, status=:finished, exitcode=0, resume_states, restarts=r)
     catch e
         e isa CheckpointStop || rethrow()
+        stage!(clock, phase[] * " (stopped)")
         logmsg(cfg, "stop file $(cfg.stop_file): stopped after the snapshot $(e.path) ($(e.where_)); exit code $EXIT_CHECKPOINTED")
         return (; status=:stopped, exitcode=EXIT_CHECKPOINTED, states=e.states, resume_states, restarts=r, P, info)
     end
