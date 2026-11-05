@@ -5,6 +5,54 @@ Design-level open problems are in [system/roadmap.md](system/roadmap.md), experi
 [experiments.md](experiments.md) and campaigns in [campaigns.md](campaigns.md); this file is the running record of the work and its
 concrete next steps. Update it at the end of every work session.
 
+## Handover (2026-11-05, end of session)
+
+State for a fresh session; details in the to-dos and the log below.
+
+**Repository.** `main` passes the full CPU suite (`test/runtests.jl`, 43 sets; broken by design:
+the 2 event-walk markers in `test_moves.jl` and the 2 bias KS checks in `test_bias.jl`) and the
+device array tests (`device/test/test_replica_driver.jl`, `test_redraw.jl`; `test_comp.jl`
+cases A–O per the port agent). It is about 80 commits ahead of `origin/main`: the user pushes.
+Every agent branch is merged except `worktree-agent-ae8ec558cca8954cf` (see Device, 1).
+
+**Device (Reactant port), the aim of the last session.** All move families are ported and
+checked on arrays against the CPU, and every family alone compiles (CPU backend) and equals the
+arrays to ≤ 1e-13, `:slong` and `:cellpairu1` included; the review fixes H1–H3, M1, M2, M5 are
+in ([device_review.md](device_review.md)). Next, in order:
+1. **Combined-program mismatch.** All 16 newer families in one operation-sweep program differ
+   compiled vs arrays at a few sites (≤ 2.6e-2 relative); every family alone and three groups
+   match. A Fable agent was localising it (chaotic divergence from a round-off boundary flip,
+   or an interaction bug, e.g. the trace-time module globals of review M4); its branch
+   `worktree-agent-ae8ec558cca8954cf` holds whatever it committed. Read its last commit message
+   and finish the verdict; if it is a bug, fix it; if chaotic, add a per-round test with the
+   same input state.
+2. Review items left: M3 (slope-jump cap from the initial state, no guard counter), M4
+   (trace-time module globals → fields of the plan), L2 (`slevel` zero-slope columns;
+   `SLONG_MOVES` 4 vs the CPU's 32).
+3. Decide whether `families = :all` includes the newer families (sparse, aggregates, dispatch
+   shapes, slong, storage pairs): longer compiles (≈ the sum of the per-family times).
+4. Campaign H5 (GPU throughput) is prepared (`campaigns/H5/`); its run set follows 1–3.
+Rules: arrays first, one compile pass, every compile under a timeout, no local GPU timings
+(memory `device-compile-once`).
+
+**Cluster (the user runs these; `docs/system/hpc.md` §8).** After the push: `git pull`;
+rebuild the POWER model files with the wind-calibration fix (D1 `sbatch hpc/jobs/data.sbatch
+small`, D2 `... pypsa256`), then D4 (`hpc/prepare_data.sh pypsa256ts`, PyPSA's own series);
+then H0b, H4, H10 (two stages), H2 and H2b, H5. Every job asks for a `--time` covering its
+estimate; nothing is resubmitted past a QOS limit; campaigns are self-contained.
+
+**Local.** The model files in `data/processed/` are still the old builds (wind calibration
+defect, `data_sources.md` §2); rebuild them with `scripts/prepare_data.py` (as in
+`hpc/prepare_data.sh small` and `pypsa256`; minutes each) once no agent is running, keeping the
+old ones in `data/processed/backup/`. The scratchpad builds of the last session are gone.
+Worktrees of finished agents under `.claude/worktrees/` (all merged) can be removed after a
+look at their untracked `results/`; also `.claude/worktrees/gpu-timing`.
+
+**Open decisions with the user:** the CO₂ treatment and a common weather source for the H2b
+comparison (`validation.md` §2.7); retiring the bias code (conditions in this file's to-dos;
+the device capacity side no longer needs `bias_dev.jl` once the replica driver is the device
+default).
+
 ## Open to-dos
 
 **Sampler design (decided direction, not yet built):**
