@@ -986,7 +986,8 @@ penalty-free cost, opex and shed, active replicas, the equilibrated scores of th
 replica weather features (mean, sd over replicas and steps; prior mean and sd of Φ's residual
 load).
 """
-function write_replica_summary(cfg::Config, P::Problem, ctl::ReplicaCtl, rtr, ptr, kinds, nwarm::Int, passed::Bool, t::Float64)
+function write_replica_summary(cfg::Config, P::Problem, ctl::ReplicaCtl, rtr, ptr, kinds, nwarm::Int, passed::Bool, t::Float64;
+                               probe_warm::Int=nwarm)   # warmup length in steps for the probe selection (the device driver records once per checkpoint, nwarm counts records)
     cars = [kcarrier(sp) for sp in P.E.kspecs]
     fn = replica_feature_names(P)
     fmt(x) = @sprintf("%.6g", x)
@@ -1013,7 +1014,7 @@ function write_replica_summary(cfg::Config, P::Problem, ctl::ReplicaCtl, rtr, pt
             pr = ptr[c]
             if haskey(pr, "gap")
                 it = record_matrix(pr["it"])[1, :]
-                sel = findall(>(first(w) - 1), it)
+                sel = findall(>(nwarm < length(rtr[c]["ktot"]) ? probe_warm : -1), it)   # production probes (steps)
                 isempty(sel) && (sel = eachindex(it))
                 eq, fkp, gp = record_matrix(pr["rs_eq"])[:, sel], record_matrix(pr["fk"])[:, sel], record_matrix(pr["gap"])[:, sel]
                 fm(A) = [fmean(A[f, :]) for f in axes(A, 1)]

@@ -565,7 +565,7 @@ function run_replicas_device(cfg::ML.Config; families=FAMILIES_FAST, budget=DENS
                        join((@sprintf("%s %.3f s", k, RD.tim[k] / max(nst, 1)) for k in sort(collect(keys(RD.tim)))), ", "))
         res = ML.chains_report(cfg, P, names, traces, RD.kinds, nothing, nwarm ÷ spc, nprod ÷ spc, t0)
         ML.write_replica_outputs(cfg, P, RD.info, ctl, rtr, ptr, RD.restarts, snap)
-        ML.write_replica_summary(cfg, P, ctl, rtr, ptr, RD.kinds, nwarm ÷ spc, res.passed, time() - t0)
+        ML.write_replica_summary(cfg, P, ctl, rtr, ptr, RD.kinds, nwarm ÷ spc, res.passed, time() - t0; probe_warm=nwarm)
         ML.HDF5.h5open(cfg.out, "r+") do f
             for (k, v) in RD.tim
                 f["device_profile/$k"] = v / max(nst, 1)

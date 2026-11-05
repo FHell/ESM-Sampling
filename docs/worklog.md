@@ -83,9 +83,6 @@ concrete next steps. Update it at the end of every work session.
   so FAMILIES_FAST adapts η_w to a weaker kernel); the compile cost of the full set in the replica
   driver is to be measured. The probe slot costs 1/M of the batch: its GPU cost and that of
   `SYNC=0` come from H5.
-- `write_replica_summary` selects the production probes by comparing the probe step with the
-  record index; in device replica runs (records every `device_sweeps` steps) it also counts warmup
-  probes. Small fix in src/replicas.jl (pass the step of the first production record).
 - Hand-written fused kernels: feasibility noted in the device agent's report; not started.
 - `:cellpairu1`: compile with the stacked builders to be measured; still out of the run set.
 - Device form of the replica sampler: the CPU reference is `src/replicas.jl` (weather process
