@@ -5,6 +5,33 @@ Design-level open problems are in [system/roadmap.md](system/roadmap.md), experi
 [experiments.md](experiments.md) and campaigns in [campaigns.md](campaigns.md); this file is the running record of the work and its
 concrete next steps. Update it at the end of every work session.
 
+## Handover (2026-11-05, afternoon; machine powered off mid-test)
+
+- **Device branch** `worktree-agent-af8bb885e2cc307b7` (f4f5d61 docs and H5 line 13, 6ca96fe test
+  fixes): loads; array tests so far: `test_redraw.jl` (incl. two plans in one process) and
+  `test_jump.jl` pass; `test_comp.jl` A–E, J, K, L pass. **G fails** compiled vs arrays (θ 0.33,
+  r 0.52): per round, also chained, and `:tdirL` alone in `run_rounds` the compiled program equals
+  the arrays (≤ 1e-11); open: `:tdir0` alone and both families in one `run_rounds` program
+  (`results/dissect_tdir.jl` in that worktree, `CASE=G LOOP=1 SKIP1=1`, needs about 10 GB), and G
+  on the pre-branch commit 67de232 (worktree `agent-ae8ec558cca8954cf`) to see whether it predates
+  the branch. F, H, I died of memory in the test's dense `root_count` (now chunked, `ROOT_CHUNK`;
+  the F device code alone: compiled = arrays, 5.7 GB); M, N failed only the truncation count of the
+  CPU walk (now 2000 nats, as O). To run: F, H, I, M, N, O, `test_replica_driver.jl`,
+  `test_mock.jl` (one capped process each: `results/run_devtests.sh`, MemoryMax 12G), then the
+  compile pass. Logs in that worktree's `results/`. Running all tests in one Julia session OOM-killed
+  it (17.5 GB): one process per test file and case.
+- **Fused kernels** (Fable, branch `worktree-agent-ac0e7bbc4dd332da8`, 85d3067, 861bfe6, 3ef7f94;
+  `docs/fused_kernel_exploration.md` there): the `tpot` global-part kernel and a one-thread-per-site
+  `soc` kernel are verified against the package's draws (FP64: round-off; soc bitwise on arrays).
+  Laptop GPU: FP64 no gain (FP64-bound); Float32 `tpot` round 1.2× at 400 sites, 0.96× at 2000 (the
+  per-column part in XLA is 70–75 % of the round); `soc` kernel: 74 % fewer ops, 5× less temporary
+  memory, half the compile time, same speed; barrier-free kernels run on the CPU backend (not by
+  raising), barrier kernels only on the GPU. Open: cluster timings, the Float32 `soc` GPU kernel
+  (type instability), and a finding for the package's Float32 build: the XLA Float32 `tpot` draw at
+  400 sites departs from its own array form at 42 of 400 sites (another segment), not at 2000.
+- Merged worktrees removed (their `results/` in `results/worktrees/<name>/`); `main` unchanged
+  otherwise, not yet merged with the device branch.
+
 ## Handover (2026-11-05, end of session)
 
 State for a fresh session; details in the to-dos and the log below.
