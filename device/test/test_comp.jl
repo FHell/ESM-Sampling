@@ -20,6 +20,23 @@ Reactant.set_default_backend(get(ENV, "DEVICE_BACKEND", "cpu"))
 const NSITE = parse(Int, get(ENV, "NSITE", "600"))
 const DEV_RE = get(ENV, "DEVICE_REACTANT", "1") == "1"
 weyl(n, off) = [mod(0.5 + (off + k) * 0.6180339887498949, 1.0) for k in 1:n]
+const ROOT_CHUNK = parse(Int, get(ENV, "ROOT_CHUNK", "100"))
+
+"The rows `rows` of a device table (every per-site field; the rest shared)."
+rows_table(tab, rows) = (B = size(tab.on, 1);
+    NamedTuple{keys(tab)}(Tuple(x isa AbstractArray && size(x, 1) == B ? copy(selectdim(x, 1, rows)) : x for x in values(tab))))
+
+"Largest sign-change count of a secondary quantity over the sites of round r of family f (`root_count`), in chunks of sites."
+function chunked_root_count(f, st, pl, tab, r)
+    B = size(tab.on, 1)
+    m = 0.0
+    for rows in Iterators.partition(1:B, ROOT_CHUNK)
+        sub = rows_table(tab, collect(rows))
+        any(sub.on[:, r] .> 0) || continue
+        m = max(m, maximum(D.root_count(D.build(Val(f), st, pl.cp, pl.sp, sub, r, pl.k)[1], pl.k)))
+    end
+    return m
+end
 
 function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
     for L in D.BLOCK_LENGTHS                     # block profiles: the plateau and two shapes with zero ends
@@ -83,9 +100,10 @@ function comp_case(name; tracking_model::Bool, fams, C=2, nround=2, cells=false)
                               bm = cpu_move(P, LM, LC, ix, f, site; jac=jac, learn=learnof(f, c), chain=c); (bm, jac))
     ok_conf = all(D.check_conflicts(f, D.host_table(f, pl.tp, pl.sched[f]))[1] for f in pl.fams)
     # exactness of the dense form with kinked and LINEAR entries: ≤ 2 sign changes per secondary quantity
-    maxroots = Dict(f => f in (:slong, :slongL, :slevel, :sxlong, :sxlongn) ? NaN :         # (a dense diagnostic: too large for the long-range moves)
-                         maximum(maximum(D.root_count(D.build(Val(f), st0, pl.cp, pl.sp, tabs[f], r, pl.k)[1], pl.k))
-                                 for r in 1:size(tabs[f].on, 2)) for f in pl.fams)
+    # (a dense diagnostic: chains × sites × points × columns at once is tens of GB for the dense angle
+    # directions, so it runs on chunks of ROOT_CHUNK sites; too large for the long-range moves)
+    maxroots = Dict(f => f in (:slong, :slongL, :slevel, :sxlong, :sxlongn) ? NaN :
+                         maximum(chunked_root_count(f, st0, pl, tabs[f], r) for r in 1:size(tabs[f].on, 2)) for f in pl.fams)
     t0 = time()
     stJ, stats, scpu = mock_compare(pl, st0, LCs, ss, pl.fams, rounds, tabs, U, cpumove; P=P, β=β)
     @printf("%s: families %s, %d draws in %.0f s\n", name, pl.fams, stats[:n], time() - t0)
@@ -165,10 +183,15 @@ if get(ENV, "CASE", "ABC") in ("O",)
     CPU_MAXNATS[] = 40.0
 end
 if get(ENV, "CASE", "ABC") in ("M",)
+    # as O: the long plateaus' and the level move's potential falls again beyond the CPU walk's 40-nat stop
+    CPU_MAXNATS[] = 2000.0
     comp_case("M (no losses; long-range storage moves, T2, and the level move)"; tracking_model=false, fams=(:slong, :slevel))
+    CPU_MAXNATS[] = 40.0
 end
 if get(ENV, "CASE", "ABC") in ("N",)
+    CPU_MAXNATS[] = 2000.0                                     # as M and O
     comp_case("N (all terms; long-range storage moves, LINEAR)"; tracking_model=true, fams=(:slongL,))
+    CPU_MAXNATS[] = 40.0
 end
 if get(ENV, "CASE", "ABC") in ("K",)
     comp_case("K (no losses; storage blocks and cell–class aggregates, T2)"; tracking_model=false, fams=(:sblk2, :sblkg2, :sblkg4))
