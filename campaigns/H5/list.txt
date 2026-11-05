@@ -10,3 +10,4 @@ XLA_REACTANT_GPU_PREALLOCATE=false campaigns/H5/rep40_c16_m4.toml device
 XLA_REACTANT_GPU_PREALLOCATE=false campaigns/H5/rep40_c16_m8.toml device
 XLA_REACTANT_GPU_PREALLOCATE=false FLOAT=32 campaigns/H5/rep40_c16_m8.toml device
 XLA_REACTANT_GPU_PREALLOCATE=false campaigns/H5/rep256_c4_m8.toml device
+XLA_REACTANT_GPU_PREALLOCATE=false FAMILIES=all campaigns/H5/rep40_c4_m8.toml device

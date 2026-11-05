@@ -120,8 +120,8 @@ the 256-node network.
 | `xloc_ball_hops` | 0 | localized pairs: re-routing ball radius (0: the pair only) |
 | `kop` | `false` | capacity moves with their operation ([moves/capacity.md](moves/capacity.md)) in every fine step, after `kscale` and `kpeak` |
 | `storage_long` | 1.0 | probability per operation sweep of the long-range storage sweep (`slong`, `slevel`; [moves/storage.md](moves/storage.md)), every kernel |
-| `storage_long_moves` | 32 | ... `slong` moves per storage unit and sweep |
-| `storage_long_hours` | 24.0 | ... only for storage units with at least this many hours of storage (batteries and small PHS are box-limited); also the units of the storage pairs |
+| `storage_long_moves` | 32 | ... `slong` moves per storage unit and sweep (also the device's `:slong` plateaus, `plan(…; slong_moves)`) |
+| `storage_long_hours` | 24.0 | ... only for storage units with at least this many hours of storage (batteries and small PHS are box-limited); also the units of the storage pairs and of the device's `:slong`, `:slevel` |
 | `storage_xpair` | 0.1 | rate of the single-instant storage pair `sxpair` in the local sweep, on the scale of the plain families (the other families keep their absolute rates; about 60 moves per unit and sweep at 40 nodes daily); every kernel ([moves/storage.md](moves/storage.md)) |
 | `storage_xlong` | 8 | interval storage pairs `sxlong` per storage unit in the long-range storage sweep |
 | `storage_xpair_hops` | 1 | storage pairs: partner units at the unit's own node or at nodes within this many hops |

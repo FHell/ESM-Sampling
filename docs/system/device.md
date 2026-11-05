@@ -79,8 +79,9 @@ Static per-column metadata is recorded at trace time:
 * the kink id of every kinked argument;
 * whether an argument moves: a slope that is the literal `0.0` of the builder (or `nothing` in a
   stacked builder) is static;
-* which unit columns can hold a unit with fleet commitment (`UC_COLS`, from the schedule): the
-  commitment terms of the other columns are identically zero and are left out.
+* which unit columns can hold a unit with fleet commitment (`uc` of the family's static data,
+  from the schedule; below): the commitment terms of the other columns are identically zero and
+  are left out.
 
 The balance slots sum their columns with a static padded column table (an appended zero column,
 one gather and one sum; no 0/1 matmul, so a padded term cannot turn an infinity into NaN).
@@ -149,12 +150,13 @@ own points:
    point. Slot points are therefore no entries of their own;
 4. the (point, jump) entries of a site: every entry at exactly 0 is folded into one, the rest
    sorted with the jumps as payload (one stable sort), and only the first `cap` kept
-   (`JUMP_CAP`, set by `plan` from the sites of three rounds: 1.25 × the largest count + 8);
+   (`cap` of the family's static data, set by `plan` from the sites of three rounds:
+   `JUMP_MARGIN` = 1.5 × the largest count + 16);
 
-   > **Status: deviation.** The cap is fixed from the initial state; the count is state-dependent,
-   > so a site can exceed it later in a run and then stays at t = 0 (the exact guard: invariant, a
-   > lost move). `do_round` drops the guard flag, so the drivers do not report its rate; a per-family
-   > counter in the loop state and a more generous margin are open;
+   > **Status: deviation.** The cap is fixed from the initial state; the count is state-dependent
+   > (later states of a run exceeded the initial counts by up to 27 %), so a site can exceed it
+   > later in a run and then stays at t = 0 (the exact guard: invariant, a lost move). The drivers
+   > count these sites per family (guard counters below); a cap that follows the state is open;
 5. the segment slopes from the slope right of 0 outwards, the potential integrated outwards from
    $c(0) = 0$; every partial sum accumulates from 0 outwards, so no value near 0 carries the
    round-off of far, large terms, and a slope within the round-off of its sum is 0 (a flat stretch
@@ -185,7 +187,20 @@ on the GPU: slope-jump for `:tpot`, `:sblk4` … `:sblk32`, `:cell1`, `:cell2`, 
   (denominator $\neq 0$).
 
 Both counts are properties of the whole line, so the guards keep the target invariant. The tests
-report how often they act.
+report how often they act, and the drivers count them: `do_round` returns both guard masks, and
+the device loop of the drivers (`run_sweeps_g`, `run_rounds_g`) carries a counter (row × family ×
+guard, `guard_zeros`) that the host reads and resets at every checkpoint (outputs `device/guard_*`
+and `replicas/<c>/guard_*`, [data.md](data.md); the `guards` table of `summary_device.toml`).
+
+**Static data of a family.** Everything a compiled program bakes in besides its argument shapes is
+held by the plan and carried by the family's device tables as the type parameter of the field
+`meta` (`device_table(pl, f, ht)`, `fammeta`): the committable unit columns `uc` (as 64-bit words),
+the line-sampler form `jump`, its cap `cap`, and the line slots of the dense angle families. The
+schedule's context (the family list, the cell structure, the host sources of the drawn sites, the
+profile and dispatch-shape tables, `slong_moves`, `slong_hours`, the `sxlong` rounds, the packing
+of the sparse families) is the field `ctx` of the plan's topology (`sched_ctx`). The module-level
+defaults (`set_sources!`, `set_profiles!`, …) are read only when a plan is made, so two plans in one
+process do not interfere (`test_redraw.jl`).
 
 An improper ray gives $t = 0$, as on the CPU. The share-preserving families apply the Jacobian
 step (`jac_accept`, with the site's third uniform). The commit is a scatter-add into the state
@@ -221,7 +236,7 @@ and $r$.
 **Choices made on the host.** Choices that do not depend on the state are drawn when the
 schedule is built: the unit pair of `:spair`, the carriers of the cell moves, and the block
 offset and profile. The directions of the dense angle families are drawn per site and chain by a
-host source (`TDIR_SOURCE`, `tdir_source`), as the CPU families of the rule with the CPU's relative
+host source (`tdir_source`, held by the plan's context: `host_sources`), as the CPU families of the rule with the CPU's relative
 rates: a transport mode projected onto the face of the step's predicted binding lines (`tmode`,
 the chain's frames; flow basis), the re-routed injection pair of a predicted binding line
 (`tline`), a learned mode projected onto the face (`amode`, once the host has learned modes). The
@@ -263,20 +278,21 @@ partners and units, `xpair` pairs) and are packed per step into rounds of disjoi
 order a, b, then the others: the SoC term of each step with the site's 0/1 profile of raised
 instants (host data), the node's balance slot at each step, and the G compensation columns at the
 two end steps with the nominal requirement (`soc_qadj4`). The level move uses the same template
-without compensation. Per unit and round one level move and `SLONG_MOVES` = 4 plateaus, against
-the CPU's 32 plateaus per unit and sweep (`storage_long`); with the redraw between device calls
+without compensation as a family of its own, `:slevel` (any model): the SoC terms of every
+step with every instant raised and the node's balance slot at every step, no generator or
+commitment columns (the level move changes no power inside the box). Per unit and sweep
+`slong_moves` plateaus (the CPU's `storage_long_moves`, 32 by default) and one level move, for the
+units with at least `storage_long_hours` hours of storage; with the redraw between device calls
 every call gets new instants and lengths.
-
-> **Status: deviation.** The level move still carries the 2G generator columns and the commitment
-> sets with zero slopes (flagged as moving), which adds primaries and root searches for nothing; a
-> separate level family with SoC terms only would halve its cost.
 
 **Block profiles.** The profile table holds the plateau and optional shapes with zero ends
 (`set_profiles!`), each with a season class (0: any). A site draws its profile among those of its
 block's season class and those of any season. With the host adaptation the table holds the
-plateau and per season class two learned state-of-charge shapes (`set_learned_profiles!`, from
+plateau and per season class two learned state-of-charge shapes (`learned_profile_table`, from
 `AdaptiveModes.shapes`; the plateau stands in until they are learned), so it keeps its shape when
-the shapes are relearned.
+the shapes are relearned; the adaptation updates the plan's tables in place (`tp.ctx.profiles`,
+and the dispatch shapes `tp.ctx.dshapes`) and rebuilds the device tables of the block and
+dispatch-shape families.
 
 **Requirement tracking.** The share-preserving families refuse models with line losses or lossy
 links, whose compensation needs requirement tracking on the CPU (an event walk). With those
@@ -310,11 +326,21 @@ identically zero for them, and no coupling of $\tau-1$ and $\tau$, so one round 
 steps; `:gen`/`:pair` then keep the committable units and pairs), and the angle moves
 bucketed by node degree (`THETA_BUCKETS`), each padded to its own largest degree. The cost of
 a site is roughly points × terms, so padding to the global maximum degree costs about the
-square of the ratio. `families = :all` (`device_families`) adds:
+square of the ratio. `families = :all` (`device_families`) is every device family the model
+admits (LINEAR variants with requirement tracking, i.e. line losses or lossy links):
 * `:spair0`, `:spair`;
 * `:tsoc`, `:tpot` (`:tsocL`, `:tpotL` with requirement tracking);
-* the storage blocks of `BLOCK_SCHED` ($L$ = 2, 4, 8, 16, 32; `:sblk…`, or `:sblkL…` with tracking);
-* the cell families of the partition.
+* the storage blocks of `BLOCK_SCHED` ($L$ = 2, 4, 8, 16, 32; `:sblk…`, or `:sblkL…` with tracking)
+  and their cell–class aggregates (`:sblkg…`, `:sblkgL…`);
+* the cell families of the partition;
+* the dense angle directions `:tdir` (`:tdirL`) and `:tdir0` (sites only with the host
+  adaptation, which provides their source);
+* the sparse angle directions and local re-routings `:tcut`, `:tcutw` (`:tcutL`, `:tcutLw`),
+  `:xloc`, `:xlocc` (not with tracking), `:xpair`;
+* the dispatch shapes `:dshp{L}`, only with the host adaptation (which learns them);
+* the long-range storage moves `:slong` (`:slongL`) and the level move `:slevel`;
+* the storage pairs `:sxpair`, `:sxpairn`, `:sxlong`, `:sxlongn` (not with tracking).
+A family without sites (no source, no long-range units, …) is dropped by `plan`.
 
 **Memory cap.** The largest tensor of a round has $C \cdot B \cdot e$ elements. Here $e$ is
 points × columns in the dense form (`dense_size`). In the slope-jump form it is the larger of
@@ -605,14 +631,16 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | cell templates (all partition levels) | verified on arrays and compiled; scheduled with `families = :all` |
 | storage blocks, one unit (plateau, shapes) | verified on arrays ($L$ = 2–32) and compiled; scheduled with `families = :all` |
 | nominal storage requirement of the share-preserving `:tsoc`, `:sblk{L}` (CPU `soc_qadj`, [moves/storage.md](moves/storage.md)) | done (`soc_qadj4`); verified on arrays against the CPU |
-| long-range storage moves `slong`, `slevel` (`:slong`, `:slongL`) | verified on arrays against the CPU (`test_comp.jl` M, N) and compiled (14 s `:slong`, 16 s `:slongL` at T = 1460, after removing the varargs concatenates below); L drawn on 2 … T−1 (the CPU includes L = 1, the `tsoc` move) |
+| long-range storage moves `slong`, `slevel` (`:slong`, `:slongL`, `:slevel`) | verified on arrays against the CPU (`test_comp.jl` M, N) and compiled (14 s `:slong`, 16 s `:slongL` at T = 1460, after removing the varargs concatenates below); L drawn on 2 … T−1 (the CPU includes L = 1, the `tsoc` move); `slong_moves` plateaus per unit and sweep as the CPU; `:slevel` as its own family (SoC terms only) since the last tests |
+| guard counters (sites held at t = 0 per row, family and guard; both drivers, snapshots) | in code, not yet tested |
+| static data of the families held by the plan (`meta`, `tp.ctx`; no trace-time module globals) | in code, not yet tested (`test_redraw.jl`: two plans in one process) |
 | storage pairs `sxpair`, `sxlong` (`:sxpair`, `:sxpairn`, `:sxlong`, `:sxlongn`: ball templates, leak and `sx_qloss` compensation, footprint rounds) | verified on arrays against the CPU (`test_comp.jl` O, with the CPU walk extended to 2000 nats: its 40-nat stop truncates 11 % of these lines, whose potential falls again further out); B uniform among the partner slot's units (the CPU: ∝ min(k_A, k_B)); share-preserving only; compiled (CPU backend) against arrays |
 | host sources and redraw of the random sites between device calls (`set_sources!`, `redraw_tables`) | done (`test_redraw.jl`: plan shapes, conflict-free, new and reproducible draws, under 0.01 % of the sites dropped); the plan's own draw and the redraws come from restart-seeded streams |
 | one compile pass over every family (Reactant CPU backend against arrays, `test_reactant_fams.jl` A and B, 2 rounds × 60 sites) | done: every family equal to the arrays to ≤ 1e-13 relative; 4–52 s per family once the process has compiled the traced code (the first compile in a process adds 100–150 s of Julia compilation); peak 4.8–8.3 GB per test process; `:cellpairu1` 125 s with the first Julia compilation. The replica programs (`test_replica_compiled.jl`, 40 nodes daily, 6 device rows) equal the arrays, the operation sweep per family (the state after every family's loop of the one program) with the plain families and `:spair`, `:tsoc`, `:sblkg2`, `:xloc`, `:dshp4`, `:slong`, `:sxpair`, `:sxlong`, `:cell2` in one sweep; the guard inputs (real-candidate counts, root guards) of every family agree exactly on the same input since the sign tests ignore round-off (§3) |
 | memory cap of a round (`DENSE_BUDGET`) | done |
 | slope-jump form of the line sampler, per-family choice (`JUMP_RATIO`) | done; verified on arrays against the CPU and the dense form, Reactant (CPU backend) against arrays |
 | term axis (program size independent of the term count); stacked builders (one gather per field) for the compensated, block, cell and dense angle families | done |
-| commitment columns of non-committable units left out (`UC_COLS`); balance jumps on the column entries; entry-axis-first global part; two-level scans; sort networks for short lists | done; verified on arrays against the CPU and the dense form |
+| commitment columns of non-committable units left out (`uc` of the static data); balance jumps on the column entries; entry-axis-first global part; two-level scans; sort networks for short lists | done; verified on arrays against the CPU and the dense form |
 | one program per checkpoint (operation sweeps + capacity pass) | done (`sweep_program`, `merged = true`); not the default (compile time) |
 | capacity pass (`kren`, `kscale`, `kpeak` absorb) with the bias, host loop | done (retired with the bias) |
 | replica–Langevin capacity step: score, step in $w$, dispatch following (fixed output, kop curve), replica batch, weather upload with compensation | done; verified on arrays against the CPU and the prototype, compiled (CPU backend) against arrays |
@@ -631,12 +659,6 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | weather moves with compensation as a device family | not planned: the weather moves to a prior-reversible pCN process on the host, the capacities to a Langevin step ([../worklog.md](../worklog.md)); `kop` and the device bias (`bias_dev.jl`, kept as it is until it is retired) are not extended |
 | Float32 build of the whole program (`ESMDevice.F32`) | done: every upload converted (both drivers), contractions at HIGHEST precision (`ftcompile`); uploads Float32 only, compiles and runs (no exactness tests by design) |
 | fused kernels (planned option, below), tiling, multi-GPU, full-Europe memory plan | missing |
-
-> **Status: deviation.** Trace-time state lives in module globals set by `plan` and
-> `set_sources!` (`UC_COLS`, `JUMP_CAP`, `JUMP_FAMILIES`, `CELLINFO`, `CELL_BUCKETED`, `TDIR_*`,
-> `SPARSE_SOURCE`, `BLOCK_GROUPS`, `SX_SOURCE`, `PROFILES`, `DSHAPES`, `SCHED_FAMILIES`): two plans in
-> one process change what a later compile bakes in. They are to become fields of the plan and
-> static parts of the tables passed to `build`.
 
 **Fused kernels (planned option, not built).** XLA materializes the intermediates of a round
 (points × columns of every site, the sorted jump lists) in device memory, and the restructuring

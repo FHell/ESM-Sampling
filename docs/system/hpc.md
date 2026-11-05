@@ -357,7 +357,7 @@ current ones, with what each needs:
 |---|---|---|
 | H0b (SIGTERM and snapshot tests) | D1: the snapshot test is skipped without `model.h5` | `bash hpc/new_campaign.sh H0b`; `sbatch hpc/jobs/h0_cpu.sbatch H0b` |
 | H4 (replica sampler, far-apart starts) | D1 rebuilt with the corrected wind calibration | `bash hpc/new_campaign.sh H4`; `sbatch --time=2-00:00:00 --array=1-6%6 hpc/jobs/cpu_array.sbatch H4 campaigns/H4/list.txt` (6-hourly lines estimated 12–20 h); `bash hpc/collect.sh H4` |
-| H5 (device throughput) | D1 and D2 (model.h5, model256.h5) | `bash hpc/new_campaign.sh H5`; `sbatch --time=12:00:00 --array=1-12%4 hpc/jobs/gpu_array.sbatch H5 campaigns/H5/list.txt` |
+| H5 (device throughput) | D1 and D2 (model.h5, model256.h5) | `bash hpc/new_campaign.sh H5`; `sbatch --time=12:00:00 --array=1-13%4 hpc/jobs/gpu_array.sbatch H5 campaigns/H5/list.txt` |
 | H10 (storage pairs) | D1 (rebuilt); the HiGHS scheduler reset for `ESM_LP_THREADS` (f2d09a3, LP-baseline branch) on main, else stage 1 fails; its start states and the reference LP are made by the campaign | `bash hpc/new_campaign.sh H10`; `sbatch --time=02:00:00 hpc/jobs/build.sbatch H10 configs/chains40.toml script scripts/lp_reference.jl` (stage 1, the LP into the cache); `sbatch --time=12:00:00 --dependency=afterok:<stage 1 job id> --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt`; `bash hpc/collect.sh H10 'summary*'` |
 | H2 (our LP baselines) | D1 (40 nodes) and D2 (256 nodes), rebuilt with the corrected wind calibration; D4 for its lines on `model256_pypsa.h5` | as in its row |
 | H2b (PyPSA's optimum and MGA) | the esm256 PyPSA-Eur build (`composed_2050.nc`) | as in its row; independent of H2 |

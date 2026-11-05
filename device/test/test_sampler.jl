@@ -139,7 +139,7 @@ end
 
 "Device draws traced by Reactant with the device RNG (on the GPU)."
 function dev_draws_reactant(fam, site, B)
-    ht = D.host_table(fam, pl.tp, [fill(site, B)]); dt = D.device_table(fam, ht)
+    ht = D.host_table(fam, pl.tp, [fill(site, B)]); dt = D.device_table(pl, fam, ht)
     function draw(st, cp, sp, k, tab, rng)
         tb, _ = D.build(Val(fam), st, cp, sp, tab, 1, k)
         u = rand(rng, Float64, (C, B, 2))

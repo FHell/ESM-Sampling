@@ -59,8 +59,17 @@ checkpoint (`mh`) or per step (`replicas`) of every timed part, `rebuild` the re
 [device.md](device.md) §2); replica driver: the outputs of the CPU replica driver (`replicas/*`,
 `run/*`; the replica records at the host checkpoints only; the probes those of the device probe,
 `replicas/<c>/probe/it` with the step of the copy, [device.md](device.md) §6.2),
-`replicas/<c>/residual_drift` (replica × host checkpoint, as above), `replicas/record_every`
-(= `device_sweeps`) and `replicas/probe_slots` (probe slots per chain on the device, 0 or 1).
+`replicas/<c>/residual_drift` (replica × host checkpoint, as above), `replicas/<c>/guard_root`,
+`replicas/<c>/guard_cap` (host checkpoint × family: the chain's guarded sites in the interval, as
+below), `replicas/record_every` (= `device_sweeps`) and `replicas/probe_slots` (probe slots per
+chain on the device, 0 or 1). Both drivers: the guard counts of the operation sweeps
+([device.md](device.md) §3), `device/guard_families`, `device/guard_sites` (real sites per row and
+sweep of each family), `device/guard_root` and `device/guard_cap` (family × chain × host
+checkpoint: sites held at $t = 0$ by the root guard and by the slope-jump cap in the interval up to
+that checkpoint, summed over the chain's rows) and `device/guard_row_sweeps` (rows × sweeps the
+counts cover; the rate of a guard is its count / (`guard_row_sweeps` × `guard_sites`)).
+`device/scripts/run_device.jl` writes these per family into the `guards` table of
+`summary_device.toml` (totals, the largest count of one checkpoint, the cap rate per line move).
 
 **CPU driver only** (`write_run_outputs`, appended to the same file):
 
@@ -131,6 +140,7 @@ every write. Vectors are the coefficient vectors of the state at its level (the 
 | `sampler/sigma_scale`, `sampler/gibbs/{wv,wz,wk}` | level-0 phase: carrier-scaling step sizes and slice widths |
 | `device/driver` | device runs of the Metropolis driver (`device_sampler = "mh"`): `"mh"`; `it` counts host checkpoints |
 | `device/residual_drift` | the same runs: the residual drift so far (chain × host checkpoint), continued after a resume |
+| `device/guard_root`, `device/guard_cap` | the same runs: the guard counts so far (family × chain × host checkpoint), continued after a resume (dropped if the family count changed) |
 
 **Replica driver** (`write_replica_snapshot`, also of the device replica driver, so either
 driver resumes from the other's snapshots; `read_snapshot` of the chains driver refuses it):

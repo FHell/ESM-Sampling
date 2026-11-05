@@ -69,8 +69,8 @@ one storage unit (`device/src/blocks.jl`).
 * *Rounds.* Blocks of one parity × one storage slot per node.
 
 The cell–class aggregates are `:sblkg{L}` and `:sblkgL{L}` (the units of one class in one cell,
-`BLOCK_GROUPS`); the learned shapes are profile columns per season class (`set_learned_profiles!`).
-The driver schedules the one-unit blocks with `families = :all` and redraws the block offsets and
+`BLOCK_GROUPS`); the learned shapes are profile columns per season class (`learned_profile_table`, in the plan's
+tables). The driver schedules the one-unit blocks and the aggregates with `families = :all` and redraws the block offsets and
 profiles between device calls ([../device.md](../device.md) §6.1).
 
 ## `slong` and `slevel`: long-range plateaus and the level of a trajectory
