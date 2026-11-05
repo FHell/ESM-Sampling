@@ -75,15 +75,22 @@ concrete next steps. Update it at the end of every work session.
 - Next device restructuring steps (ledger E28): the slot-point sort of the slope-jump form (a
   payload sort per balance slot, now one of the larger kernels), the per-column evaluation at the
   slot points (columns × slot points), the dense form of the plain families (unchanged).
-- Whether Float32 (`ESMDevice.F32`) is usable: to be tested empirically (user).
+- Whether Float32 (`ESMDevice.F32`) is usable: to be tested empirically (user; H5 lines 2, 4, 11).
+  Since 1ea2358 it uploads Float32 throughout (also the replica driver), compiles its
+  contractions at HIGHEST precision and rebuilds the residual at every host checkpoint; its drift
+  is about 1e-2 MW per sweep (`device/residual_drift`, `replicas/<c>/residual_drift`).
+- Replica device runs with `families = :all` (the device probe now measures the device kernel,
+  so FAMILIES_FAST adapts η_w to a weaker kernel); the compile cost of the full set in the replica
+  driver is to be measured. The probe slot costs 1/M of the batch: its GPU cost and that of
+  `SYNC=0` come from H5.
+- `write_replica_summary` selects the production probes by comparing the probe step with the
+  record index; in device replica runs (records every `device_sweeps` steps) it also counts warmup
+  probes. Small fix in src/replicas.jl (pass the step of the first production record).
 - Hand-written fused kernels: feasibility noted in the device agent's report; not started.
 - `:cellpairu1`: compile with the stacked builders to be measured; still out of the run set.
 - Device form of the replica sampler: the CPU reference is `src/replicas.jl` (weather process
   with explicit noise, `langevin_update`, `follow_capacities!`; architecture.md §2); it replaces
   the Metropolis capacity pass and the planned `kop` port and per-carrier scales.
-- Device capacity side of the replica sampler: built against the prototype (score, step,
-  dispatch following, replica batch, replica driver; device.md §5.2, §6.2); next: the device
-  driver on the src/ replica sampler (its config keys, gate, probe, snapshot layout).
 - Re-measure the compile times on a quiet machine (239 s / 149 s were measured under load).
 
 **HPC (PIK cluster, [system/hpc.md](system/hpc.md); campaigns H0–H9 in the ledger):**
@@ -141,6 +148,23 @@ concrete next steps. Update it at the end of every work session.
   nice wrapper as `julia_cmd`; a CLAUDE.md note or a wrapper default would prevent it.
 
 ## Log
+
+### 2026-11-05 (device review fixes: residual rebuild, Float32, replica driver)
+
+- Findings H3, M1, M2, M5 of [device_review.md](device_review.md) fixed (1ea2358): the residual
+  cache rebuilt on the device at every host checkpoint of both drivers, its drift recorded
+  (FP64 1e-11 MW, Float32 2e-2 MW after 1–3 sweeps at 40 nodes daily); the Float32 build compiled at
+  HIGHEST precision (no TF32) and the replica driver's uploads and program scalars converted (the
+  F32 replica driver could not be set up before: `lgv_params` mixed float types); the replica driver
+  plans with the backend's slope-jump ratios, runs the lag probe on the device in a frozen probe
+  slot per chain (weight 0, measures the device's own kernel, about 1/M of the batch instead of 30
+  CPU sweeps per chain and probe), uploads the moved replicas' weather rows only, keeps a resident
+  zero score accumulator and can run without per-program synchronization (`SYNC=0`); the tdir
+  stream restart-seeded, snapshots from downloaded States, the resume and grace-time contract in
+  device.md §6.3. Tests on arrays against the CPU, then compiled on the CPU backend (six replica
+  programs, the rebuild, compiled runs of both drivers, the Float32 replica driver); no GPU timings.
+- Found on the way: the smoke configuration (`hpc/configs/device_smoke.toml`) never has a probe
+  candidate (bursts every 4 steps, probes every 4); the compiled test uses `replica_probe_every = 3`.
 
 ### 2026-11-04 (night: device; H5 prepared)
 

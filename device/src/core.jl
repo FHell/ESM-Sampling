@@ -335,6 +335,7 @@ include("ren.jl")           # renewable units: index, parameters, state, write-b
 include("kmove.jl")
 include("bias_dev.jl")
 include("kren.jl")
+include("residual.jl")       # residual cache rebuild at the host checkpoints
 include("driver.jl")
 include("score.jl")          # capacity score (replica–Langevin sampler)
 include("langevin_dev.jl")   # Langevin capacity step, dispatch following, replica batch, weather upload

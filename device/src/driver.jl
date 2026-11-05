@@ -280,8 +280,8 @@ checkpoints, each after `device_sweeps` operation sweeps and one capacity pass.
 # merged = true compiles sweeps + capacity pass as one program (`sweep_program`, bitwise equal to
 # the two calls, test/test_program.jl), but compiles ≈ 5× longer (295 s against 50 + 11 s at 40
 # nodes daily) for one dispatch saved per checkpoint; the alternation is the default.
-function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, adapt::Bool=false)
-    cfg.device_sampler == "replicas" && return run_replicas_device(cfg; families=families)
+function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, adapt::Bool=false, kw...)
+    cfg.device_sampler == "replicas" && return run_replicas_device(cfg; families=families, kw...)   # kw: `sync`
     cfg.device_sampler == "mh" || error("device_sampler = \"$(cfg.device_sampler)\": \"mh\" or \"replicas\"")
     t0 = time()
     Ck = ML.Checkpointer(cfg)                       # snapshots and resume (snapshot_dev.jl; docs/system/hpc.md §7)
@@ -294,16 +294,18 @@ function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, 
     kpart(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur) =
         kargs(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)[2:end]
     if merged                                       # one program per checkpoint: sweeps, then the capacity pass
-        tc1 = @elapsed ffp = @compile fp(st, cp, sp, kk, tabs, nsd, drng, kpart(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)...)
+        tc1 = @elapsed ffp = ftcompile(() -> @compile fp(st, cp, sp, kk, tabs, nsd, drng, kpart(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)...))
         tc2 = 0.0
         ML.logmsg(cfg, @sprintf("device (%s): compiled one program (operation sweeps + capacity pass, %.0f s); %d chains",
                                 cfg.device_backend, tc1, K))
     else
-        tc1 = @elapsed fsw = @compile sw(st, cp, sp, kk, tabs, nsd, drng)
-        tc2 = @elapsed fkp = @compile kp(kargs(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)...)
+        tc1 = @elapsed fsw = ftcompile(() -> @compile sw(st, cp, sp, kk, tabs, nsd, drng))
+        tc2 = @elapsed fkp = ftcompile(() -> @compile kp(kargs(st, kgd, ksd, dn, crd, cap, Z, U, Zp, Up, BDd, BSd, RSd, Zr, Ur)...))
         ML.logmsg(cfg, @sprintf("device (%s): compiled the operation sweeps (%.0f s) and the capacity pass (%.0f s); %d chains",
                                 cfg.device_backend, tc1, tc2, K))
     end
+    rb, tc3 = rebuild_program(M, rebuild_dims(K, M, ix), R, (st, kgd, ksd, dn, crd, cap); compile=true)   # residual.jl
+    drift = resume_drift(snap)                      # max |r_cache − r_rebuilt| per chain and checkpoint
     # ---- loop
     nwarm, nprod = cfg.mlda_warmup, cfg.nsamples
     online = usebias && cfg.bias_online
@@ -313,10 +315,10 @@ function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, 
     traces = snap === nothing ? [Vector{Vector{Float64}}() for _ in 1:K] : snap.traces
     it0 = snap === nothing ? 0 : snap.it
     Sh = deepcopy(S)
-    tim = Dict("operation" => 0.0, "capacity" => 0.0, "draws" => 0.0, "download" => 0.0, "host" => 0.0)
+    tim = Dict("operation" => 0.0, "capacity" => 0.0, "draws" => 0.0, "download" => 0.0, "host" => 0.0, "rebuild" => 0.0)
     sync(x) = (Reactant.synchronize(x); x)
     stopped = false
-    hr = MersenneTwister(cfg.seed + 101)            # host draws of the refreshed directions
+    hr = MersenneTwister(ML.restart_seed(cfg, rr) + 101)    # host draws of the refreshed directions (re-seeded after a resume)
     for it in it0+1:nwarm+nprod
         if merged                                   # "operation" then holds sweeps and capacity pass
             tim["operation"] += @elapsed begin
@@ -334,6 +336,10 @@ function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, 
             end
         end
         BSn === nothing || (BSd = BSn)
+        tim["rebuild"] += @elapsed begin            # residual cache from the node arrays (residual.jl)
+            st, dr, _, _ = rb(st, kgd, ksd, dn, crd, cap)
+            push!(drift, Float64.(Array(dr)))
+        end
         th0 = time()
         # checkpoint on the host
         tim["download"] += @elapsed begin
@@ -366,7 +372,7 @@ function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, 
             BDd, BSd = R(BD), R(BS)                 # new values, same shapes: no recompile
         end
         tim["host"] += time() - th0
-        if device_boundary!(Ck, cfg, P, it, () -> (; states=chains, kinds, traces), () -> Dict{String,Any}("driver" => "mh"))
+        if device_boundary!(Ck, cfg, P, it, () -> (; states=chains, kinds, traces), () -> Dict{String,Any}("driver" => "mh", "residual_drift" => drift_matrix(drift)))
             stopped = true
             break
         end
@@ -380,13 +386,15 @@ function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, 
     ncall = max(1, nwarm + nprod - it0)
     tim["host"] -= tim["download"]
     ML.logmsg(cfg, "device profile per call (" * string(cfg.device_sweeps) * " operation sweeps, " * string(K) * " chains): " *
-                   join((@sprintf("%s %.3f s", k, tim[k] / ncall) for k in ("operation", "capacity", "draws", "download", "host")), ", "))
+                   join((@sprintf("%s %.3f s", k, tim[k] / ncall) for k in ("operation", "capacity", "rebuild", "draws", "download", "host")), ", "))
+    isempty(drift) || ML.logmsg(cfg, @sprintf("residual cache drift before the rebuilds: max %.3g MW", maximum(maximum, drift)))
     res = ML.chains_report(cfg, P, names, traces, kinds, PB, nwarm, nprod, t0)
     ML.HDF5.h5open(cfg.out, "r+") do f
         for (k, v) in tim
             f["device_profile/$k"] = v / ncall
         end
-        f["device_profile/compile_operation"] = tc1; f["device_profile/compile_capacity"] = tc2
+        f["device_profile/compile_operation"] = tc1; f["device_profile/compile_capacity"] = tc2; f["device_profile/compile_rebuild"] = tc3
+        f["device/residual_drift"] = drift_matrix(drift)
         f["run/restarts"] = rr
         f["run/resumed_at_checkpoint"] = snap === nothing ? -1 : snap.it
     end

@@ -42,7 +42,7 @@ for f in pl.fams
     (isempty(sel) || f in sel) || continue
     fv = Val((f,))
     swf(st, cp, sp, k, tabs, ns, rng) = D.run_sweeps(st, cp, sp, k, tabs, ns, rng, fv)
-    tc = @elapsed fc = @compile sync=true donated_args=:none swf(st, cp, sp, kk, tabs, ns, drng)
+    tc = @elapsed fc = D.ftcompile(() -> @compile sync=true donated_args=:none swf(st, cp, sp, kk, tabs, ns, drng))   # F32: no TF32
     r = Prof.profile_thunk_with_xprof(fc, st, cp, sp, kk, tabs, ns, drng; nrepeat=1, warmup=1,
                                       profile_dir=joinpath(outdir, string(f)))
     ts = r.profiling_result.runtime_ns / 1e9 / nsw
