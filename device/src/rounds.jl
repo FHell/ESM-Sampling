@@ -797,7 +797,7 @@ function plan(M::DeviceModel, S::DeviceState, β; κmin=1.0, families=FAMILIES, 
     for f in fams
         delete!(UC_COLS, f)
         haskey(ht[f], :gq) && (UC_COLS[f] = [any(q -> q > 0 && M.guc[q] > 0, ht[f].gq[:, j, :]) for j in 1:size(ht[f].gq, 2)])
-        haskey(ht[f], :gq) && redrawn(f) && (UC_COLS[f] = uc_cols_any(tp, M, ht[f].gq))     # sites redrawn later (sources.jl)
+        haskey(ht[f], :gq) && redrawn_sites(f) && (UC_COLS[f] = uc_cols_any(tp, M, ht[f].gq))     # sites redrawn later (sources.jl)
     end
     for f in fams                                         # memory cap: even chunks of at most b sites
         (f in FAMILIES || f in FAMILIES_FAST) && continue # plain: ≤ 40 points × 7 columns per site, far below

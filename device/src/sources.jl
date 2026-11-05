@@ -4,12 +4,14 @@
 # aggregate blocks (`BLOCK_GROUPS`) draw their sites on the host; `set_sources!` sets them for a run.
 # Between two device calls the driver redraws the sites of every family whose sites are random
 # (the sparse atoms and node pairs, the storage pairs, the `:slong` instants and lengths, the block
-# offsets and profiles, the dispatch shapes) into tables of the plan's shapes (`redraw_tables`): an
-# upload, no recompilation. The dense angle families redraw their directions in `tdir_refresh`.
+# offsets and profiles, the dispatch shapes, the `:spair` partners, the cell carriers) into tables of
+# the plan's shapes (`redraw_tables`): an upload, no recompilation. The dense angle families redraw their directions in `tdir_refresh`.
 
-"Families whose sites `redraw_tables` redraws."
-redrawn(f::Symbol) = haskey(SPARSE_FAMILIES, f) || haskey(SX_FAMILIES, f) || f in (:slong, :slongL) ||
-                     startswith(string(f), "sblk") || startswith(string(f), "dshp")
+"Families whose site sets vary between draws (their commitment flags cover every unit, `uc_cols_any`)."
+redrawn_sites(f::Symbol) = haskey(SPARSE_FAMILIES, f) || haskey(SX_FAMILIES, f) || f in (:slong, :slongL) ||
+                           startswith(string(f), "sblk") || startswith(string(f), "dshp")
+"Families whose host choices `redraw_tables` redraws: those, the `:spair` partners and the cell carriers."
+redrawn(f::Symbol) = redrawn_sites(f) || f in (:spair, :spair0) || startswith(string(f), "cell")
 
 """
     set_sources!(P, LM, ix; HA=nothing)

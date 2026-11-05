@@ -217,7 +217,7 @@ function uc_concat(us)
             out[f] = nothing
         else
             ref = first(v for v in vs if v !== nothing)
-            out[f] = cat((v === nothing ? 0.0 .* us[j].y0 : v for (j, v) in enumerate(vs))...; dims=4)
+            out[f] = catn([v === nothing ? 0.0 .* us[j].y0 : v for (j, v) in enumerate(vs)], 4)
         end
     end
     return NamedTuple{keys(us[1])}(Tuple(out[f] for f in keys(us[1])))

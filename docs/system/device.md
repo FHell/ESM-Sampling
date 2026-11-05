@@ -26,7 +26,7 @@ adaptation and bias refits, snapshots and I/O. Coarse levels are not ported.
 
 ## 2. State
 
-Node values only, all FP64, laid out `[chain, step, item]` with the chain index fastest
+Node values only, FP64 by default (the Float32 build below), laid out `[chain, step, item]` with the chain index fastest
 (`DeviceState`): angles $(C,T,N)$, dispatch utilizations and commitment $(C,T,U_g)$, states
 of charge $(C,T,U_s)$, link utilizations $(C,T,U_l)$, raw capacities $(C,U_g)$ and $(C,U_s)$.
 The weather enters as the net load `dnet` (load minus renewable output $Ak$, from the host)
@@ -116,6 +116,11 @@ own points:
 4. the (point, jump) entries of a site: every entry at exactly 0 is folded into one, the rest
    sorted with the jumps as payload (one stable sort), and only the first `cap` kept
    (`JUMP_CAP`, set by `plan` from the sites of three rounds: 1.25 × the largest count + 8);
+
+   > **Status: deviation.** The cap is fixed from the initial state; the count is state-dependent,
+   > so a site can exceed it later in a run and then stays at t = 0 (the exact guard: invariant, a
+   > lost move). `do_round` drops the guard flag, so the drivers do not report its rate; a per-family
+   > counter in the loop state and a more generous margin are open;
 5. the segment slopes from the slope right of 0 outwards, the potential integrated outwards from
    $c(0) = 0$; every partial sum accumulates from 0 outwards, so no value near 0 carries the
    round-off of far, large terms, and a slope within the round-off of its sum is 0 (a flat stretch
@@ -223,7 +228,13 @@ partners and units, `xpair` pairs) and are packed per step into rounds of disjoi
 order a, b, then the others: the SoC term of each step with the site's 0/1 profile of raised
 instants (host data), the node's balance slot at each step, and the G compensation columns at the
 two end steps with the nominal requirement (`soc_qadj4`). The level move uses the same template
-without compensation.
+without compensation. Per unit and round one level move and `SLONG_MOVES` = 4 plateaus, against
+the CPU's 32 plateaus per unit and sweep (`storage_long`); with the redraw between device calls
+every call gets new instants and lengths.
+
+> **Status: deviation.** The level move still carries the 2G generator columns and the commitment
+> sets with zero slopes (flagged as moving), which adds primaries and root searches for nothing; a
+> separate level family with SoC terms only would halve its cost.
 
 **Block profiles.** The profile table holds the plateau and optional shapes with zero ends
 (`set_profiles!`), each with a season class (0: any). A site draws its profile among those of its
@@ -505,9 +516,10 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | cell templates (all partition levels) | verified on arrays; compiled except `:cellpairu1` (see §3); scheduled with `families = :all` except `:cellpairu1` |
 | storage blocks, one unit (plateau, shapes) | verified on arrays ($L$ = 2–32) and compiled; scheduled with `families = :all` |
 | nominal storage requirement of the share-preserving `:tsoc`, `:sblk{L}` (CPU `soc_qadj`, [moves/storage.md](moves/storage.md)) | done (`soc_qadj4`); verified on arrays against the CPU |
-| long-range storage moves `slong`, `slevel` (`:slong`, `:slongL`) | verified on arrays against the CPU (`test_comp.jl` M, N); L drawn on 2 … T−1 (the CPU includes L = 1, the `tsoc` move) |
-| storage pairs `sxpair`, `sxlong` (`:sxpair`, `:sxpairn`, `:sxlong`, `:sxlongn`: ball templates, leak and `sx_qloss` compensation, footprint rounds) | verified on arrays against the CPU (`test_comp.jl` O, with the CPU walk extended to 2000 nats: its 40-nat stop truncates 11 % of these lines, whose potential falls again further out); B uniform among the partner slot's units (the CPU: ∝ min(k_A, k_B)); share-preserving only |
-| host sources and redraw of the random sites between device calls (`set_sources!`, `redraw_tables`) | done; redrawn tables conflict-free and run on arrays |
+| long-range storage moves `slong`, `slevel` (`:slong`, `:slongL`) | verified on arrays against the CPU (`test_comp.jl` M, N) and compiled (14 s `:slong`, 16 s `:slongL` at T = 1460, after removing the varargs concatenates below); L drawn on 2 … T−1 (the CPU includes L = 1, the `tsoc` move) |
+| storage pairs `sxpair`, `sxlong` (`:sxpair`, `:sxpairn`, `:sxlong`, `:sxlongn`: ball templates, leak and `sx_qloss` compensation, footprint rounds) | verified on arrays against the CPU (`test_comp.jl` O, with the CPU walk extended to 2000 nats: its 40-nat stop truncates 11 % of these lines, whose potential falls again further out); B uniform among the partner slot's units (the CPU: ∝ min(k_A, k_B)); share-preserving only; compiled (CPU backend) against arrays |
+| host sources and redraw of the random sites between device calls (`set_sources!`, `redraw_tables`) | done (`test_redraw.jl`: plan shapes, conflict-free, new and reproducible draws, under 0.01 % of the sites dropped); the plan's own draw and the redraws come from restart-seeded streams |
+| one compile pass over every family (Reactant CPU backend against arrays, `test_reactant_fams.jl` A and B, 2 rounds × 60 sites) | done: every family equal to the arrays to ≤ 1e-13 relative; 4–52 s per family once the process has compiled the traced code (the first compile in a process adds 100–150 s of Julia compilation); peak 4.8–7.7 GB per test process; `:cellpairu1` see §3 |
 | memory cap of a round (`DENSE_BUDGET`) | done |
 | slope-jump form of the line sampler, per-family choice (`JUMP_RATIO`) | done; verified on arrays against the CPU and the dense form, Reactant (CPU backend) against arrays |
 | term axis (program size independent of the term count); stacked builders (one gather per field) for the compensated, block, cell and dense angle families | done |
@@ -517,17 +529,22 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | replica–Langevin capacity step: score, step in $w$, dispatch following (fixed output, kop curve), replica batch, weather upload with compensation | done; verified on arrays against the CPU and the prototype, compiled (CPU backend) against arrays |
 | replica driver on the CPU sampler (`replicas`, `replica_*`, `langevin_*`, `tilt_*`; weather process, gate, probe and adaptation, weights, snapshot layout) | done; verified on arrays against `run_replicas`; compiled check written (`test_replica_compiled.jl`), not run |
 | snapshots and resume of both drivers, exit code 75 | done; smoke-tested through `hpc/run.sh` (device mode, CPU backend) |
-| sparse angle templates: Haar atoms of the proxy and learned modes (`:tcut`, `:tcutw`, `:tcutL`, `:tcutLw` for `tcut`, `acut`, `tcutL`, `acutL`) | verified on arrays against the CPU (`test_comp.jl` H, I) |
-| local re-routing templates (`:xloc`, `:xlocc`, `:xpair`; `tline` as `:tdir`) | verified on arrays against the CPU (`test_comp.jl` H, I); generator units only (the CPU draws any unit of `LM.units`, which are the generators) |
-| block aggregates (cell–class groups: `:sblkg{L}`, `:sblkgL{L}`) | verified on arrays against the CPU (`test_comp.jl` K, L) |
+| sparse angle templates: Haar atoms of the proxy and learned modes (`:tcut`, `:tcutw`, `:tcutL`, `:tcutLw` for `tcut`, `acut`, `tcutL`, `acutL`) | verified on arrays against the CPU (`test_comp.jl` H, I) and compiled |
+| local re-routing templates (`:xloc`, `:xlocc`, `:xpair`; `tline` as `:tdir`) | verified on arrays against the CPU (`test_comp.jl` H, I); generator units only (the CPU draws any unit of `LM.units`, which are the generators); compiled |
+| block aggregates (cell–class groups: `:sblkg{L}`, `:sblkgL{L}`) | verified on arrays against the CPU (`test_comp.jl` K, L) and compiled |
 | learned storage shapes (profile columns per season class) | done |
-| learned dispatch shapes (`adshape`: `:dshp{L}`) | verified on arrays against the CPU (`test_comp.jl` J) |
-| dense angle directions `:tdir`, `:tdirL`, `:tdir0` (`tmode`, `tline`, `amode` and variants) | verified on arrays against the CPU (`test_comp.jl` cases F, G); scheduled with `families = :all` and `adapt = true` |
+| learned dispatch shapes (`adshape`: `:dshp{L}`) | verified on arrays against the CPU (`test_comp.jl` J) and compiled |
+| dense angle directions `:tdir`, `:tdirL`, `:tdir0` (`tmode`, `tline`, `amode` and variants) | verified on arrays against the CPU (`test_comp.jl` cases F, G) and compiled; scheduled with `families = :all` and `adapt = true` |
 | adaptation on the host with table uploads (modes, shapes, response coefficients) | done (`adapt = true`); the learned `kpeak` variant missing |
 | weather moves with compensation as a device family | not planned: the weather moves to a prior-reversible pCN process on the host, the capacities to a Langevin step ([../worklog.md](../worklog.md)); `kop` and the device bias (`bias_dev.jl`, kept as it is until it is retired) are not extended |
 | Float32 build of the whole program (`ESMDevice.F32`) | done; compiles and runs (no exactness tests by design) |
-| replica–Langevin sampler ([sampler.md](sampler.md) §11): the weather process per replica (pCN, regime windows), the compensated initialisation, the capacity scores, the Langevin update, the dispatch-following maps (fixed output, kop curve), the gate and the probe; replicas as a batch dimension | missing; CPU reference `src/replicas.jl` with explicit-noise building blocks (`pcn_weather`, `regime_window`, `langevin_update`) |
 | fused kernels (planned option, below), tiling, multi-GPU, full-Europe memory plan | missing |
+
+> **Status: deviation.** Trace-time state lives in module globals set by `plan` and
+> `set_sources!` (`UC_COLS`, `JUMP_CAP`, `JUMP_FAMILIES`, `CELLINFO`, `CELL_BUCKETED`, `TDIR_*`,
+> `SPARSE_SOURCE`, `BLOCK_GROUPS`, `SX_SOURCE`, `PROFILES`, `DSHAPES`, `SCHED_FAMILIES`): two plans in
+> one process change what a later compile bakes in. They are to become fields of the plan and
+> static parts of the tables passed to `build`.
 
 **Fused kernels (planned option, not built).** XLA materializes the intermediates of a round
 (points × columns of every site, the sorted jump lists) in device memory, and the restructuring
@@ -567,10 +584,16 @@ SIGTERM does not stop a Julia process inside the MLIR passes). Then:
   loaded, also on the CPU) and `raise = true` lower it to HLO for the CPU backend; not every kernel
   is raisable.
 
-The probe scripts used for `:slong` take a family, a site count and a coarser year
-(`setup40(; levels = [(10, h), (40, h)])`, T = 8760/h).
+`device/scripts/compile_probe.jl` does the first two for one family, with a site count and a
+coarser year (`setup40(; levels = [(10, h), (40, h)])`, T = 8760/h), so a size dependence shows
+between two values of T.
 
-**Reactant constraints met so far.** Inside `@trace for`, every captured scalar becomes
+**Reactant constraints met so far.** A varargs `cat(xs...)` of traced arrays is inferred by
+Reactant's interpreter at a cost about quadratic in the operand count (minutes at a few hundred
+operands; the first `:slong` compile at T = 1460 ran for more than 40 minutes at 15 GB): stack
+with `catn` (one `Ops.concatenate` of a vector) or a broadcast, and keep per-slot results stacked
+(`SlotChanges`). `all(f, v)` and `any(f, v)` over a `Vector` of traced arrays are traced
+reductions: use plain loops. Inside `@trace for`, every captured scalar becomes
 traced, so structs captured by a loop are type-parametric in their scalars and static flags
 are passed as `Val`; a traced loop index used for indexing needs `@allowscalar`; traced
 ranges (`v[q:q]`) fail on Reactant 0.2.304; `abs(a*b)` of two distinct block arguments is

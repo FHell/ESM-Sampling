@@ -227,6 +227,7 @@ function device_setup(cfg::ML.Config; families=FAMILIES_FAST, budget=DENSE_BUDGE
     # `only`: plan only these families (and the plain and :spair families, whose split rules read the list)
     only === nothing || (fams = Tuple(f for f in fams if f in only || f in FAMILIES_FAST || f in (:spair0, :spair)))
     pl = plan(M, S, P.βv; cls=proxy_class(S.dnet, wsh), families=fams, cells=cell_info(P, LM, ix), budget=budget, jump=jump,
+              rng=MersenneTwister(ML.restart_seed(cfg, restarts) + 303),     # host choices of the schedule (redrawn later)
               backend=cfg.device_backend)
     T, N = M.T, M.N
     Ug, Us, Ul = length(ix.gidx), length(ix.sidx), length(M.kcap)
@@ -318,6 +319,7 @@ function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, 
     sync(x) = (Reactant.synchronize(x); x)
     stopped = false
     hr = MersenneTwister(cfg.seed + 101)            # host draws of the refreshed directions
+    sr = MersenneTwister(ML.restart_seed(cfg, rr) + 202)   # host draws of the redrawn sites (restart-seeded)
     for it in it0+1:nwarm+nprod
         if merged                                   # "operation" then holds sweeps and capacity pass
             tim["operation"] += @elapsed begin
@@ -361,7 +363,7 @@ function run_device(cfg::ML.Config; merged::Bool=false, families=FAMILIES_FAST, 
                 tabs = merge(tabs, R(new[2]))       # same shapes: no recompilation
             end
         end
-        rd, _, _ = redraw_tables(pl, M, hr)           # new random sites (sources.jl): same shapes, an upload
+        rd, _, _ = redraw_tables(pl, M, sr)           # new random sites (sources.jl): same shapes, an upload
         isempty(rd) || (tabs = merge(tabs, R(rd)))
         if refit                                    # the target changed: re-pack the bias aggregates
             chains .= [ML.evaluate!(P, x) for x in chains]    # in place: `packb` reads this vector
