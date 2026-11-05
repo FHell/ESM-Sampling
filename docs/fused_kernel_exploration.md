@@ -55,6 +55,13 @@ machine (Reactant 0.2.304, CUDA.jl 6.2.2, driver 580.95, RTX 3050 Ti):
   check runs on the GPU only;
 * KernelAbstractions' own CPU backend cannot run the kernel either (`@synchronize` inside
   control flow is not supported there);
+* a kernel program compiled on a Reactant CPU client *without* raising does run: Reactant lowers
+  the kernel call to a host LLVM module (`llvm.` ops in the module, no `kernel_call`). This works
+  for the barrier-free one-thread-per-site kernel (§6) and aborts the process for a kernel with
+  `@synchronize` (LLVM cannot select the nvvm barrier intrinsic for the host);
+* `@private` scratch (`MArray`) works on the GPU route; a closure that assigns a variable of the
+  enclosing function's name boxes it, which shows up as "dynamic function invocation (call to +)"
+  in the kernel compile;
 * `@Const` arguments support linear indexing only (2-d indexing of a `Const` falls back to a
   dynamic call and fails to compile); the kernel indexes linearly;
 * `@index(Local, Linear)` is not an `Int` on the device: a helper declared with `li::Int` fails
@@ -161,6 +168,32 @@ Hillis–Steele scans with n log n additions) is what it pays for; the XLA versi
 memory traffic of its materialized (N, C, B) tensors, which a datacenter GPU does not make
 cheaper, while it makes the FP64 arithmetic 32× cheaper relative to FP32.
 
+### 3.1 Other properties of the `tpot` kernel: compile time, memory, program size
+
+Measured in one warm process (`Reactant.Profiler.@timed_compile`: tracing, MLIR passes, XLA;
+the compiled executable's memory statistics through `PjRtLoadedExecutableGetCompiledMemoryStats`,
+the device allocator's peak through `XLA.allocatorstats` after `PjRtDeviceClearMemoryStats`, with
+preallocation on; op count = `stablehlo`/`enzymexla`/`chlo` ops of the optimized module before
+XLA). Both rounds at 400 and 2 000 sites:
+
+| property | XLA round | fused round |
+|---|---|---|
+| compile, warm (trace / MLIR / XLA), 400 sites | 10.7 s (0.8 / 7.4 / 2.5) | 10.8 s (0.75 / 8.2 / 1.9) |
+| compile, warm, 2 000 sites | 11.3 s (1.2 / 7.3 / 2.7) | 10.7 s (1.5 / 7.2 / 2.0) |
+| compile, cold process | 171 s, of which 161 s Julia compiling the traced code | 17.1 s after the XLA round (shares its code; 8.2 s tracing incl. the kernel's GPUCompiler pass) |
+| ops of the optimized module (both sizes) | 3 359 | 2 678 (−20 %); module text 645 KB vs 290 KB (the kernel's LLVM bitcode is embedded) |
+| temporaries / peak, 400 sites | 21.2 / 44.6 MB | 18.8 / 42.9 MB |
+| temporaries / peak, 2 000 sites | 114.2 / 142.2 MB | 93.9 / 131.5 MB |
+| allocator peak above the resident buffers, 400 / 2 000 | 24.9 / 117.9 MB | 22.5 / 97.6 MB |
+
+(Arguments 23.3 / 37.4 MB, outputs 1.2 MB, the same on both sides.) The compile time is the
+same: the MLIR passes dominate and are the same program apart from the draw; the XLA stage is
+0.6–0.7 s shorter with the kernel. The temporaries per site are 57 KB in XLA and 47 KB fused
+(about 7.4 and 6.4 entry tensors of 920 × 8 B): the kernel removes the sort's and the scans'
+(N, C, B) tensors but still takes the entries (qa, Ja) as materialized inputs, and the per-column
+part's intermediates are the larger share. For `DENSE_BUDGET` this means about 18 % more sites
+per round at the same memory; it does not change what fits per GPU in a meaningful way.
+
 ## 4. Next steps
 
 1. Timings on the cluster (A100/H100): the script as is, `C=4` and the plan's round size; the
@@ -189,6 +222,12 @@ cheaper, while it makes the FP64 arithmetic 32× cheaper relative to FP32.
    reference, the package's array draw and the package's XLA draw on the same inputs and mock
    uniforms; FP64 and the GPU's libm differ from the CPU's by ulps, and the XLA draw's own
    GPU-vs-array difference (about 2e-12 relative in t) sets the scale of "equal to round-off".
+   Barrier-free kernels (§6) additionally compile and run on the CPU backend without raising,
+   which restores the normal contract (arrays → CPU backend → GPU) for them.
+7. The dense kernel on `gen0` and `theta` (the same pattern as `soc`: a per-site function over
+   the stacked term fields, the family's primaries and quantities): not started. Raising the
+   `soc` kernel to HLO would need a scratch without `alloca`/`memcpy` (tuples, fixed-count loops
+   over `NP`) and is worth one attempt, since the raised form would also run as XLA fusions.
 
 ## 5. Recommendation
 
@@ -206,3 +245,66 @@ the per-column term evaluation into the same block (step 5), removes the materia
 tensors that the XLA form is bound by and is where the "1–3 ns per move" estimates of
 [system/performance.md](system/performance.md) come from; it is a one-to-two-week effort per
 term structure, and the verified global part is its foundation.
+
+The one-thread-per-site kernel of the dense families (§6) is the easier and better-behaved kind:
+the same draw to 1e-14, a fifth of the memory, a quarter of the ops, half the compile time, and
+a CPU-backend check without raising. Its speed is the same as XLA's on this GPU because both are
+bound by the same FP64 transcendentals; the memory and launch savings it brings are what counts
+on a full-rate FP64 GPU, which again only the cluster can show.
+
+## 6. A second kernel: the dense draw of `soc`, one thread per site
+
+`device/experimental/fused_soc.jl` (kernel `soc_draw_kernel!`, per-site code `soc_site!`,
+reference `soc_draw_ref`, wrapper `sample_soc_fused`, round `do_round_soc`) and the script
+`soc_fused.jl`. The plain SoC family is the other regime: a site is 2 SoC columns (one moving
+argument each) and 2 balance slots, its dense draw 1 + 4 primaries, 6 single roots of the SoC
+quantities, 2 roots per slot of the residual on the refined grid (the two-stage search of
+`dense_points`), 15 points, the inverse CDF over 17. One thread does the whole draw with the
+points in per-thread scratch (`@private`, an `MArray`), the term values recomputed where needed,
+no shared memory and no barriers; the sort is an insertion sort with fixed trip counts, the roots
+follow `rootsK`'s rules (the smallest distinct sign changes, the ray-segment conditions,
+`RAYMAX`), the potential is evaluated at the points directly and the draw is `sample_core`'s
+arithmetic. The static column metadata (which arguments move, the slots) is passed as `Val`s.
+
+Two pitfalls found: a closure that assigns a variable of the enclosing function's name (the
+accumulator `acc`) captures and boxes it, which the GPU compiler reports as dynamic calls to `+`
+(the CPU reference ran at 100 µs per site with 18 KB of allocations; 2.4 µs and none after
+renaming); and the roots of successive quantities need their own write offset in the point list.
+
+Results (`C=2 H=24`, the plan's `soc` rounds: 12 rounds of 7 280 sites, 14 560 per round; mock
+uniforms):
+
+| check | result |
+|---|---|
+| arrays: the reference vs `line_draw` (the package's dense draw) | bitwise equal on all 14 560 sites; the 15 points per site bitwise equal to `dense_points` |
+| GPU kernel vs the reference | 6.1e-14 relative (8 615 sites differ bitwise: the GPU's libm and FMA contraction) |
+| GPU kernel vs the XLA draw on the GPU | 1.1e-14 (494 sites differ bitwise) |
+| the XLA GPU draw vs its array form | 6.1e-14 (8 717 differ bitwise) |
+| `do_round_soc` vs `do_round` (GPU) | t 1.1e-14; θ, ω, uc, u exactly equal; e 1.1e-14; r 4.3e-14 relative |
+| `raise = true` on the CPU backend | fails (the pass pipeline "all" fails; the dumped module stops at LLVM-level ops of the per-thread scratch and the tuples: 15 `llvm.alloca`, 17 `llvm.intr.memcpy`, 15 bounds-check traps, and the loops over the point count are not affine) |
+| the CPU backend without raising (Reactant compiles the kernel as a host LLVM module on a CPU client) | compiles (0.9 s) and runs: 3.2e-14 from the reference (11 149 sites differ bitwise: XLA's CPU libm), guards equal |
+
+The host route is the project's normal contract for this kind of kernel (arrays → compiled on
+the CPU backend → GPU), without raising. It is limited to kernels without barriers: the `tpot`
+kernel on the same route aborts the process in LLVM's host code generation ("Cannot select:
+intrinsic llvm.nvvm.barrier.cta.sync.aligned.all"), so shared-memory/barrier kernels keep the
+Julia reference as their array level and the GPU as their only compiled check.
+
+| property (14 560 sites) | XLA | kernel |
+|---|---|---|
+| draw alone, min of 5 | 6.63 ms (0.46 µs per site) | 6.76 ms |
+| round, min of 5 | 6.97 ms (0.48 µs per site) | 7.00 ms |
+| compile, warm (trace / MLIR / XLA) | round 3.7 s (0.63 / 1.9 / 1.1); draw 10.1 s with the first Julia compile of the dense code | round 1.8 s (0.25 / 1.4 / 0.21); draw 3.1 s (1.2 incl. GPUCompiler / 1.4 / 0.43) |
+| ops of the optimized module | 1 119 | 286 (−74 %) |
+| temporaries / peak | 18.7 / 26.8 MB | 3.7 / 11.9 MB |
+| allocator peak above the resident buffers | 21.6 MB | 6.7 MB |
+
+(A build-only program takes 0.15 ms, a trivial program 0.13 ms: the launch overhead is not what
+the 6.6 ms are.) The draw costs the same in both forms on this GPU, 0.46 µs per site: the dense
+form evaluates the same term values and the same transcendental functions at the same 17 points
+as the kernel, and that FP64 arithmetic (about 70 `log`/`exp`/`expm1`/`log1p` per site) is the
+bound at the 1/64 FP64 rate, not the launches or the memory traffic the kernel removes. The
+kernel's gains here are the other properties: a fifth of the temporaries, a quarter of the ops,
+half the compile time, and the same draw within 1e-14. On a GPU with full-rate FP64 the
+arithmetic shrinks 32× against the memory traffic, and the XLA form's 18.7 MB of temporaries and
+about 1 100 ops (some 30 launches) become the cost; that is the case to measure on the cluster.
