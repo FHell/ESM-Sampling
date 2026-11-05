@@ -213,9 +213,10 @@ shapes (`tdir_refresh`), so the program is not recompiled.
 **Host sources and redraws** (`device/src/sources.jl`). The sparse angle sites (`SPARSE_SOURCE`:
 the Haar pieces of the flow basis's transport modes and, with the host adaptation, the learned
 pieces), the cell–class groups (`BLOCK_GROUPS`) and the storage pairs (`SX_SOURCE`) are set by
-`set_sources!` in `device_setup`. Between device calls `redraw_tables` draws the sites of every
+`set_sources!` in `device_setup` and `replica_device_setup`. Between device calls `redraw_tables` draws the sites of every
 family with random sites again (sparse angle, storage pairs, `:slong` instants and lengths, block
-offsets and profiles, dispatch shapes) into tables of the plan's shapes: every drawn round cut to
+offsets and profiles, dispatch shapes, `:spair` partners, cell carriers) into tables of the plan's
+shapes (both drivers, at every host checkpoint; the replica driver in `replica_redraw!`): every drawn round cut to
 the plan's B sites, the rest into spare rounds, sites beyond the shape dropped (well below 1 % at
 40 nodes); a redraw that does not fit keeps the old table. The commitment columns of these
 families are flagged by generator index (`uc_cols_any`), so a redraw never needs a column the

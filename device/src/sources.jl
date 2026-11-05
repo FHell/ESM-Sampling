@@ -83,3 +83,11 @@ function redraw_tables(pl, M::DeviceModel, rng)
     end
     return (; out...), dropped, (; hosts...)
 end
+
+"Replica driver: redraw the random sites of its plan and upload them (`redraw_tables`; same shapes)."
+function replica_redraw!(RD)
+    dev = RD.dev
+    rd, _, _ = redraw_tables(dev[:pl], RD.M, dev[:srng])
+    isempty(rd) || (dev[:tabs] = merge(dev[:tabs], dev[:up](rd)))
+    return nothing
+end

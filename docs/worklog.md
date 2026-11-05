@@ -71,7 +71,7 @@ concrete next steps. Update it at the end of every work session.
   prior-reversible pCN process); marked "not planned" in device.md and moves/README.md.
 - All device families are built (storage pairs last); open from the review: the guard rate of
   the slope-jump cap (M3), the trace-time globals into the plan (M4), a level family for
-  `slevel` without generator columns (L2), the site redraws in the replica driver.
+  `slevel` without generator columns (L2).
 - Next device restructuring steps (ledger E28): the slot-point sort of the slope-jump form (a
   payload sort per balance slot, now one of the larger kernels), the per-column evaluation at the
   slot points (columns × slot points), the dense form of the plain families (unchanged).
@@ -160,8 +160,8 @@ concrete next steps. Update it at the end of every work session.
   `redraw_tables` between device calls for every family with host-drawn choices (sparse sites,
   storage pairs, `slong` instants and lengths, block offsets and profiles, dispatch shapes,
   `spair` partners, cell carriers), in the plan's shapes; plan and redraws restart-seeded;
-  `test_redraw.jl`. Answers review finding H1 for the Metropolis driver (the replica driver does
-  not redraw yet).
+  `test_redraw.jl`. Both drivers redraw at every host checkpoint (`replica_redraw!` in the replica
+  driver); review finding H1.
 - Compile pass (Reactant CPU backend against arrays, `test_reactant_fams.jl` A and B): every family
   equal to round-off. Broke and fixed: `:xlocc`, `:dshp{L}` (`all(f, ::Vector)` of traced arrays
   is a traced reduction); `:slong`/`:slongL`/`:sxlong` (varargs `cat` over O(T) operands: more

@@ -29,22 +29,8 @@ function compcfg(name)
 end
 cfg = compcfg("programs")
 
-# ---------------------------------------------------------------- host sources of the host-drawn sites
-# (sources.jl: sparse atoms, cell–class groups, storage pairs; random dense directions for :tdir…),
-# from a set-up of the same model (the replica set-up does not set them)
-let P0 = ML.setup(cfg; rng=MersenneTwister(cfg.seed))[1]
-    L0 = ML.nlevels(P0) - 1
-    LM0 = ML.LocalModel(P0, L0; cell_power=cfg.cell_level_power, xr_partner=cfg.xloc_partner_hops, xr_ball=cfg.xloc_ball_hops)
-    _, ix0 = D.pack(P0, L0)
-    D.set_sources!(P0, LM0, ix0)
-    D.TDIR_CHAINS[] = cfg.nchains * cfg.replicas
-    sys = P0.E.sys
-    D.TDIR_SOURCE[] = (fam, τ, rng, c) -> begin
-        rand(rng) < 0.3 && return D.tline_dir(sys, LM0, rand(rng, eachindex(sys.line_s)))
-        d = randn(rng, sys.N); d .-= sum(d) / sys.N; d ./= sqrt(sum(abs2, d))
-        D.tdir_g(sys, d)
-    end
-end
+# The host sources of the drawn sites (sparse atoms, cell–class groups, storage pairs) are set by
+# the replica set-up (`set_sources!`); the dense angle families have no direction source here.
 
 # ---------------------------------------------------------------- inputs: a replica run on arrays after 3 steps
 RD = D.replica_device_setup(cfg; families=FAMS, compile=false)

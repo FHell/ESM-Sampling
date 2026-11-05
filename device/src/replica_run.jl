@@ -210,8 +210,9 @@ function replica_device_setup(cfg::ML.Config; families=FAMILIES_FAST, budget=DEN
     S = to_device(P, M, ix, slots)
     wsh = load_shares(P, slots)
     fams = families === :all ? device_families(M, cell_info(P, LM, ix)) : families
+    set_sources!(P, LM, ix)                                             # host sources of the drawn sites (sources.jl)
     pl = plan(M, S, P.βv; cls=proxy_class(S.dnet, wsh), families=fams, cells=cell_info(P, LM, ix), budget=budget, jump=jump,
-              backend=cfg.device_backend)
+              backend=cfg.device_backend, rng=MersenneTwister(ML.restart_seed(cfg, rr) + 303))
     Ug, Us, Ul = length(ix.gidx), length(ix.sidx), length(M.kcap)
     nr = length(ren_units(P))
     dims = Val((C, M.T, M.N, Ug, Us, Ul, Mp, np))
@@ -228,6 +229,7 @@ function replica_device_setup(cfg::ML.Config; families=FAMILIES_FAST, budget=DEN
     dev[:KP], dev[:RP], dev[:LP] = R(KParams(M)), R(RP), R(LPh)
     dev[:rg], dev[:sg] = map(R, rg), map(R, sgp)
     dev[:wsh] = R(wsh)
+    dev[:pl], dev[:up], dev[:srng] = pl, R, MersenneTwister(ML.restart_seed(cfg, rr) + 202)   # site redraws (sources.jl)
     dev[:drng] = rngd(device_rng_seed(cfg, rr))                         # operation sweeps
     dev[:lrng] = rngd(device_rng_seed(cfg, rr) .+ UInt64[0, 1])        # Langevin noise
     dev[:R] = R
@@ -539,6 +541,7 @@ function run_replicas_device(cfg::ML.Config; families=FAMILIES_FAST, budget=DENS
             th = time()
             RD.tim["rebuild"] += @elapsed (drift = replica_rebuild!(RD))
             RD.tim["download"] += @elapsed replica_download!(RD)
+            RD.tim["host"] += @elapsed replica_redraw!(RD)         # new random sites, same shapes (sources.jl)
             ncl = host(RD.dev[:nclip])
             for c in 1:nch
                 push!(traces[c], ML.replica_monitor(P, RD.LM, sets[c]))
