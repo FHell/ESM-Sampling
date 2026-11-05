@@ -37,8 +37,9 @@ in ([device_review.md](device_review.md)). Next, in order:
 2. Review items left: M3 (slope-jump cap from the initial state, no guard counter), M4
    (trace-time module globals → fields of the plan), L2 (`slevel` zero-slope columns;
    `SLONG_MOVES` 4 vs the CPU's 32).
-3. Decide whether `families = :all` includes the newer families (sparse, aggregates, dispatch
-   shapes, slong, storage pairs): longer compiles (≈ the sum of the per-family times).
+3. `families = :all` is to include the newer families (sparse, aggregates, dispatch shapes,
+   slong, storage pairs; user, 2026-11-05): longer compiles (≈ the sum of the per-family times)
+   are accepted. Not done yet; H5's `FAMILIES=all` lines then cover the full kernel.
 4. Campaign H5 (GPU throughput) is prepared (`campaigns/H5/`); its run set follows 1–3.
 Rules: arrays first, one compile pass, every compile under a timeout, no local GPU timings
 (memory `device-compile-once`).
@@ -55,6 +56,14 @@ defect, `data_sources.md` §2); rebuild them with `scripts/prepare_data.py` (as 
 old ones in `data/processed/backup/`. The scratchpad builds of the last session are gone.
 Worktrees of finished agents under `.claude/worktrees/` (all merged) can be removed after a
 look at their untracked `results/`; also `.claude/worktrees/gpu-timing`.
+
+**Cost accounting (to do before comparing campaigns).** Each attempt's `run.toml` has the
+allocated cores, `elapsed`, `total_cpu` (sacct), `max_rss` and the energy, and the LP summaries
+have their solve times and threads; nothing sums them. Wanted (user, 2026-11-05): CPU hours per
+line and per campaign, to compare the LP baselines (H2, H2b) with the sampler (H4, H5) — a
+`campaigns/<id>/cost.csv` from `hpc/collect.sh` with the allocated core-hours (cores × elapsed,
+what fair share charges) and the consumed CPU hours, summed over all attempts including
+preempted ones (attempts killed without an end record: from `sacct` by job id), plus energy.
 
 **Open decisions with the user:** the CO₂ treatment and a common weather source for the H2b
 comparison (`validation.md` §2.7); retiring the bias code (conditions in this file's to-dos;
@@ -91,6 +100,8 @@ default).
   (device.md §7).
 
 **Decisions taken:**
+- `families = :all` includes every device family, the newer ones too (user, 2026-11-05).
+- CPU hours are part of every campaign's results, to compare LP baselines and sampler (user, 2026-11-05).
 - PyPSA is upstream (user, 2026-11-04): the PyPSA reference is PyPSA's own `optimize`/`optimize_mga`
   on the network we import from (H2b); PyPSA's time series are imported into a model file so
   that H2 and H2b share the weather; our Julia MGA is held as a secondary check. Built: H2b on
