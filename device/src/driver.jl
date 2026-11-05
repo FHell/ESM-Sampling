@@ -101,13 +101,12 @@ const BLOCK_SCHED = BLOCK_LENGTHS
 Operation families of a device run: the plain families, then the compensated families (`:spair0`,
 `:spair`; LINEAR `:tsocL`/`:tpotL` when the model needs requirement tracking (line losses, lossy
 links), else share-preserving `:tsoc`/`:tpot`), the storage blocks of `BLOCK_SCHED` (`:sblkL…` or
-`:sblk…` likewise), the level-bucketed cell templates of `ci` without `:cellpairu1` (its compile
-needs ≈ 10 GB, docs/system/device.md §3) and the dense angle directions (`:tdir` or `:tdirL`, and
+`:sblk…` likewise), the level-bucketed cell templates of `ci` and the dense angle directions (`:tdir` or `:tdirL`, and
 `:tdir0`; they have sites only with a direction source, `TDIR_SOURCE`).
 """
 function device_families(M::DeviceModel, ci)
     tr = tracking(M)
-    cells = ci === nothing ? () : Tuple(f for f in cell_families(ci) if f != pairsym(1, true))
+    cells = ci === nothing ? () : Tuple(cell_families(ci))
     return (FAMILIES_FAST..., :spair0, :spair, (tr ? (:tsocL, :tpotL) : (:tsoc, :tpot))...,
             (blksym(L, tr) for L in BLOCK_SCHED)..., cells..., (tr ? :tdirL : :tdir), :tdir0)
 end

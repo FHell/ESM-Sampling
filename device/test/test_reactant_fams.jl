@@ -2,7 +2,8 @@
 # the same rounds, the same uniforms, one compiled program per family; prints the compile time and the
 # largest relative difference of the loop state. 40 nodes × 6 h, all model terms (CASE=A, LINEAR
 # families) or without line losses and lossy links (CASE=B, share-preserving), 2 chains.
-#   FAMS=tsoc,tpot (default: every family of the case), NSITE (default 60) sites per round, NROUND (2).
+#   FAMS=tsoc,tpot (default: every family of the case), NSITE (default 60) sites per round, NROUND (2),
+#   H (6: hours per step).
 # Run: cd device && nice -n 19 julia --project=. -t 4 test/test_reactant_fams.jl
 include("setup40.jl")
 using Test, Random
@@ -14,7 +15,8 @@ const NROUND = parse(Int, get(ENV, "NROUND", "2"))
 const CASE = get(ENV, "CASE", "B")
 weyl(n, off) = [mod(0.5 + (off + k) * 0.6180339887498949, 1.0) for k in 1:n]
 
-P, M, ix, S, ss = setup40(; C=2, losses=CASE == "A", link_losses=CASE == "A")
+const H = parse(Int, get(ENV, "H", "6"))                      # H > 6: a coarser year (T = 8760/H)
+P, M, ix, S, ss = setup40(; C=2, losses=CASE == "A", link_losses=CASE == "A", levels=H == 6 ? nothing : [(10, H), (40, H)])
 LM = ML.LocalModel(P, ss[1].ℓ)
 ci = D.cell_info(P, LM, ix)
 C = 2
@@ -42,8 +44,7 @@ end
 deffams = CASE == "A" ? (:spair, :tsocL, :tpotL, :sblkL2, :sblkL8, :sblkgL2, :tdirL, :tdir0, :tcutL, :tcutLw, :xloc, :xpair, :dshp4, :slongL) :
           (:gen0, :pair0, :soc, :link, :theta3, :theta5, :theta, :gen, :uc, :pair, :spair0, :spair, :tsoc, :tpot, :sblk2, :sblk4, :sblk8,
            :sblk16, :sblk32, :sblkg2, :sblkg8, :tdir, :tdir0, :tcut, :tcutw, :xloc, :xlocc, :xpair, :dshp2, :dshp8, :slong,
-           :sxpair, :sxpairn, :sxlong, :sxlongn, :cell1, :cellu1, :cell2, :cellu2, :cell3, :cellpairu2, :cellpairu3)
-# :cellpairu1 (≈ 10 GB to compile, docs/system/device.md §3) only on request: FAMS=cellpairu1
+           :sxpair, :sxpairn, :sxlong, :sxlongn, :cell1, :cellu1, :cell2, :cellu2, :cell3, :cellpairu2, :cellpairu3, :cellpairu1)
 fams = haskey(ENV, "FAMS") ? Tuple(Symbol.(split(ENV["FAMS"], ","))) : deffams
 
 @testset "Reactant (CPU backend) = Julia arrays, case $CASE" begin

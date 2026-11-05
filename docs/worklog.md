@@ -87,7 +87,6 @@ concrete next steps. Update it at the end of every work session.
   record index; in device replica runs (records every `device_sweeps` steps) it also counts warmup
   probes. Small fix in src/replicas.jl (pass the step of the first production record).
 - Hand-written fused kernels: a planned option in device.md §7; not started.
-- `:cellpairu1`: compile with the stacked builders to be measured; still out of the run set.
 - Device form of the replica sampler: the CPU reference is `src/replicas.jl` (weather process
   with explicit noise, `langevin_update`, `follow_capacities!`; architecture.md §2); it replaces
   the Metropolis capacity pass and the planned `kop` port and per-carrier scales.
@@ -167,6 +166,11 @@ concrete next steps. Update it at the end of every work session.
   is a traced reduction); `:slong`/`:slongL`/`:sxlong` (varargs `cat` over O(T) operands: more
   than 40 min and 15 GB at T = 1460, now 12 s; `catn`, stacked `SlotChanges`, review H2).
   `device/scripts/compile_probe.jl` and a "Debugging compile time" paragraph in device.md §7.
+  `:cellpairu1` now compiles in about 25 s (3.8 GB) and is in `families = :all`.
+- Compiled Langevin section (`test_langevin_dev.jl`) passes on the merged code; the device smoke
+  run through `hpc/run.sh` (`device_smoke.toml`, CPU backend): SIGTERM after the first step gave
+  the snapshot, exit 75, status `checkpointed`; the same run id resumed (restart 1, step 8/12)
+  and finished with exit 0.
 - Open from the review (device.md §7): the slope-jump cap from the initial state and its guard
   rate (M3), trace-time globals into the plan (M4), a separate level family for `slevel` (L2).
 

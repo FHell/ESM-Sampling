@@ -265,11 +265,11 @@ terms the device uses the linear rule.
 **Linear rule.** Its coefficients are host tables (`StaticParams.β1`, `β2`, equal split by
 default), with the proxy class `ChainParams.cls` from `proxy_class`.
 
-> **Status: deviation.** The cell pair at the coarsest level (`:cellpairu1`, two carriers over the
-> whole 40-node network: 80 generator and 160 commitment terms) compiles in about 290 s at an
-> 8 GB peak on the CPU backend, also in the slope-jump form, and is left out of the run set. It is
-> verified on arrays (`test_jump.jl`) and compiled against arrays; the dense diagnostics of the CPU
-> comparison (`test_comp.jl`) exceed 10 GB for it.
+The cell pair at the coarsest level (`:cellpairu1`, two carriers over the whole 40-node network:
+80 generator and 160 commitment terms) compiles in about 25 s (125 s with the first Julia
+compilation of the process, 3.8 GB peak) since the stacked builders. It is verified on arrays
+(`test_jump.jl`) and compiled against arrays; the dense diagnostics of the CPU comparison
+(`test_comp.jl`) exceed 10 GB for it, so case C leaves it out.
 
 ## 4. Schedule
 
@@ -294,7 +294,7 @@ square of the ratio. `families = :all` (`device_families`) adds:
 * `:spair0`, `:spair`;
 * `:tsoc`, `:tpot` (`:tsocL`, `:tpotL` with requirement tracking);
 * the storage blocks of `BLOCK_SCHED` ($L$ = 2, 4, 8, 16, 32; `:sblk…`, or `:sblkL…` with tracking);
-* the cell families of the partition, except `:cellpairu1` (§3).
+* the cell families of the partition.
 
 **Memory cap.** The largest tensor of a round has $C \cdot B \cdot e$ elements. Here $e$ is
 points × columns in the dense form (`dense_size`). In the slope-jump form it is the larger of
@@ -582,13 +582,13 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | device model, exact cost, round trip | done |
 | term batch, exact dense sampler, plain families, rounds, compiled multi-sweep program | done |
 | compensated families `:spair`, `:spair0`, `:tsoc(L)`, `:tpot(L)` | verified on arrays and compiled (CPU backend); scheduled with `families = :all` |
-| cell templates (all partition levels) | verified on arrays; compiled except `:cellpairu1` (see §3); scheduled with `families = :all` except `:cellpairu1` |
+| cell templates (all partition levels) | verified on arrays and compiled; scheduled with `families = :all` |
 | storage blocks, one unit (plateau, shapes) | verified on arrays ($L$ = 2–32) and compiled; scheduled with `families = :all` |
 | nominal storage requirement of the share-preserving `:tsoc`, `:sblk{L}` (CPU `soc_qadj`, [moves/storage.md](moves/storage.md)) | done (`soc_qadj4`); verified on arrays against the CPU |
 | long-range storage moves `slong`, `slevel` (`:slong`, `:slongL`) | verified on arrays against the CPU (`test_comp.jl` M, N) and compiled (14 s `:slong`, 16 s `:slongL` at T = 1460, after removing the varargs concatenates below); L drawn on 2 … T−1 (the CPU includes L = 1, the `tsoc` move) |
 | storage pairs `sxpair`, `sxlong` (`:sxpair`, `:sxpairn`, `:sxlong`, `:sxlongn`: ball templates, leak and `sx_qloss` compensation, footprint rounds) | verified on arrays against the CPU (`test_comp.jl` O, with the CPU walk extended to 2000 nats: its 40-nat stop truncates 11 % of these lines, whose potential falls again further out); B uniform among the partner slot's units (the CPU: ∝ min(k_A, k_B)); share-preserving only; compiled (CPU backend) against arrays |
 | host sources and redraw of the random sites between device calls (`set_sources!`, `redraw_tables`) | done (`test_redraw.jl`: plan shapes, conflict-free, new and reproducible draws, under 0.01 % of the sites dropped); the plan's own draw and the redraws come from restart-seeded streams |
-| one compile pass over every family (Reactant CPU backend against arrays, `test_reactant_fams.jl` A and B, 2 rounds × 60 sites) | done: every family equal to the arrays to ≤ 1e-13 relative; 4–52 s per family once the process has compiled the traced code (the first compile in a process adds 100–150 s of Julia compilation); peak 4.8–7.7 GB per test process; `:cellpairu1` see §3 |
+| one compile pass over every family (Reactant CPU backend against arrays, `test_reactant_fams.jl` A and B, 2 rounds × 60 sites) | done: every family equal to the arrays to ≤ 1e-13 relative; 4–52 s per family once the process has compiled the traced code (the first compile in a process adds 100–150 s of Julia compilation); peak 4.8–8.3 GB per test process; `:cellpairu1` 125 s with the first Julia compilation |
 | memory cap of a round (`DENSE_BUDGET`) | done |
 | slope-jump form of the line sampler, per-family choice (`JUMP_RATIO`) | done; verified on arrays against the CPU and the dense form, Reactant (CPU backend) against arrays |
 | term axis (program size independent of the term count); stacked builders (one gather per field) for the compensated, block, cell and dense angle families | done |
