@@ -100,6 +100,26 @@ uniforms and the same draw up to round-off. `plan` chooses one per family (`line
   - the family's K otherwise (`nroots`): 2 for the plain families, where at most two are proven
     per term type, and 4 for the compensated, cell and block families.
 
+**Round-off and the sign tests.** The roots are sign changes and their count enters the guards, so
+the sign tests must not see round-off (`zsnap`, `flat_tol`, `raytol` in `device/src/terms.jl`, used
+by both forms):
+* an argument at its own clamp point is the bound only to round-off (two roundings on arrays, one
+  fused multiply-add in the compiled program), so a quantity that vanishes identically beyond a clamp
+  (a SoC step with both ends clamped, a commitment at its bound) is $\pm$ulp there and would count a
+  crossing to the exact 0 of the ray. The SoC and commitment quantities are set to exactly 0 within
+  32 ulp of their scale ($h/\Delta t$ and $q_t$; 1 for the clamped fractions) before the tests;
+* beyond the clamps the change of a quantity over a ray's extension segment is pure round-off, and a
+  root placed from it lands at $10^9$–$10^{12}$ extension lengths, inside `RAYMAX`, in one program and
+  not in the other. A segment whose change is below $10^{-9}$ of the quantity's magnitude is flat; for
+  the balance residual, whose round-off is that of its injections (far above the ulp of its value), a
+  ray is flat below `RAY_ULP` = 256 ulp of $|r_0| + \sum(|\text{injection}| + |\text{injection at }0|)$
+  at the ray points (`eval_terms(…; absv = true)`). A genuine root with a slope below these lies far
+  beyond `RAYMAX` and is irrelevant for the draw.
+
+Without this the real-candidate count of a storage-pair site differed by up to 6 % between the
+arrays and the compiled program, and a site within that of its cap was guarded in one and drawn in
+the other (the same site in most rows).
+
 A term's own secondary quantities are linear between its primary points. A balance-slot residual
 is not: it also bends where a SoC injection kinks ($d = 0$ and $-d\,\eta_{out} = 1$), which are
 roots of the SoC quantities. Its roots are therefore searched on the grid refined by those roots.
@@ -588,7 +608,7 @@ kernels with occupancy). The profiler needs programs compiled with `sync = true`
 | long-range storage moves `slong`, `slevel` (`:slong`, `:slongL`) | verified on arrays against the CPU (`test_comp.jl` M, N) and compiled (14 s `:slong`, 16 s `:slongL` at T = 1460, after removing the varargs concatenates below); L drawn on 2 … T−1 (the CPU includes L = 1, the `tsoc` move) |
 | storage pairs `sxpair`, `sxlong` (`:sxpair`, `:sxpairn`, `:sxlong`, `:sxlongn`: ball templates, leak and `sx_qloss` compensation, footprint rounds) | verified on arrays against the CPU (`test_comp.jl` O, with the CPU walk extended to 2000 nats: its 40-nat stop truncates 11 % of these lines, whose potential falls again further out); B uniform among the partner slot's units (the CPU: ∝ min(k_A, k_B)); share-preserving only; compiled (CPU backend) against arrays |
 | host sources and redraw of the random sites between device calls (`set_sources!`, `redraw_tables`) | done (`test_redraw.jl`: plan shapes, conflict-free, new and reproducible draws, under 0.01 % of the sites dropped); the plan's own draw and the redraws come from restart-seeded streams |
-| one compile pass over every family (Reactant CPU backend against arrays, `test_reactant_fams.jl` A and B, 2 rounds × 60 sites) | done: every family equal to the arrays to ≤ 1e-13 relative; 4–52 s per family once the process has compiled the traced code (the first compile in a process adds 100–150 s of Julia compilation); peak 4.8–8.3 GB per test process; `:cellpairu1` 125 s with the first Julia compilation. The replica programs (`test_replica_compiled.jl`, 40 nodes daily, 6 device rows) equal the arrays with the plain families plus `:slong`, `:sxlong` (3.5e-11), plus `:spair`, `:tsoc`, `:sblkg2` (1.0e-10) or plus `:tcut`, `:xloc`, `:dshp4`, `:sxpair`, `:cell2` (5.9e-11); with all 16 in one sweep a few sites in 5 of the 6 rows differ (2.6e-2 relative; 64 angle, 108 dispatch, 3878 SoC entries): the round-off differences grow over the sweep's rounds until a draw changes, so the full set is compared family by family or in groups |
+| one compile pass over every family (Reactant CPU backend against arrays, `test_reactant_fams.jl` A and B, 2 rounds × 60 sites) | done: every family equal to the arrays to ≤ 1e-13 relative; 4–52 s per family once the process has compiled the traced code (the first compile in a process adds 100–150 s of Julia compilation); peak 4.8–8.3 GB per test process; `:cellpairu1` 125 s with the first Julia compilation. The replica programs (`test_replica_compiled.jl`, 40 nodes daily, 6 device rows) equal the arrays, the operation sweep per family (the state after every family's loop of the one program) with the plain families and `:spair`, `:tsoc`, `:sblkg2`, `:xloc`, `:dshp4`, `:slong`, `:sxpair`, `:sxlong`, `:cell2` in one sweep; the guard inputs (real-candidate counts, root guards) of every family agree exactly on the same input since the sign tests ignore round-off (§3) |
 | memory cap of a round (`DENSE_BUDGET`) | done |
 | slope-jump form of the line sampler, per-family choice (`JUMP_RATIO`) | done; verified on arrays against the CPU and the dense form, Reactant (CPU backend) against arrays |
 | term axis (program size independent of the term count); stacked builders (one gather per field) for the compensated, block, cell and dense angle families | done |
@@ -667,7 +687,10 @@ with `catn` (one `Ops.concatenate` of a vector) or a broadcast, and keep per-slo
 (`SlotChanges`). `all(f, v)` and `any(f, v)` over a `Vector` of traced arrays are traced
 reductions: use plain loops. Inside `@trace for`, every captured scalar becomes
 traced, so structs captured by a loop are type-parametric in their scalars and static flags
-are passed as `Val`; a traced loop index used for indexing needs `@allowscalar`; traced
+are passed as `Val`; a traced loop writes its results back into the traced arrays it carries
+(`set_mlir_data!`), so a value kept from before a later loop (the state after one family of a
+multi-family program) must be copied first (`copy`) or it comes back as the final one; a traced
+loop index used for indexing needs `@allowscalar`; traced
 ranges (`v[q:q]`) fail on Reactant 0.2.304; `abs(a*b)` of two distinct block arguments is
 miscompiled to `a*b` (use `max(x,-x)`); FMA contraction makes exact zeros of padded sites
 inexact.
