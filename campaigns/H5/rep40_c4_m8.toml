@@ -1,0 +1,22 @@
+# Campaign H5 (device throughput on the H100; docs/campaigns.md, campaigns/H5/campaign.toml).
+# Device run of the replica–Langevin sampler (docs/replica_sampler.md, docs/system/device.md §5–§6):
+# 4 chains × 8 weather replicas on 40 nodes daily, the capacities shared within a chain and moved by
+# a Langevin step on the replica-averaged score, the weather by staggered pCN bursts on the host,
+# the fast operation families on the device. A host checkpoint every 10 steps.
+#   nice -n 19 julia --project=device -t 4 device/scripts/run_device.jl configs/device40_replica.toml
+out = "results/h5_rep40_c4_m8.h5"
+basis = "haar"
+storage = "soc"
+renewables = "load"
+measure = "physical"
+levels = [[10, 24], [40, 24]]
+init = "heuristic"
+use_bias = false
+nchains = 4
+chain_starts = ["low", "high"]
+mlda_warmup = 50
+nsamples = 200
+device_backend = "gpu"
+device_sweeps = 10              # replica steps per host checkpoint
+device_sampler = "replicas"
+replicas = 8

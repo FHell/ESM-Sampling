@@ -1,0 +1,9 @@
+# Campaign H2 (docs/campaigns.md): LP baseline at 256 nodes, 6 h steps, on the historical weather years of
+# data/processed/model256.h5 (scripts/lp_baseline.jl; the reference level is the first spatially complete
+# level, here [256, 6]; the coarse level is only there to make the configuration valid).
+# Default model terms (greenfield, hard line limits, no losses, no commitment), as the sampler's
+# reference LP.
+data = "data/processed/model256.h5"
+out = "results/h2/lp256_6h/out.h5"
+levels = [[10, 24], [256, 6]]
+init = "lp"

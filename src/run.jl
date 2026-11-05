@@ -182,6 +182,14 @@ function check_levels(levels, N)
     return ref - 1   # 0-based level index
 end
 
+"The energy model of a configuration on the network `sys` (the model options of `cfg`)."
+energy_model(cfg::Config, sys::System=load_system(cfg.data)) =
+    build_energy_model(sys; c_shed=cfg.c_shed, c_dump=cfg.c_dump, c_viol=cfg.c_viol,
+                       basis=Symbol(cfg.basis), measure=Symbol(cfg.measure),
+                       flow_theta=Symbol(cfg.flow_theta), co2_price=isnan(cfg.co2_price) ? nothing : cfg.co2_price,
+                       brownfield=cfg.brownfield, losses=cfg.losses, loss_segments=cfg.loss_segments,
+                       thermal=Symbol(cfg.thermal), thermal_band=cfg.thermal_band, link_losses=cfg.link_losses, uc=cfg.uc)
+
 """
     setup(cfg) -> (P, s_init, info)
 
@@ -192,11 +200,7 @@ function setup(cfg::Config; rng=MersenneTwister(cfg.seed))
     check_config(cfg)
     t0 = time()
     sys = load_system(cfg.data)
-    E = build_energy_model(sys; c_shed=cfg.c_shed, c_dump=cfg.c_dump, c_viol=cfg.c_viol,
-                           basis=Symbol(cfg.basis), measure=Symbol(cfg.measure),
-                           flow_theta=Symbol(cfg.flow_theta), co2_price=isnan(cfg.co2_price) ? nothing : cfg.co2_price,
-                           brownfield=cfg.brownfield, losses=cfg.losses, loss_segments=cfg.loss_segments,
-                           thermal=Symbol(cfg.thermal), thermal_band=cfg.thermal_band, link_losses=cfg.link_losses, uc=cfg.uc)
+    E = energy_model(cfg, sys)
     ref = check_levels(cfg.levels, sys.N)
     L = length(cfg.levels) - 1
     logmsg(cfg, "system: $(sys.N) nodes, $(length(sys.line_s)) lines, $(length(sys.link_cap)) DC links, ",
@@ -221,7 +225,7 @@ function setup(cfg::Config; rng=MersenneTwister(cfg.seed))
         lp = heuristic_start(E, lkr, lvr, Wd)
         logmsg(cfg, "no reference LP: heuristic capacities (proxy renewables, gas at nodal peak load), interior dispatch")
     else
-        lp = solve_lp_cached(E, lkr, lvr, Wd, joinpath(cdir, "lp_$(string(key; base=16)).h5"); mirror=mirror)
+        lp = solve_lp_cached(E, lkr, lvr, Wd, joinpath(cdir, "lp$(LP_VERSION)_$(string(key; base=16)).h5"); mirror=mirror)
     end
     T_L, T_ref = 8760 ÷ cfg.levels[end][2], lvr.T
     # equipartition: one unit of β×cost per cost-confined direction; interior

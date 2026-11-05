@@ -1,0 +1,15 @@
+# Campaign H5 (device throughput on the H100; docs/campaigns.md, campaigns/H5/campaign.toml).
+# Device profiling run (mechanics test: α = 0, physical measure, capacity scaling): 40 nodes × 6 h, GPU.
+out = "results/h5_fams40_6h.h5"
+basis = "haar"
+storage = "soc"
+renewables = "load"
+measure = "physical"
+levels = [[10, 24], [40, 24], [40, 6]]
+init = "heuristic"
+use_bias = false
+nchains = 4
+mlda_warmup = 2
+nsamples = 6
+device_backend = "gpu"
+device_sweeps = 10

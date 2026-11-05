@@ -149,8 +149,9 @@ command line. The run record notes the thread plan.
 | `era5.sbatch` | 4 cores, 48 GB, 24 h, requeued | `standby` | `model256_era5.h5` from the cluster's ERA5 folder (§4) |
 | `h0_cpu.sbatch`, `h0_gpu.sbatch` | 8 cores; 1 H100 + 16 cores | `priority`; `gpushort` | campaign H0: offline load, deterministic tests, a smoke run; Reactant on the H100, a family profile |
 | `cpu.sbatch` | 8 cores (`-c` to change), 24 h, requeued | `standby` | CPU sampler runs (the default) |
-| `cpu_array.sbatch` | one run per line of a list file, requeued | `standby` | many configurations or seeds (`--array=1-n%k`) |
-| `build.sbatch` | 16 cores, 12 h, requeued | `standby` | LP solves (e.g. `scripts/lp_reference.jl`), weather-model fits, data preparation, PyPSA-Eur solves; a preempted build starts over, finished cache entries are kept |
+| `cpu_array.sbatch` | one run per line of a list file, requeued | `standby` | many configurations or seeds (`--array=1-n%k`); a line may start with `NAME=value` environment settings (recorded as `line_env` in run.toml) |
+| `gpu_array.sbatch` | as `cpu_array`, one H100 and 16 cores per task, requeued | `gpupreempt` | many device runs (`--array=1-n%k`); device runs log GPU memory to `gpu_mem.csv` |
+| `build.sbatch` | 16 cores, 12 h, requeued | `standby` | LP solves (e.g. `scripts/lp_reference.jl`), weather-model fits, data preparation, PyPSA-Eur solves; a preempted build starts over, finished cache entries are kept (the MGA sweeps of `lp_baseline.jl` and `pypsa_baseline.py` skip their finished solves) |
 | `gpu.sbatch` | 1 H100, 16 cores, 160 GB, 24 h, requeued | `gpupreempt` | device runs |
 | `cpu_short.sbatch`, `gpu_short.sbatch` | as above, not preempted | `short`, `gpushort` | when preemption would hurt |
 | `analysis.sbatch` | 4 cores, 2 h | `priority` | diagnostics, summaries |
@@ -158,8 +159,19 @@ command line. The run record notes the thread plan.
 Every template calls the wrapper of the campaign's pinned code:
 
 ```bash
-sbatch hpc/jobs/cpu.sbatch <campaign> <config> [cpu | device | script <path> [args...]]
+sbatch hpc/jobs/cpu.sbatch <campaign> <config> [cpu | device | script <path> [args...] | python <path> [args...]]
 ```
+
+The modes: `cpu` (`scripts/run.jl`), `device` (`device/scripts/run_device.jl`), `script` (a Julia
+script of the root project, `julia --project=. -t <cores> <path> <config> <args>`) and `python`
+(`uv run --frozen python <path> <config> <args>` in the root project's environment,
+`UV_PROJECT_ENVIRONMENT` = `env/venv`, prepared by `prepare_env.sh`; it holds pypsa, linopy and
+highspy, so PyPSA solves of the composed networks, e.g. campaign H2b, need no PyPSA-Eur
+environment). The script receives the config as run (`out` set to the run directory) as its
+first argument. Run record, stop file, runs index and archive are the same in every mode; a
+Python script ignores the stop file, so a preempted Python job restarts from its beginning
+(or resumes from its own outputs). The recorded input file is the config's `data` key, or its
+`network` key, with `${VAR}` expanded from the environment.
 
 `hpc/run.sh` (paths in the config are relative to the campaign code):
 
@@ -268,7 +280,8 @@ file, exit code 75 and `ESM_IGNORE_SIGTERM` (`device/scripts/run_device.jl`); th
 driver writes the chains layout plus a group `device/`, the replica driver the layout of the CPU
 replica driver (so either replica driver resumes from the other's snapshot). The boundaries are
 the host checkpoints (every `device_sweeps` operation sweeps or replica steps), so the grace time
-must cover one of them plus the write. On resume the device arrays and programs are rebuilt
+must cover one of them plus the write (the replica driver's lag probes run on the device, inside the
+steps). On resume the device arrays and programs are rebuilt
 from the saved states (the compile is repeated: 2–6 minutes) and the streams are re-seeded. Tested locally on 2026-11-04 through
 `hpc/run.sh` in `device` mode on the CPU backend (`hpc/configs/device_smoke.toml`, the
 simulated layout of §5).
@@ -312,12 +325,13 @@ requeued or resubmitted job continues from its kept downloads and outputs.
 | D1 | `sbatch hpc/jobs/data.sbatch small` | internet (QOS io) | `model.h5` (40 nodes), `model76.h5` (76 nodes), NASA POWER weather 2001–2022 | hours (limit 3 days) |
 | D2 | `sbatch hpc/jobs/data.sbatch pypsa256` | internet (QOS io); independent of D1 | the PyPSA-Eur build `esm256`, then `model256.h5` (256 nodes, NASA POWER weather) | the longest (limit 3 days) |
 | D3 | `sbatch --dependency=afterok:<job id of D2> hpc/jobs/era5.sbatch [years]` | D2 (`model256.h5` and the `esm256` resources) | `model256_era5.h5` (256 nodes, ERA5 weather) | not measured yet (limit 24 h, continues when requeued) |
+| D4 | `sbatch --dependency=afterok:<job id of D2> hpc/jobs/data.sbatch pypsa256ts` | D2 (the `esm256` network `composed_2050.nc`); no internet | `model256_pypsa.h5` (256 nodes, the network's own series for 2013 as one weather year: renewable `p_max_pu` per generator row and nodal loads; checked against the network) | about 10 s and 0.7 GB locally |
 
 D1 and D2 can be submitted together. Files built without the corrected wind calibration
 ([data_sources.md](data_sources.md) §2; their `PROVENANCE.toml` commit has no `smallest_root`
 in `scripts/prepare_data.py`) need D1 and D2 again; a rerun of
-D2 reuses the PyPSA-Eur build and only redoes `model256.h5`. D3 does not depend on the POWER
-weather and need not be rerun. Check a build's log for the line per carrier
+D2 reuses the PyPSA-Eur build and only redoes `model256.h5`. D3 and D4 do not depend on the POWER
+weather and need not be rerun (D4 reads only the network of the `esm256` build). Check a build's log for the line per carrier
 `… miss their window target by more than 0.005` (zero in the local builds of all three POWER
 files). D3 reads the cluster's ERA5 folder in place on a compute
 node (§4); its years are a choice: the default 2003, 2010, 2013, 2017 is enough for a first
@@ -343,8 +357,10 @@ current ones, with what each needs:
 |---|---|---|
 | H0b (SIGTERM and snapshot tests) | D1: the snapshot test is skipped without `model.h5` | `bash hpc/new_campaign.sh H0b`; `sbatch hpc/jobs/h0_cpu.sbatch H0b` |
 | H4 (replica sampler, far-apart starts) | D1 rebuilt with the corrected wind calibration | `bash hpc/new_campaign.sh H4`; `sbatch --time=2-00:00:00 --array=1-6%6 hpc/jobs/cpu_array.sbatch H4 campaigns/H4/list.txt` (6-hourly lines estimated 12–20 h); `bash hpc/collect.sh H4` |
+| H5 (device throughput) | D1 and D2 (model.h5, model256.h5) | `bash hpc/new_campaign.sh H5`; `sbatch --time=12:00:00 --array=1-12%4 hpc/jobs/gpu_array.sbatch H5 campaigns/H5/list.txt` |
 | H10 (storage pairs) | D1 (rebuilt); the HiGHS scheduler reset for `ESM_LP_THREADS` (f2d09a3, LP-baseline branch) on main, else stage 1 fails; its start states and the reference LP are made by the campaign | `bash hpc/new_campaign.sh H10`; `sbatch --time=02:00:00 hpc/jobs/build.sbatch H10 configs/chains40.toml script scripts/lp_reference.jl` (stage 1, the LP into the cache); `sbatch --time=12:00:00 --dependency=afterok:<stage 1 job id> --array=1-6%6 hpc/jobs/cpu_array.sbatch H10 campaigns/H10/list.txt`; `bash hpc/collect.sh H10 'summary*'` |
-| H2 and the other LP campaigns | D1 for 40 and 76 nodes, D2 for 256, D3 for ERA5 | as in their rows |
+| H2 (our LP baselines) | D1 (40 nodes) and D2 (256 nodes), rebuilt with the corrected wind calibration; D4 for its lines on `model256_pypsa.h5` | as in its row |
+| H2b (PyPSA's optimum and MGA) | the esm256 PyPSA-Eur build (`composed_2050.nc`) | as in its row; independent of H2 |
 | the full-resolution run | D3 | not yet a campaign ([roadmap.md](roadmap.md) §6) |
 
 ### 8.5 Results back

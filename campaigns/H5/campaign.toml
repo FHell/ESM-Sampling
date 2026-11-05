@@ -1,0 +1,23 @@
+# Campaign H5 (docs/campaigns.md, row H5; docs/system/device.md, performance.md §7; docs/system/hpc.md)
+id = "H5"
+question = """
+Device throughput on the H100: the cost per move family (compile and run time per sweep and per
+line move) at 40 nodes × 6 h and 256 nodes daily, FP64 against the Float32 build; the replica
+driver's cost per step (weather, operation, score, Langevin) against chains × replicas (1, 4, 16
+chains; 4, 8 replicas) at 40 nodes daily, and one 256-node daily run; GPU memory per chain."""
+design = """
+12 array tasks (campaigns/H5/list.txt) on gpu_array.sbatch (one H100, 16 cores, gpupreempt,
+requeued). Lines 1–4: device/scripts/profile_families.jl with FAMILIES=all ADAPT=1 (every family of
+the compiled run set; report.txt and the profiler traces in the run directory), FP64 and FLOAT=32,
+40 × 6 h (4 chains) and 256 × 24 h (4 chains). Lines 5–10: the replica driver (device mode,
+device_sampler = "replicas") at 40 nodes daily, nchains 1/4/16 × replicas 4/8, 50 + 200 replica
+steps; line 11 the largest in Float32; line 12 at 256 nodes daily, 4 chains × 8 replicas.
+Every line runs with XLA_REACTANT_GPU_PREALLOCATE=false, so that gpu_mem.csv (nvidia-smi every
+10 s, written by run.sh for device runs) shows the program's memory, not XLA's preallocated pool.
+Outputs per run: summary_device.toml (device_profile seconds per part and per call, compile
+times), report.txt (families), gpu_mem.csv; out.h5 and the traces stay in the archive.
+Inputs: the cluster's model files (model.h5 from D1, model256.h5 from D2; hpc.md §8.3).
+Estimates: a family profile 0.5–3 h (GPU compiles of 4–12 s per family plus runs), a replica
+run under 1 h; --time 12 h covers every line with room for requeues."""
+submit = "sbatch --time=12:00:00 --array=1-12%4 hpc/jobs/gpu_array.sbatch H5 campaigns/H5/list.txt"
+collect = "bash hpc/collect.sh H5"

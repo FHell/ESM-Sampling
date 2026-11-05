@@ -13,6 +13,7 @@ builds the inputs is in [model.md](model.md) §5, the provenance of the sources 
 | `model76.h5` | 76 nodes, 130 lines, 27 DC links: 27 countries of the same example network | `prepare_data.py --countries …` |
 | `model256.h5` | 256 nodes, 480 lines, 4 DC links: the PyPSA-Eur workflow (`external/pypsa-eur`, OSM base network clustered to 256 nodes, electricity only) for the 10-country region; brownfield fleets; NASA POWER weather | `prepare_data.py --network …` |
 | `model256_era5.h5` | the 256-node network with ERA5 weather for selected years | `prepare_era5.py` |
+| `model256_pypsa.h5` | the 256-node network with the network's own time series as the weather: one year (2013), the renewable `p_max_pu` per generator row and the nodal loads of `composed_2050.nc`; the same nodes, lines, links, generator and storage rows as `model256.h5` (the dispatchable boxes `kbar` follow its own peak load) | `prepare_data.py --network … --pypsa-series` |
 | `backup/` | backups of the input files without the model-completion datasets | — |
 
 ## 2. Input layout
@@ -22,7 +23,7 @@ Written by h5py in row-major order; Julia reads the axes reversed. Node and unit
 
 | path | content |
 |---|---|
-| attributes | `source_network`, `countries`, `years` (weather years), `co2_price` (€/t contained in the marginal costs) |
+| attributes | `source_network`, `countries`, `years` (weather years), `co2_price` (€/t contained in the marginal costs), `weather_source` (`NASA POWER and the OPSD load model` or `network time series`) |
 | `network/nodes`, `country`, `x`, `y`, `mean_load` | buses |
 | `network/line_bus0`, `line_bus1`, `line_b`, `line_s` | merged AC lines: ends, susceptance (normalized to mean 1), rating (MW) |
 | `network/line_alpha`, `line_length` | quadratic loss coefficient (1/MW) and length |
@@ -51,11 +52,15 @@ h5py). `quantity_names` names the rows.
 | `post/bias_used`, `post/bias_refit` | $\hat b$ in use and the refitted $\tilde b$ at every production sample (the log weights are their difference) |
 
 **Device runs** (appended by `run_device`): `device_profile/<part>` (seconds per host
-checkpoint (`mh`) or per step (`replicas`) of every timed part) and
+checkpoint (`mh`) or per step (`replicas`) of every timed part, `rebuild` the residual rebuild) and
 `device_profile/compile_<program>` (compile seconds); Metropolis driver: `run/restarts`,
-`run/resumed_at_checkpoint` (host checkpoint of the last resume, −1: none); replica driver: the
-outputs of the CPU replica driver (`replicas/*`, `run/*`; the replica records at the host
-checkpoints only) and `replicas/record_every` (= `device_sweeps`).
+`run/resumed_at_checkpoint` (host checkpoint of the last resume, −1: none) and
+`device/residual_drift` (chain × host checkpoint: max |r_cache − r_rebuilt| in MW before the rebuild,
+[device.md](device.md) §2); replica driver: the outputs of the CPU replica driver (`replicas/*`,
+`run/*`; the replica records at the host checkpoints only; the probes those of the device probe,
+`replicas/<c>/probe/it` with the step of the copy, [device.md](device.md) §6.2),
+`replicas/<c>/residual_drift` (replica × host checkpoint, as above), `replicas/record_every`
+(= `device_sweeps`) and `replicas/probe_slots` (probe slots per chain on the device, 0 or 1).
 
 **CPU driver only** (`write_run_outputs`, appended to the same file):
 
@@ -125,6 +130,7 @@ every write. Vectors are the coefficient vectors of the state at its level (the 
 | `co2/price_trace` | the CO₂ price trace of the fine warmup so far |
 | `sampler/sigma_scale`, `sampler/gibbs/{wv,wz,wk}` | level-0 phase: carrier-scaling step sizes and slice widths |
 | `device/driver` | device runs of the Metropolis driver (`device_sampler = "mh"`): `"mh"`; `it` counts host checkpoints |
+| `device/residual_drift` | the same runs: the residual drift so far (chain × host checkpoint), continued after a resume |
 
 **Replica driver** (`write_replica_snapshot`, also of the device replica driver, so either
 driver resumes from the other's snapshots; `read_snapshot` of the chains driver refuses it):
@@ -137,3 +143,30 @@ driver resumes from the other's snapshots; `read_snapshot` of the chains driver 
 | `chains/<c>/eta_w`, `since`, `window`, `active` | Langevin step per k field; per replica steps since its last burst, whether it had a regime window, active flag |
 | `chains/<c>/trace/<key>`, `chains/<c>/probe/<key>` | the replica and probe records so far (the keys of `replicas/<c>/...` above) |
 | `chains/<c>/replica/<j>/level`, `m`, `z0`, `w/<i>`, `k`, `v` | the state of replica j |
+
+## 6. LP baselines (campaigns H2, H2b)
+
+Small text files in the run directory (`dirname(out)`), collected by `hpc/collect.sh`
+([validation.md](validation.md) §2.7). Costs in €/a, capacities in MW (storage: power), energies
+in MWh/a.
+
+**`scripts/lp_baseline.jl`** (our LP on historical years; `scripts/lp_reference.jl` writes the
+older single-LP `summary_lp.toml` of the sampled-weather reference LP in the same place):
+
+| file | content |
+|---|---|
+| `summary_lp.toml` | `years`, `weights`, `status`; `objective_eur_per_a` (capex + Σ w opex), `capex_eur_per_a`, `opex_eur_per_a`, `opex_by_year_eur`; `sampler_cost_eur_per_a` (objective + the cycling cost: about the sampler's cost at the LP solution, validation.md §2.7); `mean_stats` (weighted means of the per-year statistics); `capacity.<k field>.total_MW` and `.by_country_MW`; free-coordinate counts; LP size (`lp_variables`, `lp_constraints`), `seconds_setup`, `seconds_optimum`, `maxrss_MB`, threads; `ignored_model_terms`; commit, run id, data hash |
+| `years.csv` | per year: `year, weight, opex_eur, co2_t, curtail_MWh, curtail_cost_eur, storage_cycling_MWh, cycling_loss_MWh, cycling_cost_eur, dump_MWh, energy_MWh_<carrier>…, shed_MWh` (storage energy: discharge) |
+| `capacity.csv` | `carrier, country, MW` at the optimum |
+| `mga.csv` | one row per MGA solve: `eps, target, sense, status, attempts, cost_eur, cost_rel_excess, total_MW, seconds` (status `OPTIMAL`, `feasible:<status>` for a primal-feasible point within the bound, or a failure with NaN values) |
+| `mga_capacity.csv` | `eps, target, sense, carrier, country, MW`: every carrier's capacity per country at each extreme |
+| `summary_mga.toml` | `envelope.eps_<ε>.<k field>`: `min_MW`, `optimum_MW`, `max_MW`, `status`; total time and memory |
+
+**`scripts/pypsa_baseline.py`** (PyPSA on its network): `summary_pypsa.toml` (resolution,
+snapshots, `total_cost_eur_per_a` = capex + opex in PyPSA's statistics, `objective_eur_per_a`,
+`fixed_capex_eur_per_a` of the existing fleet, `co2_price_eur_per_t` = the cap's dual,
+`shed_MWh`, `energy_MWh` per carrier, `capacity.<group>.total_MW`, `.by_country_MW`, LP size,
+times, memory), `capacity_pypsa.csv`, and with ε `mga_pypsa.csv`
+(`eps, target, sense, status, cost_eur, cost_rel_excess, total_MW, seconds`),
+`mga_capacity_pypsa.csv`, `summary_mga_pypsa.toml`. Groups: `onwind`, `solar`, `offwind`,
+`gas`, `battery`, `H2` as in [validation.md](validation.md) §2.7.

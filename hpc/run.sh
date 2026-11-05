@@ -2,7 +2,7 @@
 # The run wrapper (docs/system/hpc.md §5–§7): the only entry point of a job that runs the sampler
 # or a script. Called from the job templates in hpc/jobs/, inside a Slurm allocation.
 #
-#   bash hpc/run.sh <campaign> <config.toml> [cpu | device | script <path> [args...]]
+#   bash hpc/run.sh <campaign> <config.toml> [cpu | device | script <path> [args...] | python <path> [args...]]
 #
 # - code: the campaign's pinned worktree $ESM_PROJ/campaigns/<campaign>/code (must be clean);
 # - run directory $ESM_SCRATCH/runs/<campaign>/<run id> on /p/tmp: the config (as given and as
@@ -22,8 +22,8 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$here/env.sh"
 esm_dirs
 
-campaign="${1:?usage: run.sh <campaign> <config> [cpu|device|script <path> args...]}"
-config="${2:?usage: run.sh <campaign> <config> [cpu|device|script <path> args...]}"
+campaign="${1:?usage: run.sh <campaign> <config> [cpu|device|script|python <path> args...]}"
+config="${2:?usage: run.sh <campaign> <config> [cpu|device|script|python <path> args...]}"
 mode="${3:-cpu}"
 shift $(( $# < 3 ? $# : 3 ))
 
@@ -71,7 +71,10 @@ julia --startup-file=no -e '
     "$rundir/config.orig.toml" "$rundir" "$ESM_CACHE_DIR" "$ESM_CACHE_MIRROR" "$known" || exit 2
 rm -f "$rundir/STOP"
 # the input data are not in git: record which model file the run reads (path and hash)
-data_path=$(julia --startup-file=no -e 'using TOML; print(get(TOML.parsefile(ARGS[1]), "data", "data/processed/model.h5"))' "$rundir/config.toml")
+# (the key `data`, or for a PyPSA run the key `network`, with ${VAR} expanded from the environment)
+data_path=$(julia --startup-file=no -e 'using TOML; c = TOML.parsefile(ARGS[1])
+    p = get(c, "data", get(c, "network", "data/processed/model.h5"))
+    print(replace(p, r"\$\{(\w+)\}" => m -> get(ENV, m[3:end-1], "")))' "$rundir/config.toml")
 data_sha=$( [ -f "$data_path" ] && sha256sum "$data_path" | cut -c1-16 || echo "missing" )
 export ESM_COMMIT="$commit" ESM_RUN_ID="$run_id" ESM_DATA_SHA="$data_sha"
 
@@ -80,7 +83,12 @@ case "$mode" in
     device) cmd=(julia --project=device -t "$threads" device/scripts/run_device.jl "$rundir/config.toml") ;;
     script) s="${1:?run.sh: script mode needs a path}"; shift
             cmd=(julia --project=. -t "$threads" "$s" "$rundir/config.toml" "$@") ;;
-    *)      echo "run.sh: mode $mode: cpu, device or script" >&2; exit 2 ;;
+    # Python in the root project's environment (UV_PROJECT_ENVIRONMENT of env.sh, prepared by
+    # prepare_env.sh: pypsa, highspy, h5py); offline, never re-resolved (--frozen). It ignores the
+    # stop file: a preempted Python job restarts from its beginning (or resumes its own outputs).
+    python) s="${1:?run.sh: python mode needs a path}"; shift
+            cmd=(uv run --frozen python "$s" "$rundir/config.toml" "$@") ;;
+    *)      echo "run.sh: mode $mode: cpu, device, script or python" >&2; exit 2 ;;
 esac
 
 # --- run record (start) ---------------------------------------------------------------------
@@ -105,6 +113,7 @@ restarts="${SLURM_RESTART_COUNT:-0}"
     echo "nodes = \"${SLURM_JOB_NODELIST:-$(hostname)}\""
     echo "cpus = ${SLURM_CPUS_PER_TASK:-$threads}"
     echo "threads = \"julia $threads, blas $OPENBLAS_NUM_THREADS, omp $OMP_NUM_THREADS, lp $ESM_LP_THREADS\""
+    echo "line_env = \"${ESM_LINE_ENV:-}\""
     echo "gpus = \"${SLURM_GPUS_ON_NODE:-${CUDA_VISIBLE_DEVICES:-}}\""
     echo "mem_mb = \"${SLURM_MEM_PER_NODE:-}\""
     echo "restart_count = $restarts"
@@ -121,12 +130,23 @@ else
     "${cmd[@]}" >> "$rundir/run.log" 2>&1 &
 fi
 pid=$!
+# device runs: GPU memory and utilization every 10 s (gpu_mem.csv; with XLA_REACTANT_GPU_PREALLOCATE=false
+# the memory is the program's, not XLA's preallocated pool)
+gpulog=""
+if [ "$mode" = device ] || [ -n "${SLURM_GPUS_ON_NODE:-}" ]; then
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        nvidia-smi --query-gpu=timestamp,index,memory.used,memory.total,utilization.gpu --format=csv,noheader -l 10 \
+            >> "$rundir/gpu_mem.csv" 2>/dev/null &
+        gpulog=$!
+    fi
+fi
 # a trapped signal interrupts `wait` (status > 128) while the driver keeps running: wait again
 while true; do
     wait "$pid"; code_exit=$?
     kill -0 "$pid" 2>/dev/null || break
 done
 trap - TERM USR1
+[ -n "$gpulog" ] && kill "$gpulog" 2>/dev/null
 
 # finished; checkpointed (snapshot written, exit 75); preempted (signalled, no snapshot: Slurm
 # requeues it, or it resumes from an earlier snapshot); failed

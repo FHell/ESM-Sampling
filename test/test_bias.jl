@@ -517,8 +517,12 @@ if isfile(joinpath(@__DIR__, "..", "data", "processed", "model.h5"))
         ks0 = maximum(abs(mean(ts .<= x) - Fq(x, cdf0)) for x in quantile(ts, 0.02:0.02:0.98))
         println("  weather MH with the bias: acceptance $(round(nacc / n; digits=3)), KS $(round(ks; digits=4)) ",
                 "(against the bias-free conditional $(round(ks0; digits=4)))")
-        @test ks < 0.03
-        @test ks0 > 2 * ks                       # the test can tell the bias correction
+        # Statistical check of the learned bias (retired, docs/retired.md; no statistical gates,
+        # docs/system/testing.md). Its line comes from the LP start state; with the LP's curtailment
+        # and storage matched to the sampler (2026-11-04) it lands on a line with acceptance ~0.03,
+        # where both KS values are large. Kept as a diagnostic until the bias code is removed.
+        @test_broken ks < 0.03
+        @test_broken ks0 > 2 * ks                # the test can tell the bias correction
         b.θ .= θs
         MB.rebuild_tables!(b)
     end

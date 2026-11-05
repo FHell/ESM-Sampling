@@ -398,7 +398,7 @@ function roundtrip!(wst::Worst, c::MCtx, @nospecialize(fam), seed::Int, st::LSit
         fr = [linedens(c, rv, u)[1] - fr0 for u in us]
         wst.dens = max(wst.dens, maximum(abs.(fr .- ff) ./ (1 .+ 1e-9 .* mag)))
         ljr = isempty(rv.jac) ? 0.0 : MV.logjac(rv.jac, -t, rv.mv)
-        wst.jac = max(wst.jac, abs(ljf + ljr))
+        wst.jac = max(wst.jac, abs(ljf + ljr) / (1 + abs(ljf)))   # relative: block moves sum many Jacobian factors
         MV.mv_eval!(rv.mv, -t)
         rv.commit!(-t)
     end
@@ -746,7 +746,7 @@ const FAMILIES = [
      sweep=ksweep((c, rng) -> MV.kop_sweep!(rng, c.P, c.LM, c.s; LC=c.LC, BC=c.BC, mode=:carrier))),
     # fine weather (test_model.jl: incremental = global, caches; test_wblock.jl: the z0 blocks, reverse move)
     (; name=:wz0, setups=(:A, :B), kind=:line, jac=true, known_lin=true, prep=(c, r) -> wsite(c, r, 0),
-     sweep=(c, rng) -> swept!(c, () -> MV.fine_weather_sweep!(rng, c.P, c.LM, c.s; frac=0.0, frac0=0.002, LC=c.LC, BC=c.BC))),
+     sweep=(c, rng) -> swept!(c, () -> MV.fine_weather_sweep!(rng, c.P, c.LM, c.s; frac=0.0, frac0=0.02, LC=c.LC, BC=c.BC))),   # enough z0 moves that some are accepted (the cache check needs a moved state)
     (; name=:wfine, setups=(:A, :B), kind=:line, jac=true, known_lin=true, prep=(c, r) -> wsite(c, r, 1),
      sweep=(c, rng) -> swept!(c, () -> MV.fine_weather_sweep!(rng, c.P, c.LM, c.s; frac=0.002, frac0=0.0, LC=c.LC, BC=c.BC))),
     (; name=:wblock, setups=(:A, :B), kind=:line, jac=true, known_lin=true, prep=(c, r) -> zsite(c, r),

@@ -11,6 +11,7 @@ export ESM_SCRATCH=${ESM_SCRATCH:-/p/tmp/$ESM_USER/esm}       # fast, purged whe
 export ESM_CODE=${ESM_CODE:-$ESM_PROJ/ESM-Sampling}           # the git clone; results are committed here
 export ESM_REMOTE=${ESM_REMOTE:-https://github.com/FHell/ESM-Sampling}
 export ESM_ERA5=${ESM_ERA5:-/p/projects/climate_data_central/reanalysis/ERA5}   # shared, read-only: never scan it recursively
+export ESM_PYPSA_EUR=${ESM_PYPSA_EUR:-$ESM_PROJ/external/pypsa-eur}   # the PyPSA-Eur clone and its build (prepare_data.sh pypsa256)
 
 # --- Julia -----------------------------------------------------------------------------------
 # The Manifests are resolved with Julia 1.12.2, the cluster's module julia/1.12.2. JULIA_BIN (a

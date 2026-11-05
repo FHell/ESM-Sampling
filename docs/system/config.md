@@ -57,8 +57,11 @@ the 256-node network.
 |---|---|
 | `ESM_CACHE_DIR` | overrides `cache_dir` when set and non-empty |
 | `ESM_CACHE_MIRROR` | overrides `cache_mirror` when set and non-empty |
-| `ESM_LP_THREADS` | HiGHS's `threads` option in the reference LP (`solve_lp`); unset: HiGHS's default |
-| `ESM_IGNORE_SIGTERM` | `1`: `scripts/run.jl` ignores SIGTERM (the job wrapper stops the run through the stop file) |
+| `ESM_LP_THREADS` | HiGHS's `threads` option in every LP (`solve_lp`, the LP baselines, `scripts/pypsa_baseline.py`); unset: HiGHS's default. HiGHS's global thread scheduler is reset when it is set (otherwise a `threads` different from HiGHS's default makes the solve fail) |
+| `ESM_IGNORE_SIGTERM` | `1`: `scripts/run.jl` and `scripts/lp_baseline.jl` ignore SIGTERM (the job wrapper stops the run through the stop file) |
+| `ESM_PYPSA_EUR` | the PyPSA-Eur clone with its build (default `$ESM_PROJ/external/pypsa-eur`); `${ESM_PYPSA_EUR}` in the `network` key of an H2b configuration |
+
+**LP baselines.** `scripts/lp_baseline.jl` reads the usual keys (`data`, `levels`: its LP is at the reference level, the first spatially complete level; the model terms; `out`: its outputs go to `dirname(out)`); the cases are arguments `years=`, `eps=`, `carriers=`, `time_limit=` ([validation.md](validation.md) §2.7). `scripts/pypsa_baseline.py` reads its own TOML keys (`network`, `resolution`, `co2`, `load_shedding`, `line_expansion`, `snapshots`, `out`), documented in the script and in `campaigns/H2b/configs/`.
 
 **Hierarchy and bases.**
 
@@ -209,7 +212,7 @@ fine-weather keys are not used.
 |---|---|---|
 | `device_backend` | `"gpu"` | Reactant backend, `"gpu"` or `"cpu"` |
 | `device_sweeps` | 10 | `mh`: operation sweeps per device call (one capacity pass and one host checkpoint after each); `replicas`: replica steps per host checkpoint (monitored quantities, replica records and snapshot boundary; `mlda_warmup` and `nsamples` must be multiples of it) |
-| `device_sampler` | `"mh"` | capacity sampler of the device driver: `"mh"` (Metropolis capacity pass with the bias, [device.md](device.md) §5.1) or `"replicas"` (the replica–Langevin sampler with the batch on the device, §5.2, §6.2; its settings are the keys of the CPU sampler: `replicas`, `replica_*`, `langevin_*`, `tilt_*` above) |
+| `device_sampler` | `"mh"` | capacity sampler of the device driver: `"mh"` (Metropolis capacity pass with the bias, [device.md](device.md) §5.1) or `"replicas"` (the replica–Langevin sampler with the batch on the device, §5.2, §6.2; its settings are the keys of the CPU sampler: `replicas`, `replica_*`, `langevin_*`, `tilt_*` above; the lag probe runs in a probe slot on the device, `replica_probe_len` and `replica_probe_tail` rounded up to whole steps of `replica_inner` sweeps) |
 | `kmove_nprop` | 2 | Metropolis proposals per unit and capacity pass |
 | `kmove_sigma` | 0.3 | scaling-move proposal scale (log capacity) |
 | `kpeak_sigma` | 0.05 | peak-set proposal scale, fraction of the unit's start capacity (at least 100 MW) |

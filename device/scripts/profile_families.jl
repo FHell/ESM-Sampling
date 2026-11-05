@@ -16,7 +16,9 @@ const Prof = Reactant.Profiler
 const D = get(ENV, "FLOAT", "64") == "32" ? ESMDevice.F32 : ESMDevice     # FLOAT=32: the Float32 build
 
 cfg = ESMSampling.load_config(ARGS[1])
-outdir = abspath(length(ARGS) > 1 ? ARGS[2] : joinpath("results", "profiles", splitext(basename(ARGS[1]))[1] * "_families"))
+# default output: the run directory under hpc/run.sh (next to `out`), else results/profiles/
+outdir = abspath(length(ARGS) > 1 ? ARGS[2] : haskey(ENV, "ESM_RUN_ID") ? dirname(abspath(cfg.out)) :
+                 joinpath("results", "profiles", splitext(basename(ARGS[1]))[1] * "_families"))
 mkpath(outdir)
 nsw = parse(Int, get(ENV, "NSWEEPS", "2"))
 fset = get(ENV, "FAMILIES", "fast")
@@ -40,7 +42,7 @@ for f in pl.fams
     (isempty(sel) || f in sel) || continue
     fv = Val((f,))
     swf(st, cp, sp, k, tabs, ns, rng) = D.run_sweeps(st, cp, sp, k, tabs, ns, rng, fv)
-    tc = @elapsed fc = @compile sync=true donated_args=:none swf(st, cp, sp, kk, tabs, ns, drng)
+    tc = @elapsed fc = D.ftcompile(() -> @compile sync=true donated_args=:none swf(st, cp, sp, kk, tabs, ns, drng))   # F32: no TF32
     r = Prof.profile_thunk_with_xprof(fc, st, cp, sp, kk, tabs, ns, drng; nrepeat=1, warmup=1,
                                       profile_dir=joinpath(outdir, string(f)))
     ts = r.profiling_result.runtime_ns / 1e9 / nsw

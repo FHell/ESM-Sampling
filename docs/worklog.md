@@ -35,6 +35,15 @@ concrete next steps. Update it at the end of every work session.
   (device.md §7).
 
 **Decisions taken:**
+- PyPSA is upstream (user, 2026-11-04): the PyPSA reference is PyPSA's own `optimize`/`optimize_mga`
+  on the network we import from (H2b); PyPSA's time series are imported into a model file so
+  that H2 and H2b share the weather; our Julia MGA is held as a secondary check. Built: H2b on
+  `optimize_mga`, `model256_pypsa.h5` (D4), the H2 lines on it; to run on the cluster.
+- LP against the sampler (user, 2026-11-04): the LP prices curtailment as the sampler does
+  (renewables at A·k, excess dumped; storage balance an equality, no free spill; cycling
+  disposal reported as the remaining gap, ~0.02 %); comparison runs with losses, soft limits and
+  link losses off until the LP has them; CO₂ treatment and a common weather source decided
+  when the H2b comparison is set up (validation.md §2.7).
 - CPU move kernels frozen as the reference, retired after H5, the device exactness suite and the CPU-node question (user, 2026-11-04; roadmap.md §5).
 - The learned bias is retired as part of the target (user, 2026-11-04): work proceeds on the
   replica–Langevin structure. A learned weather-response term may return only as an optional
@@ -66,15 +75,22 @@ concrete next steps. Update it at the end of every work session.
 - Next device restructuring steps (ledger E28): the slot-point sort of the slope-jump form (a
   payload sort per balance slot, now one of the larger kernels), the per-column evaluation at the
   slot points (columns × slot points), the dense form of the plain families (unchanged).
-- Whether Float32 (`ESMDevice.F32`) is usable: to be tested empirically (user).
+- Whether Float32 (`ESMDevice.F32`) is usable: to be tested empirically (user; H5 lines 2, 4, 11).
+  Since 1ea2358 it uploads Float32 throughout (also the replica driver), compiles its
+  contractions at HIGHEST precision and rebuilds the residual at every host checkpoint; its drift
+  is about 1e-2 MW per sweep (`device/residual_drift`, `replicas/<c>/residual_drift`).
+- Replica device runs with `families = :all` (the device probe now measures the device kernel,
+  so FAMILIES_FAST adapts η_w to a weaker kernel); the compile cost of the full set in the replica
+  driver is to be measured. The probe slot costs 1/M of the batch: its GPU cost and that of
+  `SYNC=0` come from H5.
+- `write_replica_summary` selects the production probes by comparing the probe step with the
+  record index; in device replica runs (records every `device_sweeps` steps) it also counts warmup
+  probes. Small fix in src/replicas.jl (pass the step of the first production record).
 - Hand-written fused kernels: a planned option in device.md §7; not started.
 - `:cellpairu1`: compile with the stacked builders to be measured; still out of the run set.
 - Device form of the replica sampler: the CPU reference is `src/replicas.jl` (weather process
   with explicit noise, `langevin_update`, `follow_capacities!`; architecture.md §2); it replaces
   the Metropolis capacity pass and the planned `kop` port and per-carrier scales.
-- Device capacity side of the replica sampler: built against the prototype (score, step,
-  dispatch following, replica batch, replica driver; device.md §5.2, §6.2); next: the device
-  driver on the src/ replica sampler (its config keys, gate, probe, snapshot layout).
 - Re-measure the compile times on a quiet machine (239 s / 149 s were measured under load).
 
 **HPC (PIK cluster, [system/hpc.md](system/hpc.md); campaigns H0–H9 in the ledger):**
@@ -153,6 +169,94 @@ concrete next steps. Update it at the end of every work session.
   `device/scripts/compile_probe.jl` and a "Debugging compile time" paragraph in device.md §7.
 - Open from the review (device.md §7): the slope-jump cap from the initial state and its guard
   rate (M3), trace-time globals into the plan (M4), a separate level family for `slevel` (L2).
+
+### 2026-11-05 (device review fixes: residual rebuild, Float32, replica driver)
+
+- Findings H3, M1, M2, M5 of [device_review.md](device_review.md) fixed (1ea2358): the residual
+  cache rebuilt on the device at every host checkpoint of both drivers, its drift recorded
+  (FP64 1e-11 MW, Float32 2e-2 MW after 1–3 sweeps at 40 nodes daily); the Float32 build compiled at
+  HIGHEST precision (no TF32) and the replica driver's uploads and program scalars converted (the
+  F32 replica driver could not be set up before: `lgv_params` mixed float types); the replica driver
+  plans with the backend's slope-jump ratios, runs the lag probe on the device in a frozen probe
+  slot per chain (weight 0, measures the device's own kernel, about 1/M of the batch instead of 30
+  CPU sweeps per chain and probe), uploads the moved replicas' weather rows only, keeps a resident
+  zero score accumulator and can run without per-program synchronization (`SYNC=0`); the tdir
+  stream restart-seeded, snapshots from downloaded States, the resume and grace-time contract in
+  device.md §6.3. Tests on arrays against the CPU, then compiled on the CPU backend (six replica
+  programs, the rebuild, compiled runs of both drivers, the Float32 replica driver); no GPU timings.
+- Found on the way: the smoke configuration (`hpc/configs/device_smoke.toml`) never has a probe
+  candidate (bursts every 4 steps, probes every 4); the compiled test uses `replica_probe_every = 3`.
+
+### 2026-11-04 (night: device; H5 prepared)
+
+- Campaign H5 prepared (`campaigns/H5/`: family profiles at 40 × 6 h and 256 × 24 h in FP64 and
+  Float32, the replica driver at 1/4/16 chains × 4/8 replicas and one 256-node run; 12 tasks on
+  the new `gpu_array.sbatch`). Array list lines may carry `NAME=value` settings (recorded as
+  `line_env`); `run.sh` logs GPU memory for device runs (`gpu_mem.csv`); `run_device.jl` writes
+  `summary_device.toml`; `profile_families.jl` writes into the run directory under `run.sh`.
+  Smoke: every config parses; one replica config ran on arrays (exit 0).
+- Reactant compile debugging (docs and forum): `Reactant.Profiler.@timed_compile`, `@code_hlo`
+  (no `stablehlo.while` = unrolled), constants as arguments, `optimize=:none` and the private
+  `disable_*` passes, MLIR/XLA dumps, KernelAbstractions kernels raised with `raise=true`; sent to
+  the port agent, who adds them to device.md.
+- Fable review of the device code ([device_review.md](device_review.md)): the `:slong` compile is
+  trace-time inference of Reactant's varargs `cat` over O(T) operands (quadratic; not XLA); every
+  host-drawn schedule choice (spair partners, cells, block offsets, slong intervals, …) is drawn
+  once per run and never redrawn (a mixing defect, invariance intact); the residual cache is never
+  rebuilt (F32 drift); F32 one-hot contractions in TF32 and the replica driver's F32 upload
+  without conversion; replica-driver costs (host probe, full weather uploads, family mismatch with
+  the probe); slope-jump cap from the initial state; trace-time module globals; snapshot seeding
+  gaps. Port agent: the cat fix, schedule redraw, cap counter, globals, slong level columns;
+  a second agent: residual rebuild, Float32, replica driver, snapshot gaps.
+
+### 2026-11-04 (evening: PyPSA upstream for the LP references)
+
+- H2b: PyPSA's own `optimize_mga` for every extreme, each from a copy of the solved optimum
+  (its budget comes from the current solution's statistics), our HiGHS options and the IPX
+  fallback as solver arguments, stop-file exit 75 and resume tested; smoke (14 days): 4
+  extremes optimal, 13-18 s each.
+- Time-series import: `prepare_data.py --network … --pypsa-series` writes `model256_pypsa.h5`
+  (the network's p_max_pu per generator row and its loads, 2013, one weather year; same rows as
+  `model256.h5`), checked against the network (3e-8); `hpc/prepare_data.sh pypsa256ts` (D4).
+  Local check at 730 h: our LP (brownfield, 150 €/t) against PyPSA (price 150 €/t): onwind,
+  offwind and gas within 0.4 %, solar 322 against 369 GW, opex 2 %, new capex + opex 4.6 %
+  (validation.md §2.7 lists the causes).
+- Our Julia MGA held (PyPSA's is the reference envelope); H2 gets `lp256_pypsa_24h`/`_6h`; H2b
+  gets the CO₂-price configuration, a 6 h array on QOS medium, and a held list (6 h MGA, 3 h,
+  1 h: beyond a week by estimate).
+- Found and fixed: `test/test_moves.jl` setup B `wz0` failed `nacc > 0` since b9b611e (setup A's
+  LP start changed with the matched LP, so the bias θ handed to setup B changed): its sweep now
+  moves 2 % of the z0 coordinates, and the line families' inverse-Jacobian check is relative to
+  |log J| (`wblock` at setup B missed an absolute 1e-9 by round-off); the full suite passes.
+
+### 2026-11-04 (LP baselines: campaigns H2, H2b)
+
+- Our LP on the historical years of the model files, stacked over years (shared capacities,
+  storage cyclic per year, equal weights), and MGA envelopes per carrier at ε, on one reused
+  model (`src/lp_baseline.jl`, `scripts/lp_baseline.jl`; `solve_lp` split into
+  `lp_build`/`lp_operation!`/`lp_extract`, the same LP bitwise); PyPSA's optimum and MGA on its
+  composed network (`scripts/pypsa_baseline.py`); `hpc/run.sh` mode `python`; tests in
+  `test/test_lp_baseline.jl` (historical weather = the weather model's data; LP cost = the
+  sampler's cost at the LP solution plus the curtailment it prices; stacked with one year = the
+  single-year LP; MGA within the bound, re-optimized dispatch too, min ≤ optimum ≤ max).
+  Campaigns prepared: `campaigns/H2/` (104 lines in four arrays), `campaigns/H2b/` (15 lines);
+  validation.md §2.7, data.md §6, campaigns.md H2/H2b; to run on the rebuilt model files.
+- Found: with `ESM_LP_THREADS` set, every HiGHS solve failed (`OTHER_ERROR`: "global scheduler
+  has already been initialized"), so every LP on the cluster would have failed; fixed in
+  `lp_model` (scheduler reset). HiPO ends MGA capacity objectives often with `OTHER_ERROR` at a
+  feasible point: retried with IPX without presolve, feasible points within the bound kept.
+- Open: MGA maximisation at 40 nodes daily. With the budget unscaled (right-hand side 1e11)
+  HiPO and IPX stall ("no progress", infeasible point); with the budget in units of
+  10^(⌊log₁₀C⌋−4) onwind min ends optimal, onwind and gas max at feasible points on the bound
+  (5–8 min each) in a session, but in the smoke run through `hpc/run.sh` onwind max did not
+  finish in 17 min (validation.md §2.7, with a short literature note). The MGA lines are in
+  their own array (`campaigns/H2/list_mga.txt`), to submit once the maximisation works. Next:
+  IPX with crossover, dual simplex warm-started from a crossed-over optimum, tighter boxes.
+- Smoke tests in a simulated layout (`hpc/run.sh`, campaign worktrees, `ESM_JULIA_DEPOT=~/.julia`):
+  H2 line (40 × 24 h, 2013, ε 5 %, onwind): optimum 278 s, min optimal 538 s, max stopped after
+  17 min, run record and runs index written (status failed, exit 137 after the kill); H2b line
+  (14 days, ε 5 %, onwind and gas): 4 MGA solves optimal, 2 min, 0.84 GB; python mode with a
+  trivial script: finished, record and archive as in script mode.
 
 ### 2026-11-04 (afternoon, device port)
 
