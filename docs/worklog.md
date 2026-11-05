@@ -13,19 +13,27 @@ State for a fresh session; details in the to-dos and the log below.
 the 2 event-walk markers in `test_moves.jl` and the 2 bias KS checks in `test_bias.jl`) and the
 device array tests (`device/test/test_replica_driver.jl`, `test_redraw.jl`; `test_comp.jl`
 cases A–O per the port agent). It is about 80 commits ahead of `origin/main`: the user pushes.
-Every agent branch is merged except `worktree-agent-ae8ec558cca8954cf` (see Device, 1).
+Every agent branch is merged except `worktree-agent-ae8ec558cca8954cf` (one commit, 67de232; see Device, 1).
 
 **Device (Reactant port), the aim of the last session.** All move families are ported and
 checked on arrays against the CPU, and every family alone compiles (CPU backend) and equals the
 arrays to ≤ 1e-13, `:slong` and `:cellpairu1` included; the review fixes H1–H3, M1, M2, M5 are
 in ([device_review.md](device_review.md)). Next, in order:
-1. **Combined-program mismatch.** All 16 newer families in one operation-sweep program differ
-   compiled vs arrays at a few sites (≤ 2.6e-2 relative); every family alone and three groups
-   match. A Fable agent was localising it (chaotic divergence from a round-off boundary flip,
-   or an interaction bug, e.g. the trace-time module globals of review M4); its branch
-   `worktree-agent-ae8ec558cca8954cf` holds whatever it committed. Read its last commit message
-   and finish the verdict; if it is a bug, fix it; if chaotic, add a per-round test with the
-   same input state.
+1. **Combined-program mismatch: diagnosed, fix on a branch, not merged.** Not chaos and not a
+   family interaction: FMA contraction in the compiled code leaves ~1e-16 where the arrays have
+   exact zeros at SoC clamp points, so the sign tests of the root search (`rootsK`, the residual
+   rays) count extra crossings; for `:sxlong` the real-candidate count rose ~6 % above the
+   slope-jump cap and the cap guard fired compiled but not on arrays. Fix in branch
+   `worktree-agent-ae8ec558cca8954cf`, commit 67de232 (`zsnap`, `flat_tol`, `raytol` in
+   `device/src/terms.jl`, `jump.jl`; per-family comparison in `test_replica_compiled.jl`;
+   device.md §3 "Round-off and the sign tests"). With it, the guard inputs agree exactly
+   compiled vs arrays for all 13 families, and `test_jump.jl`, `test_mock.jl`, `test_comp.jl` pass
+   on arrays. **Before merging,** run in that worktree (about 10 min):
+   `ESM_DEVICE_COMPILE=1 ESM_DEVICE_FAMILIES=gen0,gen,uc,soc,link,theta,spair,tsoc,sblkg2,tcut,xloc,dshp4,slong,sxpair,sxlong,cell2 nice -n 19 julia --project=device -t 8 device/test/test_replica_compiled.jl`;
+   then `test_reactant_fams.jl` (cases A, B) and the CPU suite, then merge. Not yet checked: the
+   Float32 build and the GPU with the new tolerances. Inputs and probe scripts for any
+   re-dissection: `results/div/` in that worktree (keep it until merged). The review notes are
+   in `results/fable_review/`.
 2. Review items left: M3 (slope-jump cap from the initial state, no guard counter), M4
    (trace-time module globals → fields of the plan), L2 (`slevel` zero-slope columns;
    `SLONG_MOVES` 4 vs the CPU's 32).
