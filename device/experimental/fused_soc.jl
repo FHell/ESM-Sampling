@@ -21,6 +21,9 @@ const KA = KernelAbstractions
 using Reactant
 using ESMDevice
 const D = ESMDevice
+"The package build of an element type: the Float64 reference (ESMDevice) or the Float32 build (ESMDevice.F32), whose functions carry literals of that type."
+@inline fmod(::Type{Float64}) = ESMDevice
+@inline fmod(::Type{Float32}) = ESMDevice.F32
 
 "Insertion sort of x[1:n] in place (fixed trip counts: no data-dependent loop bounds)."
 @inline function sortn!(x, n)
@@ -36,9 +39,10 @@ end
 
 "Extended point i of the sorted list x[1:n] (i in 1:n+2): the rays' points beyond each end (`extend`)."
 @inline function pext(x, n, i)
+    T = eltype(x); DM = fmod(T)
     @inbounds begin
         lo = x[1]; hi = x[n]
-        return i == 1 ? lo - (1.0 + D.absd(lo)) : (i == n + 2 ? hi + (1.0 + D.absd(hi)) : x[i-1])
+        return i == 1 ? lo - (one(T) + DM.absd(lo)) : (i == n + 2 ? hi + (one(T) + DM.absd(hi)) : x[i-1])
     end
 end
 
@@ -48,19 +52,20 @@ smallest distinct sign changes (0 where fewer) written to x[nw+1 … nw+NR] (nw 
 other quantities of the same stage sit between), and their count. `zf(t)` is the quantity.
 """
 @inline function roots_into!(x, n, nw, zf, ::Val{NR}) where {NR}
+    T = eltype(x); DM = fmod(T)
     cnt = 0
-    xs1 = Inf                                   # the smallest ok root; NR = 2: also the next larger
-    xs2 = Inf
+    xs1 = T(Inf)                                   # the smallest ok root; NR = 2: also the next larger
+    xs2 = T(Inf)
     pa = pext(x, n, 1); za = zf(pa)
     @inbounds for i in 1:n+1
         pb = pext(x, n, i + 1); zb = zf(pb)
         den = za - zb
-        xr = pa + (pb - pa) * D.sdiv(za, den)
+        xr = pa + (pb - pa) * DM.sdiv(za, den)
         ok = i == 1 ? (den != 0.0) & (zb != 0.0) & (xr < pb) :
              i == n + 1 ? (den != 0.0) & (za != 0.0) & (xr > pa) : za * zb < 0.0
-        ok &= D.absd(xr) < D.RAYMAX
+        ok &= DM.absd(xr) < DM.RAYMAX
         cnt += ok ? 1 : 0
-        xo = ok ? xr : Inf
+        xo = ok ? xr : T(Inf)
         xs1 = min(xs1, xo)
         pa = pb; za = zb
     end
@@ -69,18 +74,18 @@ other quantities of the same stage sit between), and their count. `zf(t)` is the
         @inbounds for i in 1:n+1
             pb = pext(x, n, i + 1); zb = zf(pb)
             den = za - zb
-            xr = pa + (pb - pa) * D.sdiv(za, den)
+            xr = pa + (pb - pa) * DM.sdiv(za, den)
             ok = i == 1 ? (den != 0.0) & (zb != 0.0) & (xr < pb) :
                  i == n + 1 ? (den != 0.0) & (za != 0.0) & (xr > pa) : za * zb < 0.0
-            ok &= D.absd(xr) < D.RAYMAX
-            xo = ok ? xr : Inf
-            xs2 = min(xs2, xo > xs1 ? xo : Inf)
+            ok &= DM.absd(xr) < DM.RAYMAX
+            xo = ok ? xr : T(Inf)
+            xs2 = min(xs2, xo > xs1 ? xo : T(Inf))
             pa = pb; za = zb
         end
     end
     @inbounds begin
-        x[nw+1] = isfinite(xs1) ? xs1 : 0.0
-        NR >= 2 && (x[nw+2] = isfinite(xs2) ? xs2 : 0.0)
+        x[nw+1] = isfinite(xs1) ? xs1 : zero(T)
+        NR >= 2 && (x[nw+2] = isfinite(xs2) ? xs2 : zero(T))
     end
     return cnt
 end
@@ -95,13 +100,14 @@ tuple): `dense_points` (two stages), `sample_points`, `sample_core`. x, cs, lm: 
 """
 @inline function soc_site!(x, cs, lm, e0::NTuple{NC}, ae, e10, ae1, kk, ww, hh, ηi, ηo, qt, mc, r0::NTuple{R}, u1, u2,
                            Δt, cv, β, cshed, cdump, cpumap, ::Val{NR}, ::Val{MVE}, ::Val{MVE1}, ::Val{SLOT}) where {NC,R,NR,MVE,MVE1,SLOT}
+    T = eltype(x); DM = fmod(T)
     # the primaries (clamp points of the moving arguments) and 0
     n = 1
     @inbounds x[1] = 0.0
     for j in 1:NC
         if MVE[j]
             @inbounds begin
-                x[n+1] = D.sdiv(0.0 - e0[j], ae[j]); x[n+2] = D.sdiv(1.0 - e0[j], ae[j])
+                x[n+1] = DM.sdiv(zero(T) - e0[j], ae[j]); x[n+2] = DM.sdiv(one(T) - e0[j], ae[j])
             end
             n += 2
         end
@@ -109,7 +115,7 @@ tuple): `dense_points` (two stages), `sample_points`, `sample_core`. x, cs, lm: 
     for j in 1:NC
         if MVE1[j]
             @inbounds begin
-                x[n+1] = D.sdiv(0.0 - e10[j], ae1[j]); x[n+2] = D.sdiv(1.0 - e10[j], ae1[j])
+                x[n+1] = DM.sdiv(zero(T) - e10[j], ae1[j]); x[n+2] = DM.sdiv(one(T) - e10[j], ae1[j])
             end
             n += 2
         end
@@ -118,13 +124,13 @@ tuple): `dense_points` (two stages), `sample_points`, `sample_core`. x, cs, lm: 
     # stage 1: the roots of the SoC quantities (d, d − ηin or 1, −d ηout − 1) of every column with a
     # moving argument: 1 root for one moving argument, NR for two
     over = false
-    d1(j, t) = D.soc_d(Δt, e0[j] + ae[j] * t, e10[j] + ae1[j] * t, hh[j], qt[j])
+    d1(j, t) = DM.soc_d(Δt, e0[j] + ae[j] * t, e10[j] + ae1[j] * t, hh[j], qt[j])
     n1 = n
     for q in 1:3
         for j in 1:NC
             cntj = (MVE[j] ? 1 : 0) + (MVE1[j] ? 1 : 0)
             cntj == 0 && continue
-            zf = t -> (q == 1 ? d1(j, t) : q == 2 ? (ηi[j] > 0.0 ? d1(j, t) - ηi[j] : 1.0) : -d1(j, t) * ηo[j] - 1.0)
+            zf = t -> (q == 1 ? d1(j, t) : q == 2 ? (ηi[j] > 0.0 ? d1(j, t) - ηi[j] : one(T)) : -d1(j, t) * ηo[j] - one(T))
             if cntj == 1
                 c = roots_into!(x, n, n1, zf, Val(1)); over |= c > 1; n1 += 1
             else
@@ -140,8 +146,8 @@ tuple): `dense_points` (two stages), `sample_points`, `sample_core`. x, cs, lm: 
         for j in 1:NC
             if SLOT[j] == s
                 dd1 = d1(j, t)
-                dd0 = D.soc_d(Δt, e0[j], e10[j], hh[j], qt[j])
-                ia += D.soc_j(dd1, kk[j], ηi[j], ηo[j]) - D.soc_j(dd0, kk[j], ηi[j], ηo[j])
+                dd0 = DM.soc_d(Δt, e0[j], e10[j], hh[j], qt[j])
+                ia += DM.soc_j(dd1, kk[j], ηi[j], ηo[j]) - DM.soc_j(dd0, kk[j], ηi[j], ηo[j])
             end
         end
         ia
@@ -159,34 +165,34 @@ tuple): `dense_points` (two stages), `sample_points`, `sample_core`. x, cs, lm: 
         t = pext(x, n, i)
         sc = 0.0
         for j in 1:NC
-            sc += D.soc_c(Δt, cv, e0[j] + ae[j] * t, e10[j] + ae1[j] * t, kk[j], ww[j], hh[j], ηi[j], ηo[j], qt[j], mc[j]) -
-                  D.soc_c(Δt, cv, e0[j], e10[j], kk[j], ww[j], hh[j], ηi[j], ηo[j], qt[j], mc[j])
+            sc += DM.soc_c(Δt, cv, e0[j] + ae[j] * t, e10[j] + ae1[j] * t, kk[j], ww[j], hh[j], ηi[j], ηo[j], qt[j], mc[j]) -
+                  DM.soc_c(Δt, cv, e0[j], e10[j], kk[j], ww[j], hh[j], ηi[j], ηo[j], qt[j], mc[j])
         end
         sb = 0.0
         for s in 1:R
-            sb += D.bal_val(Δt, cshed, cdump, r0[s] + inj(s, t)) - D.bal_val(Δt, cshed, cdump, r0[s])
+            sb += DM.bal_val(Δt, cshed, cdump, r0[s] + inj(s, t)) - DM.bal_val(Δt, cshed, cdump, r0[s])
         end
         cs[i] = β * (sc + sb)
     end
     # `sample_core` over the ne points
     @inbounds begin
         p1 = pext(x, n, 1); p2 = pext(x, n, 2); pn1 = pext(x, n, ne - 1); pn = pext(x, n, ne)
-        L1 = p2 - p1; Ls1 = L1 > 0.0 ? L1 : 1.0
+        L1 = p2 - p1; Ls1 = L1 > 0.0 ? L1 : one(T)
         g1 = (cs[2] - cs[1]) / Ls1
-        Ln = pn - pn1; Lsn = Ln > 0.0 ? Ln : 1.0
+        Ln = pn - pn1; Lsn = Ln > 0.0 ? Ln : one(T)
         gn = (cs[ne] - cs[ne-1]) / Lsn
         gl = -g1; gr = gn
         risel = cs[1] - cs[2]; riser = cs[ne] - cs[ne-1]
-        improper = (risel <= 1e-12 * (D.absd(cs[1]) + D.absd(cs[2]))) | (riser <= 1e-12 * (D.absd(cs[ne]) + D.absd(cs[ne-1]))) |
+        improper = (risel <= T(1e-12) * (DM.absd(cs[1]) + DM.absd(cs[2]))) | (riser <= T(1e-12) * (DM.absd(cs[ne]) + DM.absd(cs[ne-1]))) |
                    (gl <= 0.0) | (gr <= 0.0)
-        lmx = -Inf
+        lmx = T(-Inf)
         for j in 1:ne-1
             pa = pext(x, n, j); pb = pext(x, n, j + 1)
             Lj = pb - pa
             ca, cb = cs[j], cs[j+1]
-            v = j == 1 ? -cb - log(gl > 0.0 ? gl : 1.0) :
-                j == ne - 1 ? -ca - log(gr > 0.0 ? gr : 1.0) :
-                (Lj > 0.0 ? -min(ca, cb) + D.logseg_d(Lj, D.absd(cb - ca)) : -Inf)
+            v = j == 1 ? -cb - log(gl > 0.0 ? gl : one(T)) :
+                j == ne - 1 ? -ca - log(gr > 0.0 ? gr : one(T)) :
+                (Lj > 0.0 ? -min(ca, cb) + DM.logseg_d(Lj, DM.absd(cb - ca)) : T(-Inf))
             lm[j] = v
             lmx = max(lmx, v)
         end
@@ -203,15 +209,15 @@ tuple): `dense_points` (two stages), `sample_points`, `sample_core`. x, cs, lm: 
         jsel = min(jsel, ne - 1)
         ja = pext(x, n, jsel); jb = pext(x, n, jsel + 1)
         Lj = jb - ja
-        jL = Lj > 0.0 ? Lj : 0.0
-        jg = Lj > 0.0 ? (cs[jsel+1] - cs[jsel]) / Lj : 0.0
+        jL = Lj > 0.0 ? Lj : zero(T)
+        jg = Lj > 0.0 ? (cs[jsel+1] - cs[jsel]) / Lj : zero(T)
         e = -log1p(-u2)
-        tl = jb - e / (gl > 0.0 ? gl : 1.0)
-        tr = ja + e / (gr > 0.0 ? gr : 1.0)
-        tf = (jg < 0.0) & (D.absd(jg * jL) >= 1e-10) ? jb + D.trexp_end(u2, jg, jL, cpumap) : ja + D.trexp_d(u2, jg, jL, cpumap)
+        tl = jb - e / (gl > 0.0 ? gl : one(T))
+        tr = ja + e / (gr > 0.0 ? gr : one(T))
+        tf = (jg < 0.0) & (DM.absd(jg * jL) >= T(1e-10)) ? jb + DM.trexp_end(u2, jg, jL, cpumap) : ja + DM.trexp_d(u2, jg, jL, cpumap)
         t = jsel == 1 ? tl : (jsel == ne - 1 ? tr : tf)
-        t = (improper | !isfinite(t)) ? 0.0 : t
-        return (over ? 0.0 : t), over
+        t = (improper | !isfinite(t)) ? zero(T) : t
+        return (over ? zero(T) : t), over
     end
 end
 
@@ -223,24 +229,25 @@ end
 @inline getv(x) = x[]
 
 "Column j of site g in a flattened (C·B, NC) field (nothing: a static zero)."
-@inline fld(X, g, j, CB) = X === nothing ? 0.0 : (@inbounds X[g + (j - 1) * CB])
+@inline fld(X, g, j, CB, z) = X === nothing ? z : (@inbounds X[g + (j - 1) * CB])
 
 @kernel function soc_draw_kernel!(tout, oout, e0, ae, e10, ae1, kk, ww, hh, ηi, ηo, qt, mc, r0, u1, u2,
                                   Δt, cv, β, cshed, cdump, cpumap,
                                   ::Val{CB}, ::Val{NC}, ::Val{R}, ::Val{NR}, ::Val{NP}, ::Val{MVE}, ::Val{MVE1}, ::Val{SLOT}) where {CB,NC,R,NR,NP,MVE,MVE1,SLOT}
     g = @index(Global, Linear)
-    x = @private Float64 (NP + 2,)
-    cs = @private Float64 (NP + 2,)
-    lm = @private Float64 (NP + 1,)
+    T = eltype(tout); DM = fmod(T)
+    x = @private eltype(tout) (NP + 2,)
+    cs = @private eltype(tout) (NP + 2,)
+    lm = @private eltype(tout) (NP + 1,)
     if g <= CB
-        col(X) = ntuple(j -> fld(X, g, j, CB), Val(NC))
-        rt = ntuple(s -> fld(r0, g, s, CB), Val(R))
+        col(X) = ntuple(j -> fld(X, g, j, CB, zero(T)), Val(NC))
+        rt = ntuple(s -> fld(r0, g, s, CB, zero(T)), Val(R))
         t, over = soc_site!(x, cs, lm, col(e0), col(ae), col(e10), col(ae1), col(kk), col(ww), col(hh), col(ηi), col(ηo), col(qt), col(mc),
                             rt, (@inbounds u1[g]), (@inbounds u2[g]), getv(Δt), getv(cv), getv(β), getv(cshed), getv(cdump), getv(cpumap),
                             Val(NR), Val(MVE), Val(MVE1), Val(SLOT))
         @inbounds begin
             tout[g] = t
-            oout[g] = over ? 1.0 : 0.0
+            oout[g] = over ? one(T) : zero(T)
         end
     end
 end
@@ -253,14 +260,15 @@ end
 function soc_draw_ref(e0, ae, e10, ae1, kk, ww, hh, ηi, ηo, qt, mc, r0, u1, u2, Δt, cv, β, cshed, cdump, cpumap,
                       NC::Int, R::Int, NR::Int, NP::Int, mve, mve1, slot; pts=nothing)
     CB = length(u1)
-    t = zeros(CB); ov = zeros(CB)
-    x = zeros(NP + 2); cs = zeros(NP + 2); lm = zeros(NP + 1)
-    col(X, g) = ntuple(j -> fld(X, g, j, CB), NC)
+    T = eltype(u1); DM = fmod(T)
+    t = zeros(T, CB); ov = zeros(T, CB)
+    x = zeros(T, NP + 2); cs = zeros(T, NP + 2); lm = zeros(T, NP + 1)
+    col(X, g) = ntuple(j -> fld(X, g, j, CB, zero(T)), NC)
     for g in 1:CB
         tt, over = soc_site!(x, cs, lm, col(e0, g), col(ae, g), col(e10, g), col(ae1, g), col(kk, g), col(ww, g), col(hh, g), col(ηi, g),
-                             col(ηo, g), col(qt, g), col(mc, g), ntuple(s -> fld(r0, g, s, CB), R), u1[g], u2[g],
+                             col(ηo, g), col(qt, g), col(mc, g), ntuple(s -> fld(r0, g, s, CB, zero(T)), R), u1[g], u2[g],
                              Δt, cv, β, cshed, cdump, cpumap, Val(NR), Val(mve), Val(mve1), Val(slot))
-        t[g] = tt; ov[g] = over ? 1.0 : 0.0
+        t[g] = tt; ov[g] = over ? one(T) : zero(T)
         pts === nothing || (pts[:, g] .= x[1:NP])              # diagnostics: the site's final sorted points
     end
     return t, ov
@@ -273,6 +281,7 @@ end
 (traced arrays: launched into the program; Julia arrays: the reference). t (C, B, 1), over Bool.
 """
 function sample_soc_fused(tb, k, u1, u2; K::Val{NR}=Val(2), nt::Int=128) where {NR}
+    T = typeof(k.β); DM = fmod(T)
     So = tb.st.soc
     So === nothing && error("sample_soc_fused: no SoC terms")
     tb.st.gen === nothing && tb.st.uc === nothing && tb.st.link === nothing && tb.st.line === nothing && tb.st.kk === nothing ||
@@ -284,17 +293,17 @@ function sample_soc_fused(tb, k, u1, u2; K::Val{NR}=Val(2), nt::Int=128) where {
     np = 2 * (count(mve) + count(mve1))
     nroot = 3 * sum(c -> c == 0 ? 0 : (c == 1 ? 1 : NR), So.cnt; init=0) + R * NR
     NP = 1 + np + nroot
-    f2(X, m) = X === nothing ? nothing : D.rs(X, CB * m)
+    f2(X, m) = X === nothing ? nothing : DM.rs(X, CB * m)
     fields = (f2(So.e0, NC), f2(So.ae, NC), f2(So.e10, NC), f2(So.ae1, NC), f2(So.k, NC), f2(So.w, NC), f2(So.h, NC), f2(So.ηin, NC),
-              f2(So.ηout, NC), f2(So.qt, NC), f2(So.mc, NC), f2(tb.st.r0, R), D.rs(u1, CB), D.rs(u2, CB))
+              f2(So.ηout, NC), f2(So.qt, NC), f2(So.mc, NC), f2(tb.st.r0, R), DM.rs(u1, CB), DM.rs(u2, CB))
     consts = (k.Δt, k.cv, k.β, k.cshed, k.cdump, k.cpumap)
     if So.e0 isa Reactant.TracedRArray
         backend = KA.get_backend(So.e0)
-        t = KA.allocate(backend, Float64, (CB,))
-        o = KA.allocate(backend, Float64, (CB,))
+        t = KA.allocate(backend, T, (CB,))
+        o = KA.allocate(backend, T, (CB,))
         kern = soc_draw_kernel!(backend, nt)
         kern(t, o, fields..., consts..., Val(CB), Val(NC), Val(R), Val(NR), Val(NP), Val(mve), Val(mve1), Val(slot); ndrange=CB)
-        return D.rs(t, C, B, 1), D.rs(o, C, B, 1) .> 0.0
+        return DM.rs(t, C, B, 1), DM.rs(o, C, B, 1) .> 0.0
     end
     t, o = soc_draw_ref(fields..., consts..., NC, R, NR, NP, mve, mve1, slot)
     return reshape(t, C, B, 1), reshape(o, C, B, 1) .> 0.0
@@ -302,10 +311,11 @@ end
 
 "`do_round` of the SoC family with the line draw taken by `sample_soc_fused`."
 function do_round_soc(st, cp, sp, k, tab, r, u; nt::Int=128)
+    DM = fmod(typeof(k.β))
     f = Val(:soc)
-    tb, aux = D.build(f, st, cp, sp, tab, r, k)
-    t, _ = sample_soc_fused(tb, k, u[:, :, 1:1], u[:, :, 2:2]; K=D.nroots(f), nt=nt)
-    t = D.pin(D.jac_accept(tb, t, u[:, :, 3:3]))
-    dr = D.slot_changes(tb, k, t)
-    return D.commit_tb(f, st, tab, r, t, dr, aux, tb), t
+    tb, aux = DM.build(f, st, cp, sp, tab, r, k)
+    t, _ = sample_soc_fused(tb, k, u[:, :, 1:1], u[:, :, 2:2]; K=DM.nroots(f), nt=nt)
+    t = DM.pin(DM.jac_accept(tb, t, u[:, :, 3:3]))
+    dr = DM.slot_changes(tb, k, t)
+    return DM.commit_tb(f, st, tab, r, t, dr, aux, tb), t
 end

@@ -26,6 +26,9 @@ const KA = KernelAbstractions
 using Reactant
 using ESMDevice
 const D = ESMDevice
+"The package build of an element type: the Float64 reference (ESMDevice) or the Float32 build (ESMDevice.F32), whose functions carry literals of that type."
+@inline fmod(::Type{Float64}) = ESMDevice
+@inline fmod(::Type{Float32}) = ESMDevice.F32
 
 # ---------------------------------------------------------------------------
 # the serial per-site tail: `jump_values1` + `sample_core1` on the sorted, capped entries
@@ -40,32 +43,33 @@ P, V, L, X are scratch vectors of length ≥ M + 2. J is overwritten. The arithm
 same terms, another association order than the two-level scan `cumsum1`).
 """
 @inline function fused_tail!(q, J, P, V, L, X, M::Int, s0, s0abs, J0abs, u1, u2, β, cpumap)
-    ε16 = 16 * eps(Float64)
+    T = eltype(q); DM = fmod(T)
+    ε16 = 16 * eps(T)
     # prefix sums of the jumps right of 0 (cR → P, their absolute values aR → V)
     acc = 0.0; aacc = 0.0
     @inbounds for m in 1:M
-        JR = q[m] > 0.0 ? J[m] : 0.0
-        acc += JR; aacc += D.absd(JR)
+        JR = q[m] > 0.0 ? J[m] : zero(T)
+        acc += JR; aacc += DM.absd(JR)
         P[m] = acc; V[m] = aacc
     end
     # suffix sums of the jumps at and left of 0 (sL → L, aL → X)
     acc = 0.0; aacc = 0.0
     @inbounds for m in M:-1:1
-        JL = q[m] > 0.0 ? 0.0 : J[m]
-        acc += JL; aacc += D.absd(JL)
+        JL = q[m] > 0.0 ? zero(T) : J[m]
+        acc += JL; aacc += DM.absd(JL)
         L[m] = acc; X[m] = aacc
     end
-    base = ε16 * (s0abs + D.absd(s0))
+    base = ε16 * (s0abs + DM.absd(s0))
     gl = s0 - L[1]
     gr = s0 + P[M]
-    gl = D.absd(gl) <= base + ε16 * (X[1] + J0abs) ? 0.0 : gl
-    gr = D.absd(gr) <= base + ε16 * V[M] ? 0.0 : gr
+    gl = DM.absd(gl) <= base + ε16 * (X[1] + J0abs) ? zero(T) : gl
+    gr = DM.absd(gr) <= base + ε16 * V[M] ? zero(T) : gr
     # segment slopes from 0 outwards and the segment masses w (→ J)
     @inbounds for m in 1:M-1
         rseg = q[m] >= 0.0
         sl = rseg ? s0 + P[m] : s0 - L[m+1]
-        tol = ε16 * (s0abs + D.absd(s0) + (rseg ? V[m] : X[m+1] + J0abs))
-        sl = D.absd(sl) <= tol ? 0.0 : sl
+        tol = ε16 * (s0abs + DM.absd(s0) + (rseg ? V[m] : X[m+1] + J0abs))
+        sl = DM.absd(sl) <= tol ? zero(T) : sl
         J[m] = sl * (q[m+1] - q[m])
     end
     # the potential: right[i] = Σ_{m < i, q_m ≥ 0} w_m (→ P), left[i] = Σ_{m ≥ i, q_{m+1} ≤ 0} w_m (→ L)
@@ -85,7 +89,7 @@ same terms, another association order than the two-level scan `cumsum1`).
     # extended points and values (the rays), scaled by β: pe → P[1:M+2], c → V[1:M+2]
     @inbounds begin
         lo, hi = q[1], q[M]
-        plo = lo - (1.0 + D.absd(lo)); phi = hi + (1.0 + D.absd(hi))
+        plo = lo - (one(T) + DM.absd(lo)); phi = hi + (one(T) + DM.absd(hi))
         clo = V[1] + gl * (plo - lo); chi = V[M] + gr * (phi - hi)
         for i in M:-1:1
             P[i+1] = q[i]; V[i+1] = β * V[i]
@@ -95,21 +99,21 @@ same terms, another association order than the two-level scan `cumsum1`).
     # inverse CDF over the n = M + 2 points (`sample_core1`): segment log-masses → L, cumulative → X
     n = M + 2
     @inbounds begin
-        L1 = P[2] - P[1]; Ls1 = L1 > 0.0 ? L1 : 1.0
+        L1 = P[2] - P[1]; Ls1 = L1 > 0.0 ? L1 : one(T)
         g1 = (V[2] - V[1]) / Ls1
-        Ln = P[n] - P[n-1]; Lsn = Ln > 0.0 ? Ln : 1.0
+        Ln = P[n] - P[n-1]; Lsn = Ln > 0.0 ? Ln : one(T)
         gn = (V[n] - V[n-1]) / Lsn
         glr = -g1; grr = gn
         risel = V[1] - V[2]; riser = V[n] - V[n-1]
-        improper = (risel <= 1e-12 * (D.absd(V[1]) + D.absd(V[2]))) | (riser <= 1e-12 * (D.absd(V[n]) + D.absd(V[n-1]))) |
+        improper = (risel <= T(1e-12) * (DM.absd(V[1]) + DM.absd(V[2]))) | (riser <= T(1e-12) * (DM.absd(V[n]) + DM.absd(V[n-1]))) |
                    (glr <= 0.0) | (grr <= 0.0)
-        lmx = -Inf
+        lmx = T(-Inf)
         for j in 1:n-1
             Lj = P[j+1] - P[j]
             ca, cb = V[j], V[j+1]
-            lm = j == 1 ? -cb - log(glr > 0.0 ? glr : 1.0) :
-                 j == n - 1 ? -ca - log(grr > 0.0 ? grr : 1.0) :
-                 (Lj > 0.0 ? -min(ca, cb) + D.logseg_d(Lj, D.absd(cb - ca)) : -Inf)
+            lm = j == 1 ? -cb - log(glr > 0.0 ? glr : one(T)) :
+                 j == n - 1 ? -ca - log(grr > 0.0 ? grr : one(T)) :
+                 (Lj > 0.0 ? -min(ca, cb) + DM.logseg_d(Lj, DM.absd(cb - ca)) : T(-Inf))
             L[j] = lm
             lmx = max(lmx, lm)
         end
@@ -126,14 +130,14 @@ same terms, another association order than the two-level scan `cumsum1`).
         jsel = min(jsel, n - 1)
         ja, jb = P[jsel], P[jsel+1]
         Lj = jb - ja
-        jL = Lj > 0.0 ? Lj : 0.0
-        jg = Lj > 0.0 ? (V[jsel+1] - V[jsel]) / Lj : 0.0
+        jL = Lj > 0.0 ? Lj : zero(T)
+        jg = Lj > 0.0 ? (V[jsel+1] - V[jsel]) / Lj : zero(T)
         e = -log1p(-u2)
-        tl = jb - e / (glr > 0.0 ? glr : 1.0)
-        tr = ja + e / (grr > 0.0 ? grr : 1.0)
-        tf = (jg < 0.0) & (D.absd(jg * jL) >= 1e-10) ? jb + D.trexp_end(u2, jg, jL, cpumap) : ja + D.trexp_d(u2, jg, jL, cpumap)
+        tl = jb - e / (glr > 0.0 ? glr : one(T))
+        tr = ja + e / (grr > 0.0 ? grr : one(T))
+        tf = (jg < 0.0) & (DM.absd(jg * jL) >= T(1e-10)) ? jb + DM.trexp_end(u2, jg, jL, cpumap) : ja + DM.trexp_d(u2, jg, jL, cpumap)
         t = jsel == 1 ? tl : (jsel == n - 1 ? tr : tf)
-        return (improper | !isfinite(t)) ? 0.0 : t
+        return (improper | !isfinite(t)) ? zero(T) : t
     end
 end
 
@@ -150,13 +154,14 @@ end
 # the loops are uniform over the block. The partial sums keep their terms (a prefix of exact zeros
 # stays exactly zero); the association order differs from the serial tail and from `cumsum1`.
 @inline function pscan!(A, n, li, ::Val{NT}) where {NT}
+    T = eltype(A)
     d = 1
     while d < n
         i1 = li; i2 = li + NT
         a1 = (i1 <= n) & (i1 > d); a2 = (i2 <= n) & (i2 > d)
         @inbounds begin
-            v1 = a1 ? A[i1 - d] : 0.0
-            v2 = a2 ? A[i2 - d] : 0.0
+            v1 = a1 ? A[i1 - d] : zero(T)
+            v2 = a2 ? A[i2 - d] : zero(T)
         end
         @synchronize
         @inbounds begin
@@ -169,16 +174,17 @@ end
 end
 
 @inline function scan2!(A, B, Cc, Dd, n, li, ::Val{NT}) where {NT}
+    T = eltype(A)
     d = 1
     while d < n
         i1 = li; i2 = li + NT
         a1 = (i1 <= n) & (i1 > d); a2 = (i2 <= n) & (i2 > d)        # prefix: i > d
         c1 = i1 + d <= n; c2 = i2 + d <= n                          # suffix: i + d ≤ n
         @inbounds begin
-            va1 = a1 ? A[i1 - d] : 0.0; vb1 = a1 ? B[i1 - d] : 0.0
-            va2 = a2 ? A[i2 - d] : 0.0; vb2 = a2 ? B[i2 - d] : 0.0
-            vc1 = c1 ? Cc[i1 + d] : 0.0; vd1 = c1 ? Dd[i1 + d] : 0.0
-            vc2 = c2 ? Cc[i2 + d] : 0.0; vd2 = c2 ? Dd[i2 + d] : 0.0
+            va1 = a1 ? A[i1 - d] : zero(T); vb1 = a1 ? B[i1 - d] : zero(T)
+            va2 = a2 ? A[i2 - d] : zero(T); vb2 = a2 ? B[i2 - d] : zero(T)
+            vc1 = c1 ? Cc[i1 + d] : zero(T); vd1 = c1 ? Dd[i1 + d] : zero(T)
+            vc2 = c2 ? Cc[i2 + d] : zero(T); vd2 = c2 ? Dd[i2 + d] : zero(T)
         end
         @synchronize
         @inbounds begin
@@ -207,17 +213,18 @@ the cap, or the root guard was set).
                                     ::Val{N}, ::Val{NP}, ::Val{M}, ::Val{CAP}, ::Val{NT}, ::Val{MODE}) where {N,NP,M,CAP,NT,MODE}
     g = @index(Group, Linear)
     li = @index(Local, Linear)
-    qs = @localmem Float64 (NP,)
+    T = eltype(tout); DM = fmod(T)
+    qs = @localmem eltype(tout) (NP,)
     ks = @localmem Int32 (NP,)
-    J2 = @localmem Float64 (M + 2,)
-    P = @localmem Float64 (M + 2,)
-    V = @localmem Float64 (M + 2,)
-    L = @localmem Float64 (M + 2,)
-    X = @localmem Float64 (M + 2,)
-    r1 = @localmem Float64 (NT,)
-    r2 = @localmem Float64 (NT,)
-    r3 = @localmem Float64 (NT,)
-    sc = @localmem Float64 (16,)
+    J2 = @localmem eltype(tout) (M + 2,)
+    P = @localmem eltype(tout) (M + 2,)
+    V = @localmem eltype(tout) (M + 2,)
+    L = @localmem eltype(tout) (M + 2,)
+    X = @localmem eltype(tout) (M + 2,)
+    r1 = @localmem eltype(tout) (NT,)
+    r2 = @localmem eltype(tout) (NT,)
+    r3 = @localmem eltype(tout) (NT,)
+    sc = @localmem eltype(tout) (16,)
     off = (g - 1) * N
     # load: slot 1 = the folded zero entry, slots 2..N+1 = the entries, the rest padding
     cnt = 0.0; J0 = 0.0; J0a = 0.0
@@ -229,13 +236,13 @@ the cap, or the root guard was set).
             v = qa[off + i - 1]
             jv = Ja[off + i - 1]
             z = v == 0.0
-            qs[i] = z ? Inf : v
+            qs[i] = z ? T(Inf) : v
             ks[i] = Int32(i - 1)
-            cnt += z ? 0.0 : 1.0
-            J0 += z ? jv : 0.0
-            J0a += z ? D.absd(jv) : 0.0
+            cnt += z ? zero(T) : one(T)
+            J0 += z ? jv : zero(T)
+            J0a += z ? DM.absd(jv) : zero(T)
         else
-            qs[i] = Inf; ks[i] = Int32(i - 1)
+            qs[i] = T(Inf); ks[i] = Int32(i - 1)
         end
         i += NT
     end
@@ -272,7 +279,7 @@ the cap, or the root guard was set).
         @inbounds for m in 1:NT
             c += r1[m]; a += r2[m]; b += r3[m]
         end
-        qmax = -Inf
+        qmax = T(-Inf)
         @inbounds for m in 1:M
             isfinite(qs[m]) && (qmax = max(qmax, qs[m]))
         end
@@ -286,15 +293,15 @@ the cap, or the root guard was set).
     @inbounds while i <= M
         qv = qs[i]
         idx = ks[i]
-        jv = idx == Int32(0) ? sc[2] : (isfinite(qv) ? Ja[off + idx] : 0.0)
-        J2[i] = isfinite(qv) ? jv : 0.0
+        jv = idx == Int32(0) ? sc[2] : (isfinite(qv) ? Ja[off + idx] : zero(T))
+        J2[i] = isfinite(qv) ? jv : zero(T)
         isfinite(qv) || (qs[i] = sc[4])
         i += NT
     end
     @synchronize
     if MODE == 0
         # ---- the block-parallel tail: `fused_tail!` with the scans over the block
-        ε16 = 16 * eps(Float64)
+        ε16 = 16 * eps(T)
         n = M + 2
         @inbounds begin
             s0g = s0[g]; s0a = s0abs[g]; J0a = sc[3]; βv = getval(β)
@@ -304,9 +311,9 @@ the cap, or the root guard was set).
         i = li
         @inbounds while i <= M
             qv = qs[i]; jv = J2[i]
-            JR = qv > 0.0 ? jv : 0.0
-            JL = qv > 0.0 ? 0.0 : jv
-            P[i] = JR; V[i] = D.absd(JR); L[i] = JL; X[i] = D.absd(JL)
+            JR = qv > 0.0 ? jv : zero(T)
+            JL = qv > 0.0 ? zero(T) : jv
+            P[i] = JR; V[i] = DM.absd(JR); L[i] = JL; X[i] = DM.absd(JL)
             i += NT
         end
         @synchronize
@@ -314,11 +321,11 @@ the cap, or the root guard was set).
         # the ray slopes (thread 1 → sc[5], sc[6]; read after the next barrier)
         if li == 1
             @inbounds begin
-                base = ε16 * (s0a + D.absd(s0g))
+                base = ε16 * (s0a + DM.absd(s0g))
                 gl = s0g - L[1]
                 gr = s0g + P[M]
-                sc[5] = D.absd(gl) <= base + ε16 * (X[1] + J0a) ? 0.0 : gl
-                sc[6] = D.absd(gr) <= base + ε16 * V[M] ? 0.0 : gr
+                sc[5] = DM.absd(gl) <= base + ε16 * (X[1] + J0a) ? zero(T) : gl
+                sc[6] = DM.absd(gr) <= base + ε16 * V[M] ? zero(T) : gr
             end
         end
         # B: segment slopes from 0 outwards and the segment masses w → J2[1:M-1]
@@ -327,8 +334,8 @@ the cap, or the root guard was set).
             qa_ = qs[i]; qb_ = qs[i+1]
             rseg = qa_ >= 0.0
             sl = rseg ? s0g + P[i] : s0g - L[i+1]
-            tol = ε16 * (s0a + D.absd(s0g) + (rseg ? V[i] : X[i+1] + J0a))
-            sl = D.absd(sl) <= tol ? 0.0 : sl
+            tol = ε16 * (s0a + DM.absd(s0g) + (rseg ? V[i] : X[i+1] + J0a))
+            sl = DM.absd(sl) <= tol ? zero(T) : sl
             J2[i] = sl * (qb_ - qa_)
             i += NT
         end
@@ -336,8 +343,8 @@ the cap, or the root guard was set).
         # C: right[i] = Σ_{m < i, q_m ≥ 0} w_m (a shifted prefix → P), left[i] = Σ_{m ≥ i, q_{m+1} ≤ 0} w_m (a suffix → L)
         i = li
         @inbounds while i <= M
-            P[i] = (i >= 2) && (qs[i-1] >= 0.0) ? J2[i-1] : 0.0
-            L[i] = (i <= M - 1) && (qs[i+1] <= 0.0) ? J2[i] : 0.0
+            P[i] = (i >= 2) && (qs[i-1] >= 0.0) ? J2[i-1] : zero(T)
+            L[i] = (i <= M - 1) && (qs[i+1] <= 0.0) ? J2[i] : zero(T)
             i += NT
         end
         @synchronize
@@ -351,7 +358,7 @@ the cap, or the root guard was set).
         if li == 1
             @inbounds begin
                 lo = qs[1]; hi = qs[M]
-                plo = lo - (1.0 + D.absd(lo)); phi = hi + (1.0 + D.absd(hi))
+                plo = lo - (one(T) + DM.absd(lo)); phi = hi + (one(T) + DM.absd(hi))
                 c1 = lo > 0.0 ? P[1] : -L[1]
                 cM = hi > 0.0 ? P[M] : -L[M]
                 V[1] = βv * (c1 + sc[5] * (plo - lo))
@@ -363,22 +370,22 @@ the cap, or the root guard was set).
         # E: the inverse CDF (`sample_core1`): segment log-masses → L[1:n-1], their maximum (r1 → sc[9])
         @inbounds begin
             plo = sc[7]; phi = sc[8]
-            L1 = qs[1] - plo; Ls1 = L1 > 0.0 ? L1 : 1.0
+            L1 = qs[1] - plo; Ls1 = L1 > 0.0 ? L1 : one(T)
             g1 = (V[2] - V[1]) / Ls1
-            Ln = phi - qs[M]; Lsn = Ln > 0.0 ? Ln : 1.0
+            Ln = phi - qs[M]; Lsn = Ln > 0.0 ? Ln : one(T)
             gn = (V[n] - V[n-1]) / Lsn
         end
         glr = -g1; grr = gn
-        lmx = -Inf
+        lmx = T(-Inf)
         j = li
         @inbounds while j <= n - 1
             pa = j == 1 ? plo : qs[j-1]
             pb = j == n - 1 ? phi : qs[j]
             Lj = pb - pa
             ca = V[j]; cb = V[j+1]
-            lm = j == 1 ? -cb - log(glr > 0.0 ? glr : 1.0) :
-                 j == n - 1 ? -ca - log(grr > 0.0 ? grr : 1.0) :
-                 (Lj > 0.0 ? -min(ca, cb) + D.logseg_d(Lj, D.absd(cb - ca)) : -Inf)
+            lm = j == 1 ? -cb - log(glr > 0.0 ? glr : one(T)) :
+                 j == n - 1 ? -ca - log(grr > 0.0 ? grr : one(T)) :
+                 (Lj > 0.0 ? -min(ca, cb) + DM.logseg_d(Lj, DM.absd(cb - ca)) : T(-Inf))
             L[j] = lm
             lmx = max(lmx, lm)
             j += NT
@@ -386,7 +393,7 @@ the cap, or the root guard was set).
         @inbounds r1[li] = lmx
         @synchronize
         if li == 1
-            mxv = -Inf
+            mxv = T(-Inf)
             @inbounds for m in 1:NT
                 mxv = max(mxv, r1[m])
             end
@@ -406,7 +413,7 @@ the cap, or the root guard was set).
         cnt = 0.0
         j = li
         @inbounds while j <= n - 1
-            cnt += X[j] < tgt ? 1.0 : 0.0
+            cnt += X[j] < tgt ? one(T) : zero(T)
             j += NT
         end
         @inbounds r1[li] = cnt
@@ -421,22 +428,22 @@ the cap, or the root guard was set).
                 ja = jsel == 1 ? plo : qs[jsel-1]
                 jb = jsel == n - 1 ? phi : qs[jsel]
                 Lj = jb - ja
-                jL = Lj > 0.0 ? Lj : 0.0
-                jg = Lj > 0.0 ? (V[jsel+1] - V[jsel]) / Lj : 0.0
+                jL = Lj > 0.0 ? Lj : zero(T)
+                jg = Lj > 0.0 ? (V[jsel+1] - V[jsel]) / Lj : zero(T)
                 u2g = u2[g]
                 e = -log1p(-u2g)
-                tl = jb - e / (glr > 0.0 ? glr : 1.0)
-                tr = ja + e / (grr > 0.0 ? grr : 1.0)
-                tf = (jg < 0.0) & (D.absd(jg * jL) >= 1e-10) ? jb + D.trexp_end(u2g, jg, jL, getval(cpumap)) : ja + D.trexp_d(u2g, jg, jL, getval(cpumap))
+                tl = jb - e / (glr > 0.0 ? glr : one(T))
+                tr = ja + e / (grr > 0.0 ? grr : one(T))
+                tf = (jg < 0.0) & (DM.absd(jg * jL) >= T(1e-10)) ? jb + DM.trexp_end(u2g, jg, jL, getval(cpumap)) : ja + DM.trexp_d(u2g, jg, jL, getval(cpumap))
                 t = jsel == 1 ? tl : (jsel == n - 1 ? tr : tf)
                 risel = V[1] - V[2]; riser = V[n] - V[n-1]
-                improper = (risel <= 1e-12 * (D.absd(V[1]) + D.absd(V[2]))) | (riser <= 1e-12 * (D.absd(V[n]) + D.absd(V[n-1]))) |
+                improper = (risel <= T(1e-12) * (DM.absd(V[1]) + DM.absd(V[2]))) | (riser <= T(1e-12) * (DM.absd(V[n]) + DM.absd(V[n-1]))) |
                            (glr <= 0.0) | (grr <= 0.0)
-                t = (improper | !isfinite(t)) ? 0.0 : t
+                t = (improper | !isfinite(t)) ? zero(T) : t
                 over = overin[g] > 0.0
                 CAP > 0 && (over |= sc[1] > CAP - 1)
-                tout[g] = over ? 0.0 : t
-                oout[g] = over ? 1.0 : 0.0
+                tout[g] = over ? zero(T) : t
+                oout[g] = over ? one(T) : zero(T)
             end
         end
     else
@@ -446,8 +453,8 @@ the cap, or the root guard was set).
                 CAP > 0 && (over |= sc[1] > CAP - 1)
                 # MODE 3: the serial tail by thread 1; MODE 1, 2: timing without the tail (t = the largest point, o = the count)
                 t = MODE == 3 ? fused_tail!(qs, J2, P, V, L, X, M, s0[g], s0abs[g], sc[3], u1[g], u2[g], getval(β), getval(cpumap)) : sc[4]
-                tout[g] = over ? 0.0 : t
-                oout[g] = MODE == 3 ? (over ? 1.0 : 0.0) : sc[1]
+                tout[g] = over ? zero(T) : t
+                oout[g] = MODE == 3 ? (over ? one(T) : zero(T)) : sc[1]
             end
         end
     end
@@ -464,40 +471,41 @@ The kernel's algorithm on Julia arrays: qa, Ja (N, S) entries of S sites, the re
 """
 function fused_draw_ref(qa::AbstractMatrix, Ja::AbstractMatrix, nz0, s0, s0abs, overin, u1, u2, β, cpumap, cap::Int)
     N, S = size(qa)
+    T = eltype(qa); DM = fmod(T)
     M = (cap > 0 && cap < N + 1) ? cap : N + 1
-    t = zeros(S); ov = zeros(S)
-    q = zeros(N + 1); J = zeros(N + 1); key = zeros(N + 1); idx = zeros(Int, N + 1)
-    q2 = zeros(M); J2 = zeros(M)
-    P, V, L, X = zeros(M + 2), zeros(M + 2), zeros(M + 2), zeros(M + 2)
+    t = zeros(T, S); ov = zeros(T, S)
+    q = zeros(T, N + 1); J = zeros(T, N + 1); idx = zeros(Int, N + 1)
+    q2 = zeros(T, M); J2 = zeros(T, M)
+    P, V, L, X = zeros(T, M + 2), zeros(T, M + 2), zeros(T, M + 2), zeros(T, M + 2)
     for g in 1:S
         cnt = 0.0; J0 = 0.0; J0a = 0.0
         q[1] = 0.0; idx[1] = 0
         for i in 1:N
             v = qa[i, g]; jv = Ja[i, g]
             z = v == 0.0
-            q[i+1] = z ? Inf : v
+            q[i+1] = z ? T(Inf) : v
             idx[i+1] = i
-            cnt += z ? 0.0 : 1.0
-            J0 += z ? jv : 0.0
-            J0a += z ? abs(jv) : 0.0
+            cnt += z ? zero(T) : one(T)
+            J0 += z ? jv : zero(T)
+            J0a += z ? abs(jv) : zero(T)
         end
         perm = sortperm(q; alg=MergeSort)                       # stable: equal points keep their index order
-        qmax = -Inf
+        qmax = T(-Inf)
         for m in 1:M
             qv = q[perm[m]]
             isfinite(qv) && (qmax = max(qmax, qv))
         end
         for m in 1:M
             qv = q[perm[m]]; id = idx[perm[m]]
-            jv = id == 0 ? J0 : (isfinite(qv) ? Ja[id, g] : 0.0)
+            jv = id == 0 ? J0 : (isfinite(qv) ? Ja[id, g] : zero(T))
             q2[m] = isfinite(qv) ? qv : qmax
-            J2[m] = isfinite(qv) ? jv : 0.0
+            J2[m] = isfinite(qv) ? jv : zero(T)
         end
         over = overin[g] > 0.0
         cap > 0 && (over |= (cnt + nz0[g]) > cap - 1)
         tt = fused_tail!(q2, J2, P, V, L, X, M, s0[g], s0abs[g], J0a, u1[g], u2[g], β, cpumap)
-        t[g] = over ? 0.0 : tt
-        ov[g] = over ? 1.0 : 0.0
+        t[g] = over ? zero(T) : tt
+        ov[g] = over ? one(T) : zero(T)
     end
     return t, ov
 end
@@ -508,14 +516,15 @@ end
 
 "Entries of a site as (N, C, B) arrays (the layout of `jump_points1`): points and jumps."
 function fused_entries(tb, k; K)
-    pts, jmp, s0, over, nz0, s0abs = D.jump_parts(tb, k; K=K)
-    qa = D.catn([D.efirst(x) for x in pts], 1)
-    Ja = D.catn([D.efirst(x) for x in jmp], 1)
+    DM = fmod(typeof(k.β))
+    pts, jmp, s0, over, nz0, s0abs = DM.jump_parts(tb, k; K=K)
+    qa = DM.catn([DM.efirst(x) for x in pts], 1)
+    Ja = DM.catn([DM.efirst(x) for x in jmp], 1)
     return qa, Ja, s0, over, nz0, s0abs
 end
 
 "Shared-memory bytes of the kernel per block (static shared memory is limited to 48 KB)."
-fused_shmem(N, M, NT) = (NP = nextpow(2, N + 1); NP * 12 + 5 * (M + 2) * 8 + 3 * NT * 8 + 128)
+fused_shmem(N, M, NT, T=Float64) = (NP = nextpow(2, N + 1); NP * (sizeof(T) + 4) + 5 * (M + 2) * sizeof(T) + 3 * NT * sizeof(T) + 128)
 
 """
     sample_jump_fused(tb, k, u1, u2; K, cap, nt, mode) -> (t, over)
@@ -527,23 +536,24 @@ timings 1 skips the tail, 2 the sort as well (the outputs are then not a draw). 
 needs cap + 2 ≤ 2·nt.
 """
 function sample_jump_fused(tb, k, u1, u2; K::Val=Val(4), cap::Int=0, nt::Int=256, mode::Int=0)
+    T = typeof(k.β); DM = fmod(T)
     qa, Ja, s0, over, nz0, s0abs = fused_entries(tb, k; K=K)
     N, C, B = size(qa)
     M = (cap > 0 && cap < N + 1) ? cap : N + 1
-    f2(x) = D.rs(x, C * B)                                      # (C, B, 1) → (C·B,)
+    f2(x) = DM.rs(x, C * B)                                      # (C, B, 1) → (C·B,)
     if qa isa Reactant.TracedRArray
         NP = nextpow(2, N + 1)
-        fused_shmem(N, M, nt) <= 48 * 1024 || error("fused kernel: $(fused_shmem(N, M, nt)) bytes of shared memory per block (N = $N, M = $M)")
+        fused_shmem(N, M, nt, T) <= 48 * 1024 || error("fused kernel: $(fused_shmem(N, M, nt, T)) bytes of shared memory per block (N = $N, M = $M)")
         (mode != 0 || M + 2 <= 2 * nt) || error("fused kernel: the parallel tail needs cap + 2 = $(M + 2) ≤ 2·nt = $(2 * nt)")
         backend = KA.get_backend(qa)
-        t = KA.allocate(backend, Float64, (C * B,))
-        o = KA.allocate(backend, Float64, (C * B,))
+        t = KA.allocate(backend, T, (C * B,))
+        o = KA.allocate(backend, T, (C * B,))
         kern = fused_draw_kernel!(backend, nt)
-        kern(t, o, D.rs(qa, N * C * B), D.rs(Ja, N * C * B), f2(nz0), f2(s0), f2(s0abs), f2(ifelse.(over, 1.0, 0.0)), f2(u1), f2(u2),
+        kern(t, o, DM.rs(qa, N * C * B), DM.rs(Ja, N * C * B), f2(nz0), f2(s0), f2(s0abs), f2(ifelse.(over, one(T), zero(T))), f2(u1), f2(u2),
              k.β, k.cpumap, Val(N), Val(NP), Val(M), Val(cap), Val(nt), Val(mode); ndrange=nt * C * B)
-        return D.rs(t, C, B, 1), D.rs(o, C, B, 1) .> 0.0
+        return DM.rs(t, C, B, 1), DM.rs(o, C, B, 1) .> 0.0
     end
-    t, o = fused_draw_ref(reshape(qa, N, C * B), reshape(Ja, N, C * B), f2(nz0), f2(s0), f2(s0abs), f2(ifelse.(over, 1.0, 0.0)),
+    t, o = fused_draw_ref(reshape(qa, N, C * B), reshape(Ja, N, C * B), f2(nz0), f2(s0), f2(s0abs), f2(ifelse.(over, one(T), zero(T))),
                           f2(u1), f2(u2), k.β, k.cpumap, cap)
     return reshape(t, C, B, 1), reshape(o, C, B, 1) .> 0.0
 end
@@ -554,9 +564,10 @@ end
 `do_round` with the line draw of a slope-jump family taken by `sample_jump_fused`.
 """
 function do_round_fused(f::Val, st, cp, sp, k, tab, r, u; nt::Int=256)
-    tb, aux = D.build(f, st, cp, sp, tab, r, k)
-    t, _ = sample_jump_fused(tb, k, u[:, :, 1:1], u[:, :, 2:2]; K=D.nroots(f), cap=D.jumpcap(f), nt=nt)
-    t = D.pin(D.jac_accept(tb, t, u[:, :, 3:3]))
-    dr = D.slot_changes(tb, k, t)
-    return D.commit_tb(f, st, tab, r, t, dr, aux, tb), t
+    DM = fmod(typeof(k.β))
+    tb, aux = DM.build(f, st, cp, sp, tab, r, k)
+    t, _ = sample_jump_fused(tb, k, u[:, :, 1:1], u[:, :, 2:2]; K=DM.nroots(f), cap=DM.jumpcap(f), nt=nt)
+    t = DM.pin(DM.jac_accept(tb, t, u[:, :, 3:3]))
+    dr = DM.slot_changes(tb, k, t)
+    return DM.commit_tb(f, st, tab, r, t, dr, aux, tb), t
 end

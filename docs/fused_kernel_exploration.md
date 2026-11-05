@@ -308,3 +308,79 @@ kernel's gains here are the other properties: a fifth of the temporaries, a quar
 half the compile time, and the same draw within 1e-14. On a GPU with full-rate FP64 the
 arithmetic shrinks 32× against the memory traffic, and the XLA form's 18.7 MB of temporaries and
 about 1 100 ops (some 30 launches) become the cost; that is the case to measure on the cluster.
+
+## 7. Both kernels in Float32 (the local proxy for cheap arithmetic)
+
+The development GPU runs FP32 at 64× its FP64 rate, so Float32 is the local stand-in for "the
+arithmetic is cheap" (as FP64 is on an H100 at half the FP32 rate): it shows whether the kernels
+beat the XLA forms once arithmetic is no longer the bound. Both kernels are now generic in the
+element type (`T = eltype` of the output: shared memory, per-thread scratch and every literal
+sized or typed from it; the package functions they call are taken from the build of that type,
+`fmod(T)`: `ESMDevice` for Float64, `ESMDevice.F32` for Float32, whose code carries Float32
+literals). The XLA side is the package's Float32 build `ESMDevice.F32` (its own plan, model,
+state and index; compiled under `ftcompile`, contractions at HIGHEST precision), so both sides
+see the same Float32 inputs. Script: `device/experimental/fp32_fused.jl`. Two more pitfalls:
+KernelAbstractions hoists `@localmem`/`@private` allocations to the top of the kernel body, so
+their element type must be an expression of an argument (`eltype(tout)`), not a local assigned
+later (that read an undefined variable, the kernel trapped at its start and Reactant then dropped
+the whole kernel call as dead); and helper functions need their own `T`.
+
+Correctness in Float32 has no bitwise or 1e-12 contract (the project has no Float32 exactness
+tests by design). Reported: max relative |Δt| / max(1, |t|), the sites above 1e-4 and 1e-2, and
+guard agreement; the Float64 draws on the same sites are the reference, and sites above 1e-2 are
+the proxy for a flipped discrete choice (another segment).
+
+| tpot, Float32 (C = 2) | 400 sites | 2 000 sites (1 820 real) |
+|---|---|---|
+| arrays: XLA form vs FP64 reference | 3.1e-3 (25 > 1e-4, 0 > 1e-2) | — |
+| arrays: kernel reference vs FP64 reference | 3.1e-3 (11, 0) | — |
+| arrays: kernel vs XLA form | 7.5e-4 (20, 0) | 1.2e-3 (94, 0; GPU kernel vs array form) |
+| GPU: kernel vs XLA GPU draw | 14 (118 > 1e-4, 42 > 1e-2) | 1.1e-3 (54, 0) |
+| GPU: kernel vs FP64 reference | 3.1e-3 (34, 0) | 2.8e-3 (81, 0) |
+| GPU: XLA draw vs FP64 reference | 10 (132, 42) | 2.8e-3 (79, 0) |
+| GPU: XLA draw vs its own array form | 10 (137, 42) | 1.4e-3 (95, 0) |
+| GPU: kernel vs its own array form | 5.4e-4 (33, 0) | — |
+| guards | 0 / 0, no flips | 0 / 0, no flips |
+| rounds: t kernel vs XLA; state | 14 (109, 39); θ 14, ω 0.17, r 0.98 (the 39 flipped sites) | 1.1e-3 (54, 0); θ 1.1e-3, ω 9e-5, r 1.2e-4, e and u exact |
+
+The Float32 round-off scale of the tpot draw is about 3e-3 at the worst site (its accumulated
+sums over 360 entries), and the kernel sits on it at both sizes. The XLA Float32 program at 400
+sites does not: it departs from its own array form at 42 of 400 sites by up to 10× (a different
+segment), the same program at 2 000 sites does not (1.4e-3). This is on XLA's side (the kernel
+on the same inputs stays within 5e-4 of its array form); which lowering differs at the small
+batch (the sort or the scans) was not traced. In Float32 the kernel is the more faithful of the
+two forms at that size.
+
+| tpot, Float32 timings (min of 5) | 400 sites | 2 000 sites |
+|---|---|---|
+| XLA round / fused round | 3.2 / 2.7 ms (1.20×) | 14.8 / 15.4 ms (0.96×) |
+| XLA draw / fused draw | 3.0 / 2.6 ms (1.14×) | 14.0 / 14.6 ms (0.96×) |
+| parts only; kernel without tail; without tail and sort | 2.2; 2.1; 1.8 ms | 11.0; 9.5; 8.4 ms |
+| kernel tail / sort | 0.5 / 0.2 ms | 5.1 / 1.1 ms |
+| XLA global part (draw − mode 2) | ≥ 1.1 ms | ≥ 5.7 ms |
+| compile, warm (trace / MLIR / XLA): XLA round, fused round | 11.0 (0.7 / 7.3 / 2.4), 11.2 (1.7 / 7.0 / 1.9) s | 11.7 (0.7 / 7.3 / 2.9), 12.0 (1.6 / 7.6 / 2.2) s |
+| temporaries / peak: XLA round, fused round | 11.1 / 31.8, 12.1 / 32.7 MB | 52.7 / 82.8, 62.4 / 95.8 MB |
+
+For the FP64 numbers see §3 (400: round 11.6 / 11.5 ms, draw 8.4 / 11.4 ms; 2 000: draw 37.4 /
+44.5 ms). Float32 makes everything about 3–4× faster on this GPU; the kernel's global part fell
+from 5.3 to about 0.7 ms at 400 sites (7×) while XLA's fell from 2.3 to 1.1 ms (2×), so at 400
+sites the kernel's part is now the cheaper one and the round is 1.2× faster; at 2 000 sites the
+two global parts cost the same (about 6 ms) and the round is a wash. The per-column part
+(`jump_parts`, in XLA on both sides) is 70–75 % of the Float32 round, so the round cannot move
+much either way. The Float32 temporaries of the fused round are not smaller than XLA's (the
+kernel's inputs are materialized; XLA's own intermediates shrink with the element size).
+
+| soc, Float32 (14 560 sites) | result |
+|---|---|
+| arrays: XLA form vs FP64 reference | 4.1e-5 (0 > 1e-4) |
+| arrays: kernel reference vs FP64 reference | 6.3e-6 (0 > 1e-4) |
+| arrays: kernel vs XLA form | 4.0e-5 (0 > 1e-4; 10 268 of 14 560 differ bitwise) |
+| GPU draws, rounds, timings, memory | **not run**: the Float32 kernel fails to compile for the GPU (an `InvalidIRError`, dynamic dispatch inside the per-site closures `d1`/`inj`/`zf` of `soc_site!` with Float32 arguments; the Float64 kernel compiles and the Float32 reference runs on arrays). Open: make those closures type-stable in Float32 (the mixed Float32/Float64 arithmetic must come from a remaining Float64 value in the term functions or the closures' captured constants), then run `fp32_fused.jl`'s soc part |
+
+Inference for the H100 (not measured): the H100 runs FP64 at half its FP32 rate, so the FP64
+kernels there sit between this GPU's Float32 and Float64 regimes, nearer the Float32 one; the
+Float32 ratios (tpot: 1.2× at 400 sites, 1.0× at 2 000; the kernel's global part 2× cheaper
+than XLA's at small batches, equal at larger ones) are the better predictor of the FP64 ratios
+there than this GPU's FP64 ratios (0.5–1.0×). That leaves the tpot global-part kernel as a modest
+gain at best, bounded by the per-column part; the per-column fusion (§4 step 5) remains the step
+that changes the balance, and the cluster measurement remains the decision.
