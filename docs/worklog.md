@@ -108,6 +108,7 @@ default).
   (device.md §7).
 
 **Decisions taken:**
+- Reactant stays at 0.2.304 for now (user, 2026-11-05; 0.2.305 of 2026-11-03 has fixes near our trace issues: vararg rewrite in `call_with_reactant`, mixed-type `ifelse`, LLVM leaks in compilation). Binaries that Julia packages install normally (JLL artifacts) are allowed (CLAUDE.md).
 - `families = :all` includes every device family, the newer ones too (user, 2026-11-05).
 - CPU hours are part of every campaign's results, to compare LP baselines and sampler (user, 2026-11-05).
 - PyPSA is upstream (user, 2026-11-04): the PyPSA reference is PyPSA's own `optimize`/`optimize_mga`
