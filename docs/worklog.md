@@ -5,6 +5,21 @@ Design-level open problems are in [system/roadmap.md](system/roadmap.md), experi
 [experiments.md](experiments.md) and campaigns in [campaigns.md](campaigns.md); this file is the running record of the work and its
 concrete next steps. Update it at the end of every work session.
 
+## Handover (2026-11-06: the remaining work from the cluster)
+
+Everything is pushed: `main`, and the device branch as `device-port` on GitHub (main merged into
+it). The remaining tests can run on the cluster instead of this machine:
+- **CPU suite on the rebuilt model files, stage clock, cost table:** this is H0b (RUNBOOK §2–§4):
+  after D1, `bash hpc/new_campaign.sh H0b` at the current `main`, `sbatch hpc/jobs/h0_cpu.sbatch
+  H0b` (the suite and a smoke run through `run.sh`), then `bash hpc/collect.sh H0b` and a look at
+  `campaigns/H0b/cost.csv` and the run's `stages.csv`. The campaigns wait for it (RUNBOOK §2).
+- **Device tests of the branch:** on `device-port`, `hpc/jobs/devtest.sbatch` and
+  `device/test/run_devtests.sh` (one Julia process per test file and case on a compute node);
+  the commands and the order are in that branch's worklog handover. Merging `device-port`
+  into `main` follows once they pass; H5 waits for the merge.
+The local worktree paths in the handover below (`results/…` in `.claude/worktrees/…`) exist only
+on this machine; the branch now carries the scripts that were there.
+
 ## Handover (2026-11-05, afternoon; machine powered off mid-test)
 
 - **Device branch** `worktree-agent-af8bb885e2cc307b7` (f4f5d61 docs and H5 line 13, 6ca96fe test
