@@ -118,6 +118,14 @@ Device tests run traced code on Reactant's CPU backend by default. Each fresh Ju
 costs minutes of start-up and compilation, so iterate in one persistent Julia session and
 compile only once the array version passes.
 
+A batch of device tests (a whole pass, not iteration) runs one fresh process per test file and
+case: all in one session exceeds 17 GB. `device/test/run_devtests.sh <spec> …` does that, a
+spec being a file of `device/test/` with its variables (`test_comp.jl:CASE=G`, short `comp:G`;
+`test_reactant_fams.jl:CASE=A,FAMS=all`); locally each process is niced and capped at 12 GB.
+On the cluster, `sbatch hpc/jobs/devtest.sbatch <code dir> <spec> …` runs it on a compute node
+(priority QOS, 8 cores, 32 GB, 12 h; Reactant's CPU backend, no GPU needed) in a checkout
+prepared by `hpc/prepare_env.sh`; the log is `$ESM_SCRATCH/logs/devtests-<job id>.log`.
+
 > **Status: open.** The capacity part of `test/test_exact.jl` cannot detect invariance
 > violations of the capacity moves (it missed the `kpeak` slice-width bug, and its result
 > depends on the seed, see above); converged references would make it a test

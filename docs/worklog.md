@@ -20,6 +20,36 @@ it). The remaining tests can run on the cluster instead of this machine:
 The local worktree paths in the handover below (`results/…` in `.claude/worktrees/…`) exist only
 on this machine; the branch now carries the scripts that were there.
 
+**Device tests on the cluster (this branch, `device-port`).** Once, on a login node:
+```bash
+cd /p/projects/coen/esm/ESM-Sampling && git fetch origin
+git worktree add --detach /p/projects/coen/esm/devtest/device-port origin/device-port
+bash hpc/prepare_env.sh /p/projects/coen/esm/devtest/device-port      # data link, precompile
+D=/p/projects/coen/esm/devtest/device-port
+```
+(after a new push: `git -C $D checkout --detach origin/device-port` after a fetch, and
+`prepare_env.sh $D` again if `device/Manifest.toml` changed). Needs D1's rebuilt `model.h5`
+(the tests read `data/processed/model.h5`). Then, as independent jobs (priority allows 5 at a
+time; logs in `/p/tmp/hellmann/esm/logs/devtests-<job id>.log`):
+1. Arrays: `sbatch hpc/jobs/devtest.sbatch $D comp:F comp:H comp:I comp:M comp:N comp:O`,
+   `sbatch hpc/jobs/devtest.sbatch $D test_replica_driver.jl test_mock.jl test_jump.jl test_redraw.jl`.
+2. Case G (fails compiled vs arrays): `sbatch hpc/jobs/devtest.sbatch $D comp:G
+   dissect_tdir.jl:CASE=G,LOOP=1,SKIP1=1` (`:tdir0` alone and both families in one `run_rounds`
+   program). Whether G predates the branch: a second checkout at 67de232 (on `device-port`'s
+   history; `git worktree add --detach …/devtest/pre 67de232`, `prepare_env.sh`), the same job
+   with `comp:G`.
+3. Once 1 and 2 pass, the compile pass: `sbatch --mem=64G hpc/jobs/devtest.sbatch $D
+   test_reactant_fams.jl:CASE=A,FAMS=all test_reactant_fams.jl:CASE=B,FAMS=all`,
+   `sbatch --mem=64G hpc/jobs/devtest.sbatch $D
+   test_replica_compiled.jl:ESM_DEVICE_COMPILE=1,ESM_DEVICE_FAMILIES=all
+   test_residual.jl:ESM_DEVICE_COMPILE=1 test_langevin_dev.jl` (30–60 min per compile; memory
+   with every family not measured, hence 64 GB).
+4. The device smoke run through `run.sh` (H0b device smoke, GPU) and the CPU suite on the
+   merged code (`h0_cpu.sbatch` in a campaign at this branch), then the merge into `main`.
+The Reactant variant prepared on the login node is the CUDA one (`device/LocalPreferences.toml`);
+the CPU backend on a node without a GPU is untested there: if Reactant fails to load in the
+first job, that is the cause.
+
 ## Handover (2026-11-05, afternoon; machine powered off mid-test)
 
 - **Device branch** `worktree-agent-af8bb885e2cc307b7` (f4f5d61 docs and H5 line 13, 6ca96fe test
