@@ -58,7 +58,10 @@ The other files in `docs/` are development notes, not a description of the syste
   covers its run's estimate, in a QOS that allows it, preferably preemptible (`standby` up to
   7 days); runs longer than a week are settled with the user first (docs/system/hpc.md §5).
 - Keep everything inside the project folder (data in `data/`, outputs in `results/`, scratch in
-  your scratchpad or `results/`). Install no new external binaries.
+  your scratchpad or `results/`). Install no new external binaries; binaries that Julia packages
+  install as part of their normal installation (JLL artifacts, e.g. `Reactant_jll`) don't count.
+- Package versions stay as resolved in the Manifests unless the user asks for an update
+  (Reactant stays at 0.2.304 for now).
 
 ## Testing rules
 

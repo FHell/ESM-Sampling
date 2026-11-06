@@ -5,9 +5,95 @@ Design-level open problems are in [system/roadmap.md](system/roadmap.md), experi
 [experiments.md](experiments.md) and campaigns in [campaigns.md](campaigns.md); this file is the running record of the work and its
 concrete next steps. Update it at the end of every work session.
 
+## Handover (2026-11-06: the remaining work from the cluster)
+
+Everything is pushed: `main`, and the device branch as `device-port` on GitHub (main merged into
+it). The remaining tests can run on the cluster instead of this machine:
+- **CPU suite on the rebuilt model files, stage clock, cost table:** this is H0b (RUNBOOK §2–§4):
+  after D1, `bash hpc/new_campaign.sh H0b` at the current `main`, `sbatch hpc/jobs/h0_cpu.sbatch
+  H0b` (the suite and a smoke run through `run.sh`), then `bash hpc/collect.sh H0b` and a look at
+  `campaigns/H0b/cost.csv` and the run's `stages.csv`. The campaigns wait for it (RUNBOOK §2).
+- **Device tests of the branch:** on `device-port`, `hpc/jobs/devtest.sbatch` and
+  `device/test/run_devtests.sh` (one Julia process per test file and case on a compute node);
+  the commands and the order are in that branch's worklog handover. Merging `device-port`
+  into `main` follows once they pass; H5 waits for the merge.
+The local worktree paths in the handover below (`results/…` in `.claude/worktrees/…`) exist only
+on this machine; the branch now carries the scripts that were there.
+
+## Handover (2026-11-05, afternoon; machine powered off mid-test)
+
+- **Device branch** `worktree-agent-af8bb885e2cc307b7` (f4f5d61 docs and H5 line 13, 6ca96fe test
+  fixes): loads; array tests so far: `test_redraw.jl` (incl. two plans in one process) and
+  `test_jump.jl` pass; `test_comp.jl` A–E, J, K, L pass. **G fails** compiled vs arrays (θ 0.33,
+  r 0.52): per round, also chained, and `:tdirL` alone in `run_rounds` the compiled program equals
+  the arrays (≤ 1e-11); open: `:tdir0` alone and both families in one `run_rounds` program
+  (`results/dissect_tdir.jl` in that worktree, `CASE=G LOOP=1 SKIP1=1`, needs about 10 GB), and G
+  on the pre-branch commit 67de232 (worktree `agent-ae8ec558cca8954cf`) to see whether it predates
+  the branch. F, H, I died of memory in the test's dense `root_count` (now chunked, `ROOT_CHUNK`;
+  the F device code alone: compiled = arrays, 5.7 GB); M, N failed only the truncation count of the
+  CPU walk (now 2000 nats, as O). To run: F, H, I, M, N, O, `test_replica_driver.jl`,
+  `test_mock.jl` (one capped process each: `results/run_devtests.sh`, MemoryMax 12G), then the
+  compile pass. Logs in that worktree's `results/`. Running all tests in one Julia session OOM-killed
+  it (17.5 GB): one process per test file and case.
+- **Fused kernels** (Fable, branch `worktree-agent-ac0e7bbc4dd332da8`, 85d3067, 861bfe6, 3ef7f94;
+  `docs/fused_kernel_exploration.md` there): the `tpot` global-part kernel and a one-thread-per-site
+  `soc` kernel are verified against the package's draws (FP64: round-off; soc bitwise on arrays).
+  Laptop GPU: FP64 no gain (FP64-bound); Float32 `tpot` round 1.2× at 400 sites, 0.96× at 2000 (the
+  per-column part in XLA is 70–75 % of the round); `soc` kernel: 74 % fewer ops, 5× less temporary
+  memory, half the compile time, same speed; barrier-free kernels run on the CPU backend (not by
+  raising), barrier kernels only on the GPU. Open: cluster timings, the Float32 `soc` GPU kernel
+  (type instability), and a finding for the package's Float32 build: the XLA Float32 `tpot` draw at
+  400 sites departs from its own array form at 42 of 400 sites (another segment), not at 2000.
+- Merged worktrees removed (their `results/` in `results/worktrees/<name>/`); `main` unchanged
+  otherwise, not yet merged with the device branch.
+
 ## Handover (2026-11-05, end of session)
 
 State for a fresh session; details in the to-dos and the log below.
+
+**Update at the wind-down (usage limit).** Two agents were stopped mid-work; their branches hold
+what they committed:
+- `worktree-agent-af8bb885e2cc307b7` (45c4a69 merge of the FMA fix, 8697199 work in progress):
+  done in code, untested (not even `using ESMDevice`): the FMA fix merged; `families = :all` =
+  every family (storage pairs and `xlocc` left out for lossy models; dispatch shapes only with
+  host adaptation; the host adaptation now sets the learned dispatch shapes); L2 (`slevel` its
+  own family, `slong` plateaus only, 32 per unit from `storage_long_moves`); M3 (guard counters
+  per row, family and guard, `device/guard_*`, `replicas/<c>/guard_*`, a `guards` table in
+  `summary_device.toml`; cap margin 1.5 × + 16); M4 (no trace-time globals; the plan carries the
+  schedule context; a test that two plans don't interfere). Not done: H5 estimates (the full set
+  has 8× the `slong` rounds), the docs (device.md families table, §3/§4/§6/§7 and the M4 note;
+  config.md; data.md guard outputs; testing.md; campaigns.md). API changes: `sample_jump` and
+  `line_draw` return 4 values, `do_round` 3; `device_table(pl, f, ht)`, `jumpform(pl, f)`,
+  `jumpcap(pl, f)`; `test_mock.jl`, `test_sampler.jl`, `test_program.jl` still use the old forms.
+  Its test list (in the agent's order): (0) `julia --project=device -e 'using ESMDevice'`;
+  (1) `ESM_DEVICE_COMPILE=1 ESM_DEVICE_FAMILIES=<the 16-family list> … test_replica_compiled.jl`,
+  then `ESM_DEVICE_FAMILIES=all` (30–60 min); (2) `CASE=A FAMS=all … test_reactant_fams.jl` and
+  `CASE=B` (30–60 min each); (3) arrays: `test_comp.jl` CASE=A…O, `test_jump.jl`, `test_redraw.jl`,
+  `test_replica_driver.jl`; (4) `ESM_DEVICE_COMPILE=1 … test_residual.jl` (stop and resume with
+  guards); (5) the device smoke run through `hpc/run.sh` with default families and `FAMILIES=all`.
+- `worktree-agent-ac0e7bbc4dd332da8` (0b09a78; exploratory, not to be merged now): fused-kernel
+  prototype for the slope-jump "global part" (fold, payload sort, cap, potential, inverse CDF),
+  first for `tpot` (36 % of the full laptop sweep; the same kernel serves blocks, tsoc, cells,
+  slong, sx*). Route: a KernelAbstractions kernel inside the Reactant program (separate
+  environment `device/experimental/`, Reactant kept at 0.2.304); a test kernel with shared memory
+  and barriers ran correctly on the GPU, but `raise=true` fails for such kernels, so the compiled
+  check is GPU-only. The code is written, not yet run; next: `timeout 600 nice -n 19 julia
+  --project=device/experimental -t 4 device/experimental/tpot_fused.jl` (C=2 H=24 NSITE=200).
+  Expected 1.3–1.5× per slope-jump family from this part alone; see
+  `docs/fused_kernel_exploration.md` on the branch.
+
+Next, in order: finish and merge the device package; then run **the one big test** (user: no
+test runs in between): the CPU suite on the rebuilt model files (`ESM_LP_THREADS=3 nice -n 19
+julia --project=. -t 8 test/runtests.jl`), the device array tests (`test_comp.jl`,
+`test_jump.jl`, `test_redraw.jl`, `test_replica_driver.jl`), one compile pass
+(`test_reactant_fams.jl` cases A and B with every family; `ESM_DEVICE_COMPILE=1
+test_replica_compiled.jl` with every family; the compiled section of `test_langevin_dev.jl`), the
+device smoke run through `hpc/run.sh`, and a simulated campaign through `run.sh` and
+`collect.sh` that checks `stages.csv` and `cost.csv`. Untested on main since the last suite run:
+the stage clock, `cost_table.jl`, `collect.sh`, the runbook commands. Do not start the campaigns from
+this main before at least the CPU suite has passed: every campaign script and both CPU drivers
+now call the untested stage clock (`src/stages.jl`, ec39f58), and `collect.sh` the untested
+cost table. The last tested main is 8078aba (with the tests of beab23c for the device).
 
 **Repository.** `main` passes the full CPU suite (`test/runtests.jl`, 43 sets; broken by design:
 the 2 event-walk markers in `test_moves.jl` and the 2 bias KS checks in `test_bias.jl`) and the
@@ -50,14 +136,17 @@ small`, D2 `... pypsa256`), then D4 (`hpc/prepare_data.sh pypsa256ts`, PyPSA's o
 then H0b, H4, H10 (two stages), H2 and H2b, H5. Every job asks for a `--time` covering its
 estimate; nothing is resubmitted past a QOS limit; campaigns are self-contained.
 
-**Local.** The model files in `data/processed/` are still the old builds (wind calibration
-defect, `data_sources.md` §2); rebuild them with `scripts/prepare_data.py` (as in
-`hpc/prepare_data.sh small` and `pypsa256`; minutes each) once no agent is running, keeping the
-old ones in `data/processed/backup/`. The scratchpad builds of the last session are gone.
+**Local.** The model files in `data/processed/` were rebuilt with the fixed wind calibration
+(2026-11-05; every generator within 0.005 of its target); the old builds are in
+`data/processed/backup/pre_windfix/`. The CPU suite has not run on the new files yet (part of the
+final big test).
 Worktrees of finished agents under `.claude/worktrees/` (all merged) can be removed after a
 look at their untracked `results/`; also `.claude/worktrees/gpu-timing`.
 
-**Cost accounting (to do before comparing campaigns).** Each attempt's `run.toml` has the
+**Cost accounting: built (2026-11-05).** `stages.csv` per run (LP optimum, every MGA solve,
+burn-in, warmup, production …) and `campaigns/<id>/cost.csv` from `hpc/collect.sh`; the runbook
+for the cluster is `hpc/RUNBOOK.md`. Not yet tested (the final big test of the package).
+Earlier note:  Each attempt's `run.toml` has the
 allocated cores, `elapsed`, `total_cpu` (sacct), `max_rss` and the energy, and the LP summaries
 have their solve times and threads; nothing sums them. Wanted (user, 2026-11-05): CPU hours per
 line and per campaign, to compare the LP baselines (H2, H2b) with the sampler (H4, H5) — a
@@ -65,10 +154,14 @@ line and per campaign, to compare the LP baselines (H2, H2b) with the sampler (H
 what fair share charges) and the consumed CPU hours, summed over all attempts including
 preempted ones (attempts killed without an end record: from `sacct` by job id), plus energy.
 
-**Open decisions with the user:** the CO₂ treatment and a common weather source for the H2b
-comparison (`validation.md` §2.7); retiring the bias code (conditions in this file's to-dos;
-the device capacity side no longer needs `bias_dev.jl` once the replica driver is the device
-default).
+**Exploratory (not to be merged now):** a Fable agent prototypes one move family as a fused
+kernel (its choice of family and tool, e.g. KernelAbstractions.jl inside the Reactant program) on
+its own branch, with a development note `docs/fused_kernel_exploration.md` there; it does not
+touch main or the running work and does not hold up the campaigns.
+
+**Open decisions with the user:** none. Decided 2026-11-05 (see Decisions taken): z0 blocks
+on by default; the bias goes to the archive as soon as possible; CO₂ at the cap's dual on
+both sides; weather first PyPSA's 2013 series, later several PyPSA-Eur years.
 
 ## Open to-dos
 
@@ -81,8 +174,8 @@ default).
   rechecked); from its results the burst size and gate defaults, then 256 nodes
   daily and the comparison with H2. Open: gas overbuilt in the prototype (a gas step of its own or
   a Rao–Blackwellised score), the size of the gate's weather dependence, seasonal storage after a
-  burst. Then retire the bias code (ĝ, ĥ, tables, lift, refits, trust region, post-correction,
-  level-0 warmup, `device/src/bias_dev.jl`) and `kscale`/`kpeak`/`kop` as moves of the α = 0
+  burst. Archive the bias code as soon as possible (user, 2026-11-05; not waiting for H4: ĝ, ĥ,
+  tables, lift, refits, trust region, post-correction, level-0 warmup, `device/src/bias_dev.jl`) and `kscale`/`kpeak`/`kop` as moves of the α = 0
   density, and make `sampler = "replicas"` the default.
 - An explicit, controllable tilt of the weather toward expensive years (stress tests): built in
   `src/replicas.jl` as replica weights exp(λΦ) in the capacity drift (`tilt_lambda`, Φ the
@@ -100,6 +193,23 @@ default).
   (device.md §7).
 
 **Decisions taken:**
+- CO₂ in the sampler–PyPSA comparison (user, 2026-11-05): PyPSA solves with the build's cap;
+  both sides then run at a fixed price equal to the cap's dual (`co2_price`; the device takes
+  it from the host's energy model, so no device feature is needed; `co2_cap` tuning stays
+  CPU-only). To do: the comparison configs at the dual instead of 150 €/t, once H2b's cap
+  run has its dual (`co2_price_eur_per_t` in its summary).
+- Weather in the comparison (user, 2026-11-05): first one year, PyPSA's own 2013 series
+  (`model256_pypsa.h5`), the sampler at fixed weather against the MGA envelopes; later several
+  PyPSA-Eur weather years (one network per year from ERA5 cutouts, our weather model fitted to
+  their imported series; validation.md §2.4) as a data-preparation campaign of its own.
+  Ledger rows H11 (one year, fixed weather) and H12 (several years, with the new data step D5).
+- z0 block moves stay on by default (`fine_weather_blocks = 1`), also for `chains40` and
+  `complete40` (user, 2026-11-05).
+- The learned bias goes to the archive as soon as possible, unless there is a very concrete
+  reason to keep a part of it (user, 2026-11-05); it no longer waits for H4. No campaign
+  config uses it (H4, H5: `use_bias = false`). Do it after the device branch is merged (it
+  touches `device/src/kmove.jl`, `driver.jl`, `bias_dev.jl`).
+- Reactant stays at 0.2.304 for now (user, 2026-11-05; 0.2.305 of 2026-11-03 has fixes near our trace issues: vararg rewrite in `call_with_reactant`, mixed-type `ifelse`, LLVM leaks in compilation). Binaries that Julia packages install normally (JLL artifacts) are allowed (CLAUDE.md).
 - `families = :all` includes every device family, the newer ones too (user, 2026-11-05).
 - CPU hours are part of every campaign's results, to compare LP baselines and sampler (user, 2026-11-05).
 - PyPSA is upstream (user, 2026-11-04): the PyPSA reference is PyPSA's own `optimize`/`optimize_mga`
@@ -120,11 +230,7 @@ default).
   changes `tsoc` and the storage plateaus, so the device comparisons of the share-preserving
   `:tsoc`/`:sblk` fail until the device adds it.
 
-**Decisions waiting for the user:**
-- z0 block moves are on by default (`fine_weather_blocks = 1`), a behaviour change for
-  `chains40` and `complete40`.
-- If any of the learned bias is kept: the bias safeguard choices (exact log J term, trust
-  region on by default, θ_u₂ ≤ 0); `complete40.toml` has `warmup0` below `bias_start`.
+**Decisions waiting for the user:** none open.
 
 **Device port:**
 - Plan (user, 2026-11-04): implement all missing families on plain arrays against the CPU

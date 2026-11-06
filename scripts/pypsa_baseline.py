@@ -169,6 +169,29 @@ def capacities(n):
     return tot, byc
 
 
+class StageClock:
+    """Wall and CPU time per stage, appended to stages.csv in the run directory (hpc/cost_table.jl):
+    attempt, stage, wall_s, cpu_s (this process, all threads), cpus (allocated), threads, start, end."""
+
+    def __init__(self, out):
+        os.makedirs(out, exist_ok=True)
+        self.path = os.path.join(out, "stages.csv")
+        if not os.path.exists(self.path):
+            with open(self.path, "w") as f:
+                f.write("attempt,stage,wall_s,cpu_s,cpus,threads,start,end\n")
+        self.attempt = int(os.environ.get("ESM_ATTEMPT", "0"))
+        self.cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", str(os.cpu_count())))
+        self.threads = int(os.environ.get("ESM_LP_THREADS", "0") or 0)
+        self.wall, self.cpu, self.start = time.time(), time.process_time(), time.strftime("%Y-%m-%dT%H:%M:%S")
+
+    def stage(self, name):
+        w, u, e = time.time(), time.process_time(), time.strftime("%Y-%m-%dT%H:%M:%S")
+        with open(self.path, "a") as f:
+            f.write(f"{self.attempt},{name.replace(',', ';')},{w - self.wall:.3f},{u - self.cpu:.3f},"
+                    f"{self.cpus},{self.threads},{self.start},{e}\n")
+        self.wall, self.cpu, self.start = w, u, e
+
+
 def main():
     cfgpath = sys.argv[1]
     with open(cfgpath, "rb") as f:
@@ -196,6 +219,7 @@ def main():
         solver_options["time_limit"] = float(opts["time_limit"])
 
     t0 = time.time()
+    clock = StageClock(out)
     n = pypsa.Network(path)
     n = average_every_nhours(n, res)
     if "snapshots" in cfg:
@@ -205,12 +229,14 @@ def main():
         f"co2 {cfg.get('co2', 'cap')}, eps {eps}, groups {groups}, HiGHS {solver_options}")
 
     # ---- the optimum
+    clock.stage("setup")
     tb = time.time()
     status, cond = n.optimize(solver_name="highs", solver_options=solver_options)
     if cond != "optimal":                     # HiPO's tolerance check after postsolve: retry with IPX
         log(f"optimum: {status} {cond}; repeating with IPX without presolve")
         status, cond = n.optimize.solve_model(solver_name="highs", solver_options={**solver_options, **FALLBACK})
     t_opt = time.time() - tb
+    clock.stage("optimum")
     if cond != "optimal":
         sys.exit(f"optimum: {status} {cond}")
     st = n.statistics
@@ -314,6 +340,7 @@ def main():
                 with open(mpath, "a") as f:
                     f.write(",".join(row) + "\n")
                 rows[(e, g, sense)] = row
+                clock.stage(f"mga eps={e} {g} {sense}")
                 del nm
                 log(f"  eps {e:.3f} {g:8s} {sense}  {stt}:{cc}  total {tt[g]:.4e} MW (optimum {tot[g]:.4e})  "
                     f"cost +{100 * (c_ / total - 1):.4f} %  [{time.time() - tb:.0f} s]")

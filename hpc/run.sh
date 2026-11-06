@@ -94,6 +94,7 @@ esac
 # --- run record (start) ---------------------------------------------------------------------
 start=$(date -Iseconds)
 restarts="${SLURM_RESTART_COUNT:-0}"
+export ESM_ATTEMPT="$restarts"          # the attempt of this run, for the stage records (stages.csv)
 {
     echo "[[attempt]]"
     echo "run_id = \"$run_id\""

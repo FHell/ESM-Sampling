@@ -207,9 +207,13 @@ LP of `solve_lp` (`src/lp.jl`), built by `lp_build` from one operation block per
 - **Comparison runs:** until the LP has line losses and soft thermal limits, the sampler runs
   compared with the LP use `losses = false`, `thermal = "hard"` and `link_losses = false`
   (user, 2026-11-04). The common weather source of H2 and H2b is the network's own series
-  (`model256_pypsa.h5`, below); the CO₂ treatment is matched by a price on both sides (our LP:
-  150 €/t in the marginal costs; H2b's `pypsa256_co2price.toml`), next to PyPSA's runs with the
-  build's cap.
+  (`model256_pypsa.h5`, below). The CO₂ treatment is matched by a price on both sides at the
+  dual of the build's cap: PyPSA solves with the cap, and our LP, PyPSA's price run and the
+  sampler use that dual as `co2_price` (user, 2026-11-05). The sampler is first compared at
+  fixed weather on this one year; several PyPSA-Eur weather years follow (§2.4).
+
+  > **Status: deviation.** The price runs are configured at the file's 150 €/t (our LP,
+  > H2b's `pypsa256_co2price.toml`), not yet at the cap's dual.
 
 **PyPSA-Eur's** (`scripts/pypsa_baseline.py`, campaign H2b). PyPSA is upstream: our model files
 are imported from PyPSA networks (and, once built, their time series), and the PyPSA reference is

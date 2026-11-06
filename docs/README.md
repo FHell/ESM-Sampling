@@ -52,6 +52,8 @@ The other files are working notes, not a description of the system; where they a
   weather replicas sharing the capacities, prior-reversible weather process, lag probe, stress
   tilt), the prior-invariance argument and the measurements (2026-11-04); the sampler itself is
   now `src/replicas.jl` ([system/sampler.md](system/sampler.md) §11).
+- [../hpc/RUNBOOK.md](../hpc/RUNBOOK.md): the runbook for the cluster campaigns (commands,
+  dependencies, checks, results back).
 - [device_review.md](device_review.md): a fresh-eyes review of the Reactant port (2026-11-04):
   the slong compile cause, the schedule drawn once per run, Float32 and driver findings.
 - [mixing_diagnosis.md](mixing_diagnosis.md): the diagnosis of the sampler's mixing at 40 nodes

@@ -37,6 +37,7 @@ end
 out = dirname(cfg.out)
 mkpath(out)
 t0 = time()
+clock = ML.StageClock(out)                 # stages.csv: wall and CPU time per stage (hpc/cost_table.jl)
 sys = ML.load_system(cfg.data)
 E = ML.energy_model(cfg, sys)
 ref = ML.check_levels(cfg.levels, sys.N)
@@ -76,9 +77,11 @@ println("LP baseline: $(sys.N) nodes, level $(cfg.levels[ref+1]) (T = $(lv.T)), 
 flush(stdout)
 
 # ---- the optimum
+ML.stage!(clock, "setup")
 tb = time()
 res, lpm = ML.solve_lp_years(E, lv, years; time_limit=tl)
 t_opt = time() - tb
+ML.stage!(clock, "optimum")
 C = res.objective
 model = lpm.model
 @printf("optimum: %.6e €/a (capex %.4e, mean opex %.4e), %d variables, %d constraints  [%.0f s]\n",
@@ -160,6 +163,7 @@ function record(ε, f, sense, r)
            string(r.cost / C - 1), string(r.total), @sprintf("%.1f", r.seconds)]
     open(io -> println(io, join(row, ",")), mpath, "a")
     rows[(ε, f, sense)] = row
+    ML.stage!(clock, "mga eps=$ε $(fieldnames_[f]) $sense")
     @printf("  ε %.3f  %-10s %s  %-22s total %.4e MW (optimum %.4e)  cost +%.4f %%  [%.0f s]\n", ε, fieldnames_[f], sense,
             r.status, r.total, sum(res.k[f]), 100 * (r.cost / C - 1), r.seconds)
     flush(stdout)
@@ -187,4 +191,5 @@ end
 open(io -> TOML.print(io, Dict("objective_eur_per_a" => C, "years" => years, "eps" => eps,
                                "envelope" => env, "seconds_total" => time() - t0, "maxrss_MB" => Sys.maxrss() / 2^20)),
      joinpath(out, "summary_mga.toml"), "w")
+ML.stage!(clock, "envelopes")
 println("MGA done: $(joinpath(out, "summary_mga.toml"))  [$(round(Int, time() - t0)) s]")
